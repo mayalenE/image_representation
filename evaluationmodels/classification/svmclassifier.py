@@ -26,6 +26,7 @@ class SVMClassifierModel(evaluationmodels.BaseClassifierModel):
         default_config.algorithm.hyperparameters = gr.Config()
         default_config.algorithm.hyperparameters.kernel = "linear"
         default_config.algorithm.hyperparameters.probability = True
+        default_config.algorithm.hyperparameters.max_iter = -1
 
         return default_config
     
@@ -93,7 +94,10 @@ class SVMClassifierModel(evaluationmodels.BaseClassifierModel):
         
         #  log train and valid error
         ## train
-        _,_ = self.do_evaluation_pass(train_loader, logger=logger)
+        _, train_losses = self.do_evaluation_pass(train_loader)
+        if logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
+            for k, v in train_losses.items():
+                logger.add_scalars("loss/{}".format(k), {"train": np.mean(v)}, self.n_epochs)
         ## valid
         if do_validation:
            _,_ = self.do_evaluation_pass(valid_loader, logger=logger)
@@ -103,14 +107,19 @@ class SVMClassifierModel(evaluationmodels.BaseClassifierModel):
         
     
     def run_representation_testing(self, dataloader, testing_config = None, train_loader=None, valid_loader=None, logger=None):
+        test_data = dict()
+        
         # run testing on the test data
         test_predictions, test_losses = self.do_evaluation_pass(dataloader)
         
-        #  save predictions
-        output_predictions_filepath = os.path.join(testing_config.output_folder, "predictions.npz")
-        self.save_predictions(np.exp(test_predictions), output_predictions_filepath)
+        #  transform log probabilities -> probabilities predictions
+        test_predictions["predicted_y"] =  np.exp(test_predictions["predicted_y"])
         
-        return test_losses
+        test_data["predictions"] = test_predictions
+        test_data["error"] = test_losses
+        
+        
+        return test_data
     
 
     def save_checkpoint(self, checkpoint_filepath):

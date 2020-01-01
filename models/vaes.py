@@ -107,7 +107,7 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         if logger is not None:
             dummy_input = torch.FloatTensor(1, self.config.network.parameters.n_channels, self.config.network.parameters.input_size[0], self.config.network.parameters.input_size[1]).uniform_(0,1)
             dummy_input = self.push_variable_to_device(dummy_input)
-            logger.add_graph(self, dummy_input)
+            logger.add_graph(self, dummy_input, verbose = False)
             
         if valid_loader is not None:
             best_valid_loss = sys.float_info.max

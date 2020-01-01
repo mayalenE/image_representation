@@ -1,6 +1,7 @@
 from goalrepresent.config import Config
 from goalrepresent.core import BaseEncoder, BaseModel, BaseEvaluationModel, BaseRepresentation
 import goalrepresent.dnn
+import goalrepresent.gui
 import goalrepresent.models
 import goalrepresent.evaluationmodels
 import goalrepresent.representations

@@ -58,23 +58,7 @@ class BaseModel(metaclass=ABCMeta):
         """
         Returns an nn.Module decoder with a forward() function, or None
         """
-        pass
-     
-        
-
-    def update_hyperparameters(self, hyperparameters):
-        """
-        Method that we use to udate hyperparameters
-        Allows to constrain to the modificable hyperparameters per model (eg: for population-based-training)
-        hyperparameters: dictionary of 'name': value (value should be a float)
-        """
-        for hyperparam_key, hyperparam_val in hyperparameters.items():
-            if hasattr(self, hyperparam_key):
-                if isinstance(hyperparam_val, gr.Config):
-                    setattr(self, hyperparam_key, gr.config.update_config(hyperparam_val, getattr(self, hyperparam_key)))
-                else:
-                    setattr(self, hyperparam_key, hyperparam_val)
-                    
+        pass                    
     
     @abstractmethod
     def save_checkpoint(self, checkpoint_filepath):

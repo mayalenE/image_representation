@@ -189,7 +189,7 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
     
     def do_evaluation_pass(self, dataloader, logger = None):
         self.eval()
-        predictions = None
+        predictions = {}
         losses = {}
         log_top10_images = (logger is not None) and (self.n_epochs % self.config.logging.record_top10_images_every == 0)
         log_loss = (logger is not None) and (self.n_epochs % self.config.logging.record_loss_every == 0)
@@ -210,13 +210,13 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
                 recon_x, mu, logvar, z = self.forward(x)
                 loss_inputs = {'recon_x': recon_x, 'mu': mu, 'logvar': logvar}
                 loss_targets = {'x': x}
-                batch_losses = self.loss_f(loss_inputs, loss_targets, logger=logger)
+                batch_losses = self.loss_f(loss_inputs, loss_targets, reduction=False, logger=logger)
                 
                 # save results
-                if predictions is not None:
-                    predictions = np.vstack([predictions, recon_x.detach().cpu().numpy()])
+                if 'recon_x' in predictions:
+                    predictions['recon_x'] = np.vstack([predictions['recon_x'], recon_x.detach().cpu().numpy()])
                 else:
-                    predictions = recon_x.detach().cpu().numpy()
+                    predictions['recon_x'] = recon_x.detach().cpu().numpy()
                     
                 for k, v in batch_losses.items():
                     if k not in losses:
@@ -279,7 +279,7 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
         """   
         if not self.config.freeze_decoder:
             # all the evaluation models are plugged to the frozen representation and trained for 100 epochs
-            n_epochs = 1
+            n_epochs = 100
              
             # Save the graph in the logger
             if logger is not None:
@@ -313,12 +313,13 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
                     
                     
     def run_representation_testing(self, dataloader, testing_config = None):
-        
+        test_data = dict()
+
         # run testing on the test data
         test_predictions, test_losses = self.do_evaluation_pass(dataloader)
         
-        #  save predictions
-        output_predictions_filepath = os.path.join(testing_config.output_folder, "predictions.npz")
-        self.save_predictions(test_predictions, output_predictions_filepath)
+        test_data["predictions"] = test_predictions
+        test_data["error"] = test_losses
         
-        return test_losses
+        
+        return test_data

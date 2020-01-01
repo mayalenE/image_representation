@@ -2,12 +2,12 @@
 /!\ skeletton to follow, all the classes inheriting from a BaseXXX class should have this
 ## BaseRepresentation
 #### config
--  *config.seed*
+-  *config.seed*: seed for the experiment (for reproducibility and statistical viability)
 #### property attributes
--  *model*: attribute or AttrDict() that has several sub models
+-  *model*: attribute or nn.Module() that has several sub models
 #### methods
 ##### static methods
-- *default_config()*:
+- *default_config()*: returns the default configuration
 ##### instance methods
 - *preprocess (observations)*: given raw observations, convert them to the correct input format x for the representation
 - *calc (x)*: given correct input x, calc the embedding z
@@ -20,23 +20,21 @@
 #### property attributes
 #### methods
 ##### static methods
-- *default_config()*:
-- *get_model(model_name)*:
+- *default_config()*: returns the default configuration
+- *get_model(model_name)*: calls the model class defined with model_name
 ##### instance methods
 - *calc_embedding (x)*: given an input x calc the embedding z
 - *get_encoder()*: returns the encoder of the model (mandatory)
 - *get_decoder()*: returns the decoder of the model (if no decoder return None)
-- *update_hyperparameters()*: method to modify the hyperparameters of a model (can only modify through this method)
-- *save_checkpoint (checkpoint_filepath)*:
+- *save_checkpoint (checkpoint_filepath)*: saves the model
 
 ## BaseEncoder
 #### config
 #### property attributes
-- *n_latents*:
+- *n_latents*: number of dimensions of the encoding 
 #### methods
 ##### static methods
-- *default_config()*:
-- *get_evaluationmodel(model_name)*:
+- *default_config()*: returns the default configuration
 ##### instance methods
 - *calc_embedding (x)*: given an input x calc the embedding z
 
@@ -47,13 +45,14 @@
 - *encoder*: the evalmodel are all build up on top of the representation's encoder
 #### methods
 ##### static methods
-- *default_config()*:
+- *default_config()*: returns the default configuration
+- *get_evaluationmodel(model_name)*: calls the evaluationmodel class defined with model_name
 ##### instance methods
 - *run_training (train_loader, valid_loader=None, logger=None)*: trains the evaluation model given a training/validation dataset (optional)
 - *run_representation_testing (test_loader, testing_config = None)*: tests the representation plugged with the evaluation model given a test dataset. For each evaluation model specifies how and what to output, and the testing_config specifies if and where to save the results. Always returns the loss.
 - *do_evaluation_pass(dataloader, logger=None)*: given a dataset (train/valid/test), loop over it and returns the loss per data-element, optional logging
 - *visualize_results( visualization_config = None)*:
-- *save_checkpoint (checkpoint_filepath)*:
+- *save_checkpoint (checkpoint_filepath)*: saves the model
 
 
 ## dnn.BaseDNN
@@ -82,7 +81,7 @@
 - *n_epochs*:
 #### methods
 ##### static methods
-- *default_config()*:
+- *default_config()*: returns the default configuration
 - *load_checkpoint(checkpoint_filepath, use_gpu = False)*:
 ##### instance methods
 - *__init\__(config=None, **kwargs)*:

@@ -23,7 +23,7 @@ class SingleModelRepresentation(gr.BaseRepresentation):
         
         default_config.testing = gr.Config()
         default_config.testing.output_folder = None
-        default_config.testing.evaluationmodels = []
+        default_config.testing.evaluationmodels = gr.Config()
         return default_config
     
     
@@ -81,6 +81,7 @@ class SingleModelRepresentation(gr.BaseRepresentation):
         # update config
         self.config.training = gr.config.update_config(training_config, self.config.training)        
         
+        
     def run_testing(self, test_loader, testing_config, train_loader=None, valid_loader=None, logging=True):
         # prepare output folders
         output_folder = testing_config.output_folder
@@ -88,49 +89,63 @@ class SingleModelRepresentation(gr.BaseRepresentation):
             os.makedirs(output_folder)
             
         # loop over different tests
-        #TODO: if test already done pass
-        test_statistics = {}
-        for evalmodel_config in testing_config.evaluationmodels:
-            evalmodel_name = evalmodel_config.name
-            evalmodel_class = gr.BaseEvaluationModel.get_evaluationmodel(evalmodel_name)
-            evalmodel = evalmodel_class(self.model, config=evalmodel_config.config)
+        test_data = {}
+        for k, evalmodel_config in testing_config.evaluationmodels.items():
+            output_name, evalmodel_test_data = self.run_evalmodel_testing(test_loader, evalmodel_config, 
+                                                                   train_loader=train_loader, valid_loader=valid_loader, 
+                                                                   logging=logging)
             
-            # prepare output folders
-            curr_output_folder = evalmodel_config.output_folder
-            if (curr_output_folder is not None) and (not os.path.exists (curr_output_folder)):
-                os.makedirs(curr_output_folder)
+            test_data[output_name] = evalmodel_test_data
             
-            checkpoint_folder = os.path.join(curr_output_folder, "checkpoints")
-            if (checkpoint_folder is not None) and (not os.path.exists (checkpoint_folder)):
-                os.makedirs(checkpoint_folder)
-            evalmodel.config.checkpoint.folder = checkpoint_folder
-            
-            # prepare logger
-            if logging: 
-                logging_folder = os.path.join(curr_output_folder, "logging")
-                if (logging_folder is not None) and (not os.path.exists (logging_folder)):
-                    os.makedirs(logging_folder)
         
-                logger = SummaryWriter(logging_folder, 'w')
-            else:
-                logger = None
-                
-            # train the evaluationmodel if needed
-            evalmodel.run_training(train_loader=train_loader, valid_loader=valid_loader, logger=logger)
-            # test the representation by this evaluationmodel
-            evalmodel_test_statistics = evalmodel.run_representation_testing(test_loader, testing_config=evalmodel_config)
-            output_name = curr_output_folder.split("/")[-1]
-            test_statistics[output_name] = evalmodel_test_statistics
+        return test_data
+    
+    
+    def run_evalmodel_testing(self, test_loader, evalmodel_config, train_loader=None, valid_loader=None, logging=True):
+        evalmodel_name = evalmodel_config.name
+        evalmodel_class = gr.BaseEvaluationModel.get_evaluationmodel(evalmodel_name)
+        evalmodel = evalmodel_class(self.model, config=evalmodel_config.config)
+        
+        # prepare output folders
+        curr_output_folder = evalmodel_config.output_folder
+        if (curr_output_folder is not None) and (not os.path.exists (curr_output_folder)):
+            os.makedirs(curr_output_folder)
+        
+        checkpoint_folder = os.path.join(curr_output_folder, "checkpoints")
+        if (checkpoint_folder is not None) and (not os.path.exists (checkpoint_folder)):
+            os.makedirs(checkpoint_folder)
+        evalmodel.config.checkpoint.folder = checkpoint_folder
+        
+        # prepare logger
+        if logging: 
+            logging_folder = os.path.join(curr_output_folder, "logging")
+            if (logging_folder is not None) and (not os.path.exists (logging_folder)):
+                os.makedirs(logging_folder)
+    
+            logger = SummaryWriter(logging_folder, 'w')
+        else:
+            logger = None
             
-            # export scalar data to JSON for external processing
-            if logger is not None:
-                logger.export_scalars_to_json(os.path.join(curr_output_folder, "output_scalars.json"))
-                logger.close()
+        # train the evaluationmodel if needed
+        evalmodel.run_training(train_loader=train_loader, valid_loader=valid_loader, logger=logger)
+        # test the representation by this evaluationmodel
+        evalmodel_test_data = evalmodel.run_representation_testing(test_loader, testing_config=evalmodel_config)
+        output_name = curr_output_folder.split("/")[-1]
+        
+        # export scalar data to JSON for external processing
+        if logger is not None:
+            logger.export_scalars_to_json(os.path.join(curr_output_folder, "output_scalars.json"))
+            logger.close()
             
         # update config
-        self.config.testing = gr.config.update_config(testing_config, self.config.testing)
+        try:
+            old_evalmodel_config = self.config.testing.evaluationmodels[output_name]
+        except:
+            old_evalmodel_config = None
+            
+        self.config.testing.evaluationmodels[output_name] = gr.config.update_config(evalmodel_config,old_evalmodel_config)
         
-        return test_statistics
+        return output_name, evalmodel_test_data
         
     def preprocess(self, observations):
         x = observations #N*C*H*W 

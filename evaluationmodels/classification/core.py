@@ -64,7 +64,7 @@ class BaseClassifierModel(gr.BaseEvaluationModel):
     
     def do_evaluation_pass(self, dataloader, logger = None):
         self.encoder.eval()
-        predictions = None
+        predictions = {}
         losses = {}
         log_top10_images = (logger is not None) and (self.n_epochs % self.config.logging.record_top10_images_every == 0)
         log_loss = (logger is not None) and (self.n_epochs % self.config.logging.record_loss_every == 0)
@@ -80,8 +80,8 @@ class BaseClassifierModel(gr.BaseEvaluationModel):
         # loop over the different batches
         with torch.no_grad():
             for batch_idx, data in enumerate(dataloader):
-                x =  Variable(data['obs'])
-                y = Variable(data['label']).squeeze()
+                x =  Variable(data["obs"])
+                y = Variable(data["label"]).squeeze()
                 # forward
                 batch_predictions = self.forward(x)
                 loss_inputs =  {"predicted_y": batch_predictions}
@@ -89,10 +89,10 @@ class BaseClassifierModel(gr.BaseEvaluationModel):
                 batch_losses = self.loss_f(loss_inputs, loss_targets, reduction=False, logger=logger)
                 
                 # save results
-                if predictions is not None:
-                    predictions = np.vstack([predictions, batch_predictions.detach().cpu().numpy()])
+                if 'predicted_y' in predictions:
+                    predictions['predicted_y'] = np.vstack([predictions['predicted_y'], batch_predictions.detach().cpu().numpy()])
                 else:
-                    predictions = batch_predictions.detach().cpu().numpy()
+                    predictions['predicted_y'] = batch_predictions.detach().cpu().numpy()
                     
                 for k, v in batch_losses.items():
                     if k not in losses:
@@ -103,7 +103,7 @@ class BaseClassifierModel(gr.BaseEvaluationModel):
                 # update top-10 and bottom-10 classified images
                 if log_top10_images:
                     for img_idx_wrt_batch, img in enumerate(x.cpu().data):
-                        ce_loss = batch_losses['total'][img_idx_wrt_batch].data.item()
+                        ce_loss = batch_losses["total"][img_idx_wrt_batch].data.item()
                         if ce_loss < top10_scores[-1]:
                             i = bisect.bisect(top10_scores, ce_loss)
                             top10_scores.insert(i, ce_loss)
@@ -131,16 +131,16 @@ class BaseClassifierModel(gr.BaseEvaluationModel):
             vizu_tensor_list[0::2] = [top10_images[n] for n in range(10)]
             vizu_tensor_list[1::2] = [torch.from_numpy(datahelper.string2imgarray(top10_titles[n], top10_images[n].size())) for n in range(10)]
             img = make_grid(vizu_tensor_list, nrow = 2, padding=0)
-            logger.add_image('top10_classifications', img, self.n_epochs)
+            logger.add_image("top10_classifications", img, self.n_epochs)
             vizu_tensor_list = [None] * (2*10)
             vizu_tensor_list[0::2] = [bottom10_images[n] for n in range(10)]
             vizu_tensor_list[1::2] = [torch.from_numpy(datahelper.string2imgarray(bottom10_titles[n], bottom10_images[n].size()))for n in range(10)]
             img = make_grid(vizu_tensor_list, nrow = 2, padding=0)
-            logger.add_image('bottom10_classifications', img, self.n_epochs)
+            logger.add_image("bottom10_classifications", img, self.n_epochs)
 
         if log_loss:
             for k, v in losses.items():
-                logger.add_scalars('loss/{}'.format(k), {'valid': np.mean (v)}, self.n_epochs)
+                logger.add_scalars("loss/{}".format(k), {"valid": np.mean (v)}, self.n_epochs)
                 
         return predictions, losses
     
@@ -170,7 +170,7 @@ class BaseClassifierModel(gr.BaseEvaluationModel):
     
     def update_hyperparameters(self, hyperparameters):
         """
-        hyperparameters: dictionary of 'name': value (value should be a float)
+        hyperparameters: dictionary of "name": value (value should be a float)
         """
         for hyperparam_key, hyperparam_val in hyperparameters.items():
             if hasattr(self, hyperparam_key):

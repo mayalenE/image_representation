@@ -520,7 +520,19 @@ def string2imgarray(text, output_img_size):
     
     if n_channels == 1:
         array_img = np.expand_dims(array_img, axis = 0)
+    elif n_channels == 3:
+        array_img = np.rollaxis(array_img, 2, 0) # torch ordering C*H*W
+        
     
     # convert to float
     array_img = (array_img / 255.0).astype(np.float32)
     return array_img
+
+def tensor2string(tensor):
+    """
+    tensor: 1D tensor
+    """
+    output = ""
+    for v in tensor:
+        output += str(v.item())
+    return output

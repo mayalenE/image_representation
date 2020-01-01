@@ -131,15 +131,15 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
         self.train()
         losses = {}
         for data in train_loader:
-            x =  Variable(data['obs'])
-            y = Variable(data['label']).squeeze()
+            x =  Variable(data["obs"])
+            y = Variable(data["label"]).squeeze()
             # forward
             batch_predictions = self.forward(x)
             loss_inputs =  {"predicted_y": batch_predictions}
             loss_targets = {"y": y}
             batch_losses = self.loss_f(loss_inputs, loss_targets, reduction=True, logger=logger)
             # backward
-            loss = batch_losses['total']
+            loss = batch_losses["total"]
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
@@ -162,7 +162,7 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
         logger: tensorboard X summary writer
         """   
         # all the evaluation models are plugged to the frozen representation and trained for 100 epochs
-        n_epochs = 1
+        n_epochs = 100
          
         # Save the graph in the logger
         if logger is not None:
@@ -181,27 +181,31 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
             
             if logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
                 for k, v in train_losses.items():
-                    logger.add_scalars('loss/{}'.format(k), {'train': v}, self.n_epochs)
-                logger.add_text('time/train', 'Train Epoch {}: {:.3f} secs'.format(self.n_epochs, t1-t0), self.n_epochs)
+                    logger.add_scalars("loss/{}".format(k), {"train": v}, self.n_epochs)
+                logger.add_text("time/train", "Train Epoch {}: {:.3f} secs".format(self.n_epochs, t1-t0), self.n_epochs)
             
             if self.n_epochs % self.config.checkpoint.save_model_every == 0:
-                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
+                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, "current_weight_model.pth"))
             
             if do_validation:
                 _, valid_losses = self.do_evaluation_pass (valid_loader, logger=logger)
-                valid_loss = np.mean(valid_losses['total'])
+                valid_loss = np.mean(valid_losses["total"])
                 if valid_loss < best_valid_loss:
                     best_valid_loss = valid_loss
-                    self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
+                    self.save_checkpoint(os.path.join(self.config.checkpoint.folder, "best_weight_model.pth"))
     
 
     def run_representation_testing(self, dataloader, testing_config = None):
+        test_data = dict()
+        
         # run testing on the test data
         test_predictions, test_losses = self.do_evaluation_pass(dataloader)
         
-        #  save predictions
-        test_predictions =  np.exp(test_predictions) / sum(np.exp(test_predictions))
-        output_predictions_filepath = os.path.join(testing_config.output_folder, "predictions.npz")
-        self.save_predictions(test_predictions, output_predictions_filepath)
+        #  transform x -> probabilities predictions
+        test_predictions["predicted_y"] =  np.exp(test_predictions["predicted_y"]) / sum(np.exp(test_predictions["predicted_y"]))
         
-        return test_losses
+        test_data["predictions"] = test_predictions
+        test_data["error"] = test_losses
+        
+        
+        return test_data

@@ -2,6 +2,7 @@ import goalrepresent as gr
 from goalrepresent import dnn, models
 from goalrepresent.dnn.losses.losses import BaseLoss
 from goalrepresent.dnn.networks import encoders, decoders
+from goalrepresent.helper.datahelper import tensor2string
 import math
 import numpy as np
 import os
@@ -77,8 +78,8 @@ class InnerNode(nn.Module):
     
     def get_child_node(self, path):
         node = self
-        for d in range(1, len(path)):
-            if path[d] == "0":
+        for d in range(1, path.size(0)):
+            if path[d] == 0:
                 node = node.left
             else:
                 node = node.right
@@ -213,7 +214,7 @@ class HierarchicalTreeModel(dnn.BaseDNN, gr.BaseModel):
     def forward(self, x):
         x = self.push_variable_to_device(x)
         batch_size = x.size(0)
-        path_taken = ["0"]*batch_size
+        path_taken =  torch.zeros((batch_size, self.config.tree.max_depth+1), dtype=int)
         
         path_prob = Variable(torch.ones(batch_size, 1))
         path_prob = self.push_variable_to_device(path_prob)
@@ -233,10 +234,10 @@ class HierarchicalTreeModel(dnn.BaseDNN, gr.BaseModel):
         # inner nodes
         while depth < self.config.tree.max_depth:
             
-            pathes = sorted(set(path_taken))
+            pathes = torch.unique(path_taken[:, :depth+1], dim=0)
             for path in pathes:
                 curr_node = self.network.get_child_node(path)
-                curr_node_x_ids = [i for i, x_path in enumerate(path_taken) if x_path == path]
+                curr_node_x_ids = [i for i, x_path in enumerate(path_taken[:, :depth+1]) if torch.all(torch.eq(x_path, path))]
                 curr_mu, curr_logvar, curr_z, curr_prob_right = curr_node.forward(x[curr_node_x_ids]) #probability of selecting right child node
                 # torch bernouilli distribution allow to do "hard" samples and still be differentiable
                 curr_go_right = Bernoulli(curr_prob_right).sample()
@@ -246,15 +247,15 @@ class HierarchicalTreeModel(dnn.BaseDNN, gr.BaseModel):
                     logvar[curr_node_x_ids[i], depth*n_latent : (depth+1)*n_latent] = curr_logvar[i]
                     z[curr_node_x_ids[i], depth*n_latent : (depth+1)*n_latent] = curr_z[i]
                     path_prob[curr_node_x_ids[i]] *= curr_prob[i]
-                    path_taken[curr_node_x_ids[i]] += str(int(curr_go_right[i]))
+                    path_taken[curr_node_x_ids[i], depth+1] = int(curr_go_right[i])
 
             depth += 1
         
         # leaf nodes
-        pathes = sorted(set(path_taken))
+        pathes = torch.unique(path_taken, dim=0)
         for path in pathes:
             curr_node = self.network.get_child_node(path)
-            curr_node_x_ids = [i for i, x_path in enumerate(path_taken) if x_path == path]
+            curr_node_x_ids = [i for i, x_path in enumerate(path_taken) if torch.all(torch.eq(x_path, path))]
             if curr_node.config.model.name == "VAE":
                 curr_recon_x, curr_mu, curr_logvar, curr_z = curr_node.forward(x[curr_node_x_ids], z[curr_node_x_ids, :-n_latent])
             else:
@@ -281,10 +282,10 @@ class HierarchicalTreeModel(dnn.BaseDNN, gr.BaseModel):
         # Save the graph in the logger
         if logger is not None:
             root_network_config = self.config.inner_node.network.parameters
-            dummy_input = torch.FloatTensor(1, root_network_config.n_channels, root_network_config.input_size[0], root_network_config.input_size[1]).uniform_(0,1)
+            dummy_input = torch.FloatTensor(10, root_network_config.n_channels, root_network_config.input_size[0], root_network_config.input_size[1]).uniform_(0,1)
             dummy_input = self.push_variable_to_device(dummy_input)
             try:
-                logger.add_graph(self, dummy_input)
+                logger.add_graph(self, dummy_input, verbose = False)
             except:
                 pass
             
@@ -435,17 +436,17 @@ class HierarchicalTreeLoss(BaseLoss):
         self.path2loss = {}
         for path in pathes:
             node = tree_network.get_child_node(path)
-            self.path2loss[path]= node.loss_f
+            self.path2loss[tensor2string(path)]= node.loss_f
         
     def __call__(self, loss_inputs, loss_targets, path_taken, path_prob, reduction = True, logger=None, **kwargs):
-        pathes = sorted(set(path_taken))
+        pathes = torch.unique(path_taken, dim=0)
         
         losses = {}
         batch_size = list(loss_inputs.values())[0].size(0)
         #TODO: here work with VAE because KLD (tot_mu) = sum(KLD(small mu)), change for rest
         for path in pathes:
-            node_x_ids = [i for i, x_path in enumerate(path_taken) if x_path == path]
-            leaf_loss_f = self.path2loss[path]
+            node_x_ids = [i for i, x_path in enumerate(path_taken) if torch.all(torch.eq(x_path, path))]
+            leaf_loss_f = self.path2loss[tensor2string(path)]
             leaf_loss_inputs = {}
             leaf_loss_targets = {}
             for k, v in loss_inputs.items():
@@ -454,7 +455,8 @@ class HierarchicalTreeLoss(BaseLoss):
                 leaf_loss_targets[k] = v[node_x_ids]
             leaf_losses = leaf_loss_f(leaf_loss_inputs, leaf_loss_targets, reduction = False, logger=logger)
             for k in leaf_losses.keys():
-                leaf_losses[k] = leaf_losses[k] * path_prob[node_x_ids].squeeze() # we weight the gradient by path_prob to lower the influence of unsure results
+                #TODO: HARD OR SOFT
+                leaf_losses[k] = leaf_losses[k] # path_prob[node_x_ids].squeeze() # we weight the gradient by path_prob to lower the influence of unsure results
                 if k not in losses.keys():
                     losses[k] = torch.empty(batch_size)
                 losses[k][node_x_ids] = leaf_losses[k]
@@ -494,7 +496,7 @@ class HierarchicalTreeEncoder(encoders.BaseDNNEncoder):
     def forward(self, x):
         x = self.push_variable_to_device(x)
         batch_size = x.size(0)
-        path_taken = ["0"]*batch_size
+        path_taken =  torch.zeros((batch_size, self.max_depth+1), dtype=int)
         
         path_prob = Variable(torch.ones(batch_size, 1))
         path_prob = self.push_variable_to_device(path_prob)
@@ -512,10 +514,10 @@ class HierarchicalTreeEncoder(encoders.BaseDNNEncoder):
         # inner nodes
         while depth < self.max_depth:
             
-            pathes = sorted(set(path_taken))
+            pathes = torch.unique(path_taken[:, :depth+1], dim=0)
             for path in pathes:
                 curr_node = self.network.get_child_node(path)
-                curr_node_x_ids = [i for i, x_path in enumerate(path_taken) if x_path == path]
+                curr_node_x_ids = [i for i, x_path in enumerate(path_taken[:, :depth+1]) if torch.all(torch.eq(x_path, path))]
                 curr_mu, curr_logvar, curr_z, curr_prob_right = curr_node.forward(x[curr_node_x_ids]) #probability of selecting right child node
                 # torch bernouilli distribution allow to do "hard" samples and still be differentiable
                 curr_go_right = Bernoulli(curr_prob_right).sample()
@@ -525,15 +527,15 @@ class HierarchicalTreeEncoder(encoders.BaseDNNEncoder):
                     logvar[curr_node_x_ids[i], depth*n_latent : (depth+1)*n_latent] = curr_logvar[i]
                     z[curr_node_x_ids[i], depth*n_latent : (depth+1)*n_latent] = curr_z[i]
                     path_prob[curr_node_x_ids[i]] *= curr_prob[i]
-                    path_taken[curr_node_x_ids[i]] += str(int(curr_go_right[i]))
+                    path_taken[curr_node_x_ids[i], depth+1] = int(curr_go_right[i])
 
             depth += 1
         
         # leaf nodes
-        pathes = sorted(set(path_taken))
+        pathes = torch.unique(path_taken, dim=0)
         for path in pathes:
             curr_node = self.network.get_child_node(path)
-            curr_node_x_ids = [i for i, x_path in enumerate(path_taken) if x_path == path]
+            curr_node_x_ids = [i for i, x_path in enumerate(path_taken) if torch.all(torch.eq(x_path, path))]
             if curr_node.config.model.name == "VAE":
                 curr_recon_x, curr_mu, curr_logvar, curr_z = curr_node.forward(x[curr_node_x_ids], z[curr_node_x_ids, :-n_latent])
             else:
@@ -577,11 +579,11 @@ class HierarchicalTreeDecoder(decoders.BaseDNNDecoder):
                       self.decoder_list[0].input_size[0],
                       self.decoder_list[0].input_size[1])
         recon_x = Variable(torch.empty(batch_size, image_size[0], image_size[1], image_size[2]))
-        pathes = sorted(set(path_taken))
+        pathes = torch.unique(path_taken, dim=0)
         for path in pathes:
-            curr_decoder_idx = int (path, 2)  # the path is given in base 2 and we convert it to integer (respect the order of decoder list)
+            curr_decoder_idx = int (tensor2string(path), 2)  # the path is given in base 2 and we convert it to integer (respect the order of decoder list)
             curr_decoder = self.decoder_list[curr_decoder_idx]
-            curr_decoder_z_ids = [i for i, z_path in enumerate(path_taken) if z_path == path]
+            curr_decoder_z_ids = [i for i, z_path in enumerate(path_taken) if torch.all(torch.eq(z_path, path))]
             curr_recon_x = curr_decoder.forward(z[curr_decoder_z_ids])
             for i in range(len(curr_decoder_z_ids)):
                 recon_x[curr_decoder_z_ids[i]] = curr_recon_x[i]
@@ -594,11 +596,11 @@ class HierarchicalTreeDecoder(decoders.BaseDNNDecoder):
     
 def generate_binary_pathes(tree_depth):
     n_path = int(math.pow(2, tree_depth))
-    pathes = [None] * n_path
-    base_path = "0"*(tree_depth+1)
+    pathes = torch.zeros((n_path, tree_depth+1), dtype=int)
     for i in range(n_path):
         suffix = bin(i)[2:]
-        pathes[i] = base_path[:-len(suffix)] + suffix
+        for c_idx, c in enumerate(reversed(suffix)):
+            pathes[i, -(c_idx+1)] = int(c)
     return pathes
         
         
