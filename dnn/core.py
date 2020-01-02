@@ -159,7 +159,7 @@ class BaseDNN(nn.Module):
         "epoch": self.n_epochs,
         "type": self.__class__.__name__,
         "config": self.config,
-        "state_dict": self.state_dict(),
+        "network_state_dict": self.network.state_dict(),
         "optimizer_state_dict": self.optimizer.state_dict()
         }
         
@@ -179,7 +179,8 @@ class BaseDNN(nn.Module):
                 else:
                     raise ValueError("the model cannot be load as it does not iherit from the BaseDNN class")
                 model = model_cls (config = saved_model['config'])        
-                model.load_state_dict(saved_model['state_dict'])
+                model.network.load_state_dict(saved_model['network_state_dict'])
+                model.optimizer.load_state_dict(saved_model['optimizer_state_dict'])
                 model.set_device(use_gpu)
                 return model
             

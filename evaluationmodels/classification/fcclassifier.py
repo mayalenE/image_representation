@@ -66,17 +66,17 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
             self.config.device.use_gpu = False
             warnings.warn("Cannot set model device as GPU because not available, setting it to CPU")
         
-        ## freeze or not the pretrained encoder
-        if self.config.freeze_encoder:
-            for param in self.encoder.parameters():
-                param.requires_grad = False
-        else:
-            self.encoder.train()
-            for param in self.encoder.parameters():
-                param.requires_grad = True
                 
         # network FC
         self.set_network(self.config.network.name, self.config.network.parameters)
+        ## freeze or not the pretrained encoder
+        if self.config.freeze_encoder:
+            for param in self.network.encoder.parameters():
+                param.requires_grad = False
+        else:
+            self.network.encoder.train()
+            for param in self.network.encoder.parameters():
+                param.requires_grad = True
         self.init_network(self.config.network.initialization.name, self.config.network.initialization.parameters)
         self.set_device(self.config.device.use_gpu)
         
@@ -87,8 +87,10 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
                 
     
     def set_network(self, network_name, network_parameters):
-        self.fc = nn.Sequential(
-                    nn.Linear(self.encoder.n_latents, network_parameters.n_hidden_units),
+        self.network = nn.Module()
+        self.network.encoder = self.representation_encoder
+        self.network.fc = nn.Sequential(
+                    nn.Linear(self.network.encoder.n_latents, network_parameters.n_hidden_units),
                     nn.ReLU(),
                     nn.Linear(network_parameters.n_hidden_units, network_parameters.n_classes)
                     )
@@ -101,7 +103,7 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
     def init_network(self, initialization_name, initialization_parameters):
         initialization_class = initialization.get_initialization(initialization_name)
         # only initialize the classifier (keep the pretrained encoder)
-        self.fc.apply(initialization_class)
+        self.network.fc.apply(initialization_class)
         
         # update config
         self.config.network.initialization.name = initialization_name
@@ -112,9 +114,9 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
         optimizer_class = eval("torch.optim.{}".format(optimizer_name))
         # if encoder frozen only optimize the classifier, else optimize alltogether
         if self.config.freeze_encoder:
-            self.optimizer = optimizer_class(self.fc.parameters(), **optimizer_parameters)
+            self.optimizer = optimizer_class(self.network.fc.parameters(), **optimizer_parameters)
         else:
-            self.optimizer = optimizer_class(self.parameters(), **optimizer_parameters)
+            self.optimizer = optimizer_class(self.network.parameters(), **optimizer_parameters)
         
         # update config
         self.config.optimizer.name = optimizer_name
@@ -123,8 +125,8 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
         
     def forward(self, x):
         x = self.push_variable_to_device(x)
-        mu = self.encoder(x) [0]
-        return self.fc(mu)
+        mu = self.network.encoder(x) [0]
+        return self.network.fc(mu)
     
     
     def train_epoch (self, train_loader, logger=None):
@@ -157,16 +159,16 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
         
         return losses
     
-    def run_training (self, train_loader=None, valid_loader=None, logger=None):
+    def run_training (self, train_loader=None, valid_loader=None, keep_best_model=True, logger=None):
         """
         logger: tensorboard X summary writer
         """   
         # all the evaluation models are plugged to the frozen representation and trained for 100 epochs
-        n_epochs = 100
+        n_epochs = 50
          
         # Save the graph in the logger
         if logger is not None:
-            dummy_input = torch.FloatTensor(1, self.encoder.n_channels, self.encoder.input_size[0], self.encoder.input_size[1]).uniform_(0,1)
+            dummy_input = torch.FloatTensor(1, self.network.encoder.n_channels, self.network.encoder.input_size[0], self.network.encoder.input_size[1]).uniform_(0,1)
             dummy_input = self.push_variable_to_device(dummy_input)
             #logger.add_graph(nn.Sequential(representation.model.encoder, self), dummy_input)
             
@@ -193,6 +195,14 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
                 if valid_loss < best_valid_loss:
                     best_valid_loss = valid_loss
                     self.save_checkpoint(os.path.join(self.config.checkpoint.folder, "best_weight_model.pth"))
+                    
+        # if we want the representation to keep the model that performed best on the valid dataset
+        if keep_best_model:
+            best_model_path = os.path.join(self.config.checkpoint.folder, "best_weight_model.pth")
+            if os.path.exists(best_model_path):
+                best_model = torch.load (best_model_path, map_location="cpu")
+                self.network.load_state_dict(best_model["network_state_dict"])
+                self.optimizer.load_state_dict(best_model["optimizer_state_dict"])
     
 
     def run_representation_testing(self, dataloader, testing_config = None):
@@ -202,7 +212,8 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
         test_predictions, test_losses = self.do_evaluation_pass(dataloader)
         
         #  transform x -> probabilities predictions
-        test_predictions["predicted_y"] =  np.exp(test_predictions["predicted_y"]) / sum(np.exp(test_predictions["predicted_y"]))
+        exp_predictions = np.exp(test_predictions["predicted_y"])
+        test_predictions["predicted_y"] =  exp_predictions / np.expand_dims(np.sum(exp_predictions, axis=1), axis = 1)
         
         test_data["predictions"] = test_predictions
         test_data["error"] = test_losses

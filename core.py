@@ -89,11 +89,10 @@ class BaseEvaluationModel(metaclass=ABCMeta):
         self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
         
         ## pluggin the representation pretrained encoder 
-        self.encoder = representation_model.get_encoder()
-        self.encoder.eval()
+        self.representation_encoder = representation_model.get_encoder()
         
     @abstractmethod
-    def run_training (self, train_loader=None, valid_loader=None, logger=None):
+    def run_training (self, train_loader=None, valid_loader=None, keep_best_model=True, logger=None):
         pass
     
     @abstractmethod

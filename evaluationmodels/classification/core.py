@@ -63,7 +63,6 @@ class BaseClassifierModel(gr.BaseEvaluationModel):
         return predicted_y
     
     def do_evaluation_pass(self, dataloader, logger = None):
-        self.encoder.eval()
         predictions = {}
         losses = {}
         log_top10_images = (logger is not None) and (self.n_epochs % self.config.logging.record_top10_images_every == 0)
@@ -152,20 +151,20 @@ class BaseClassifierModel(gr.BaseEvaluationModel):
     def visualize_results(self):
         pass
     
-    def run_training(self, train_loader=None, valid_loader=None, logger=None):
+    def run_training(self, train_loader=None, valid_loader=None,  keep_best_model=True, logger=None):
         pass
     
     def run_representation_testing(self, dataloader, testing_config = None):
-        self.n_classes = dataloader.dataset.n_classes
-         
+        test_data = dict()
+        
         # run testing on the test data
         test_predictions, test_losses = self.do_evaluation_pass(dataloader)
         
-        #  save predictions
-        output_predictions_filepath = os.path.join(testing_config.output_folder, "predictions.npz")
-        self.save_predictions(test_predictions, output_predictions_filepath)
+        test_data["predictions"] = test_predictions
+        test_data["error"] = test_losses
         
-        return test_losses
+        
+        return test_data
     
     
     def update_hyperparameters(self, hyperparameters):

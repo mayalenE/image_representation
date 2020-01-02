@@ -84,18 +84,15 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
             warnings.warn("Cannot set model device as GPU because not available, setting it to CPU")
         
         # network
-        ## freeze and plug the pretrained encoder and decoder if desired
+        self.set_network(representation_model, self.config.network.name, self.config.network.parameters)
         if self.config.freeze_encoder:
-            for param in self.encoder.parameters():
+            for param in self.network.encoder.parameters():
                 param.requires_grad = False
-        self.decoder = representation_model.get_decoder()
-        if self.decoder is None:
-            self.set_network(self.config.network.name, self.config.network.parameters)
-            self.init_network(self.config.network.initialization.name, self.config.network.initialization.parameters)
-            self.set_optimizer(self.config.optimizer.name, self.config.optimizer.parameters)
         if self.config.freeze_decoder:
-            for param in self.decoder.parameters():
+            for param in self.network.decoder.parameters():
                 param.requires_grad = False
+        else:
+            self.set_optimizer(self.config.optimizer.name, self.config.optimizer.parameters)
         self.set_device(self.config.device.use_gpu)
         
         # loss function
@@ -104,19 +101,23 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
         self.n_epochs = 0
                 
     
-    def set_network(self, network_name, network_parameters):
-        decoder_class = decoders.get_decoder(network_name)
-        network_parameters.n_latents = self.encoder.n_latents
-        self.decoder = decoder_class(**network_parameters)
-        
+    def set_network(self, representation_model, network_name, network_parameters):
+        self.network = nn.Module()
+        self.network.encoder = self.representation_encoder
+        self.network.decoder = representation_model.get_decoder()
+        if self.network.decoder is None:
+            decoder_class = decoders.get_decoder(network_name)
+            network_parameters.n_latents = self.network.encoder.n_latents
+            self.network.decoder = decoder_class(**network_parameters)
+            self.init_network(self.config.network.initialization.name, self.config.network.initialization.parameters)
         # update config
         self.config.network.name = network_name
         self.config.network.parameters = gr.config.update_config(network_parameters, self.config.network.parameters)
         
     def init_network(self, initialization_name, initialization_parameters):
         initialization_class = initialization.get_initialization(initialization_name)
-        # only initialize the classifier (keep the pretrained encoder)
-        self.decoder.apply(initialization_class)
+        # only initialize the decoder (keep the pretrained encoder)
+        self.network.decoder.apply(initialization_class)
         
         # update config
         self.config.network.initialization.name = initialization_name
@@ -124,11 +125,11 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
         
     def set_optimizer(self, optimizer_name, optimizer_parameters):
         optimizer_class = eval("torch.optim.{}".format(optimizer_name))
-        # if encoder frozen only optimize the classifier, else optimize alltogether
+        # if encoder frozen only optimize the decoder, else optimize all together
         if self.config.freeze_encoder:
-            self.optimizer = optimizer_class(self.decoder.parameters(), **optimizer_parameters)
+            self.optimizer = optimizer_class(self.network.decoder.parameters(), **optimizer_parameters)
         else:
-            self.optimizer = optimizer_class(self.parameters(), **optimizer_parameters)
+            self.optimizer = optimizer_class(self.network.parameters(), **optimizer_parameters)
         
         # update config
         self.config.optimizer.name = optimizer_name
@@ -146,15 +147,15 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
         
     def forward(self, x):
         x = self.push_variable_to_device(x)
-        encoder_outputs = self.encoder(x)
+        encoder_outputs = self.network.encoder(x)
         mu = encoder_outputs[0]
         logvar = encoder_outputs[1]
         z = self.reparameterize(mu, logvar)
-        if self.decoder.__class__ is gr.models.hierarchicaltree.HierarchicalTreeDecoder:
+        if self.network.decoder.__class__ is gr.models.hierarchicaltree.HierarchicalTreeDecoder:
             path_taken = encoder_outputs[-2]
-            recon_x = self.decoder(z, path_taken)
+            recon_x = self.network.decoder(z, path_taken)
         else:
-            recon_x = self.decoder(z)
+            recon_x = self.network.decoder(z)
         return recon_x, mu, logvar, z
     
     
@@ -273,7 +274,7 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
         pass
     
 
-    def run_training(self, train_loader=None, valid_loader=None, logger=None):
+    def run_training(self, train_loader=None, valid_loader=None, keep_best_model=True, logger=None):
         """
         logger: tensorboard X summary writer
         """   
@@ -283,7 +284,7 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
              
             # Save the graph in the logger
             if logger is not None:
-                dummy_input = torch.FloatTensor(1, self.encoder.n_channels, self.encoder.input_size[0], self.encoder.input_size[1]).uniform_(0,1)
+                dummy_input = torch.FloatTensor(1, self.network.encoder.n_channels, self.network.encoder.input_size[0], self.network.encoder.input_size[1]).uniform_(0,1)
                 dummy_input = self.push_variable_to_device(dummy_input)
                 #logger.add_graph(nn.Sequential(representation.model.encoder, self), dummy_input)
                 
@@ -293,23 +294,32 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
             
             for epoch in range(n_epochs):
                 t0 = time.time()
-            train_losses = self.train_epoch (train_loader, logger=logger)
-            t1 = time.time()
+                train_losses = self.train_epoch (train_loader, logger=logger)
+                t1 = time.time()
+                
+                if logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
+                    for k, v in train_losses.items():
+                        logger.add_scalars('loss/{}'.format(k), {'train': v}, self.n_epochs)
+                    logger.add_text('time/train', 'Train Epoch {}: {:.3f} secs'.format(self.n_epochs, t1-t0), self.n_epochs)
+                
+                if self.n_epochs % self.config.checkpoint.save_model_every == 0:
+                    self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
+                
+                if do_validation:
+                    _, valid_losses = self.do_evaluation_pass (valid_loader, logger=logger)
+                    valid_loss = np.mean(valid_losses['total'])
+                    if valid_loss < best_valid_loss:
+                        best_valid_loss = valid_loss
+                        self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
             
-            if logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
-                for k, v in train_losses.items():
-                    logger.add_scalars('loss/{}'.format(k), {'train': v}, self.n_epochs)
-                logger.add_text('time/train', 'Train Epoch {}: {:.3f} secs'.format(self.n_epochs, t1-t0), self.n_epochs)
-            
-            if self.n_epochs % self.config.checkpoint.save_model_every == 0:
-                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
-            
-            if do_validation:
-                _, valid_losses = self.do_evaluation_pass (valid_loader, logger=logger)
-                valid_loss = np.mean(valid_losses['total'])
-                if valid_loss < best_valid_loss:
-                    best_valid_loss = valid_loss
-                    self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
+            # if we want the representation to keep the model that performed best on the valid dataset
+            if keep_best_model:
+                best_model_path = os.path.join(self.config.checkpoint.folder, "best_weight_model.pth")
+                if os.path.exists(best_model_path):
+                    best_model = gr.dnn.BaseDNN.load_checkpoint(best_model_path, use_gpu = self.model.config.device.use_gpu)
+                    self.network.load_state_dict(best_model.network.state_dict())
+                    self.optimizer.load_state_dict(best_model.optimize.state_dict())
+        
                     
                     
     def run_representation_testing(self, dataloader, testing_config = None):

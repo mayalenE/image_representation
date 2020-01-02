@@ -42,7 +42,7 @@
 #### config
 -  *config.output_name*:
 #### property attributes
-- *encoder*: the evalmodel are all build up on top of the representation's encoder
+- *representation_encoder*: the evalmodel are all build up on top of the representation's encoder (this variable is untouched even if retraining on top)
 #### methods
 ##### static methods
 - *default_config()*: returns the default configuration

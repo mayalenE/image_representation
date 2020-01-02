@@ -47,7 +47,7 @@ class SVMClassifierModel(evaluationmodels.BaseClassifierModel):
         
         
     def forward(self, x):
-        mu = self.encoder(x) [0]
+        mu = self.representation_encoder(x) [0]
         predicted_y = torch.from_numpy(self.algorithm.predict_log_proba(mu.detach().numpy()))
         return predicted_y
     
@@ -66,7 +66,7 @@ class SVMClassifierModel(evaluationmodels.BaseClassifierModel):
         self.n_epochs += 1
         
         
-    def run_training(self, train_loader=None, valid_loader=None, logger=None):
+    def run_training(self, train_loader=None, valid_loader=None,  keep_best_model=True, logger=None):
         """
         logger: tensorboard X summary writer
         """        
@@ -77,13 +77,13 @@ class SVMClassifierModel(evaluationmodels.BaseClassifierModel):
             
         # construction of X_train (n_samples, n_features)
         n_train_samples = len(train_loader.sampler.indices)
-        z_train = np.empty((n_train_samples, self.encoder.n_latents))
+        z_train = np.empty((n_train_samples, self.representation_encoder.n_latents))
         y_train = np.empty(n_train_samples)
         for batch_idx, batch_data in enumerate(train_loader):
             x =  batch_data['obs']
             y = batch_data['label'].squeeze()
             # forward
-            mu = self.encoder(x) [0]
+            mu = self.representation_encoder(x) [0]
             start = batch_idx*train_loader.batch_size
             end = min((batch_idx+1)*train_loader.batch_size, n_train_samples)
             z_train[start:end, :] = mu.detach().numpy()

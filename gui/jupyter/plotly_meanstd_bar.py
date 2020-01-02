@@ -109,7 +109,7 @@ def plotly_meanstd_bar(data=None, config=None, **kwargs):
 
             # collect data over elements
             for elem_idx, elem_data in enumerate(cur_data):  # data elements
-
+                print(np.ndim(elem_data), elem_data.shape)
                 # get element data which could be in matrix format or array format
                 if np.ndim(elem_data) == 1:
                     cur_elem_data = elem_data

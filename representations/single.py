@@ -71,7 +71,7 @@ class SingleModelRepresentation(gr.BaseRepresentation):
             logger.export_scalars_to_json(os.path.join(output_folder, "output_scalars.json"))
             logger.close()
             
-        # if we want the representation to keep the model that performed best on the test dataset
+        # if we want the representation to keep the model that performed best on the valid dataset
         if keep_best_model:
             best_model_path = os.path.join(checkpoint_folder, "best_weight_model.pth")
             if os.path.exists(best_model_path):
