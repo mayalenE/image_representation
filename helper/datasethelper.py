@@ -1,6 +1,6 @@
 from goalrepresent.helper import randomhelper
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 def get_dataloader(dataset, dataloader_config):
     if (dataloader_config.num_workers > 0):
@@ -13,11 +13,12 @@ def get_dataloader(dataset, dataloader_config):
         subset_ids = dataloader_config.ids
     else:
         subset_ids = range(len(dataset))
-    subset_sampler = torch.utils.data.sampler.SubsetRandomSampler(subset_ids)
-    dataloader = DataLoader(dataset,
-                              sampler = subset_sampler,
+    #subset_sampler = torch.utils.data.sampler.SubsetRandomSampler(subset_ids)
+    subset_dataset = Subset(dataset, subset_ids)
+    dataloader = DataLoader(subset_dataset,
+                              #sampler = subset_sampler,
                               batch_size = dataloader_config.batch_size,
-                              #shuffle = dataloader_config.shuffle,
+                              shuffle = dataloader_config.shuffle,
                               num_workers = dataloader_config.num_workers,
                               worker_init_fn = randomhelper.set_seed
                               )

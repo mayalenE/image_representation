@@ -70,13 +70,13 @@ class SVMClassifierModel(evaluationmodels.BaseClassifierModel):
         """
         logger: tensorboard X summary writer
         """        
-        self.n_classes = train_loader.dataset.n_classes
+        self.n_classes = train_loader.dataset.dataset.n_classes
         
         if valid_loader is not None:
             do_validation = True
             
         # construction of X_train (n_samples, n_features)
-        n_train_samples = len(train_loader.sampler.indices)
+        n_train_samples = len(train_loader.dataset.indices)
         z_train = np.empty((n_train_samples, self.representation_encoder.n_latents))
         y_train = np.empty(n_train_samples)
         for batch_idx, batch_data in enumerate(train_loader):

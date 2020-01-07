@@ -116,3 +116,79 @@ def interact_selection_multiple_experiments_repetitions(func, experiment_definit
     exp_options_dict['exp_all'].value = bool(is_all_default)
 
     return out, accordion_widget
+
+
+def interact_selection_single_experiments_repetitions(func, experiment_definitions=None, experiment_ids=None, repetition_ids=None, **kwargs):
+    if experiment_definitions is not None and experiment_ids is not None:
+        raise ValueError('Only experiment_definitions or experiment_ids are allowed as parameters!')
+
+    # lists with information for each experiment
+
+    if experiment_ids is not None:
+        # experiment_names = [[]] * len(experiment_ids)
+        experiment_is_default = [True] * len(experiment_ids)
+    else:
+        # experiment_names = [] # names
+        experiment_is_default = []  # default values
+
+        if experiment_definitions is not None:
+
+            experiment_ids = []
+
+            for exp_def in experiment_definitions:
+                experiment_ids.append(exp_def['id'])
+
+                #                 if 'name' in exp_def:
+                #                     experiment_names.append(exp_def['name'])
+                #                 else:
+                #                     experiment_names.append([])
+
+                if 'is_default' in exp_def:
+                    experiment_is_default.append(exp_def['is_default'])
+                else:
+                    experiment_is_default.append(True)
+
+    if repetition_ids is None:
+        repetition_ids = []
+
+    func_paramaters = kwargs
+
+    exp_ids = collections.OrderedDict()
+    for experiment_idx, experiment_id in enumerate(experiment_ids):
+        idx_name = 'exp_' + str(experiment_id)
+        exp_ids[idx_name] = experiment_id
+
+    exp_options = list(exp_ids.values())
+    exp_multi_checkbox_widget = ipywidgets.RadioButtons(options = exp_options, value = exp_options[-1], layout={'overflow': 'scroll'})
+    control_exp = {"exp_rb": exp_multi_checkbox_widget}
+
+    rep_ids = collections.OrderedDict()
+
+    rep_ids['rep_all'] = 'all'
+
+    for repetition_id in repetition_ids:
+        idx_name = 'rep_' + str(repetition_id)
+        rep_ids[idx_name] = repetition_id
+
+    rep_options = list(rep_ids.values())
+    rep_multi_checkbox_widget =  ipywidgets.RadioButtons(options = rep_options, value=rep_options[-1], layout={'overflow': 'scroll'})
+    control_rep = {"rep_rb": rep_multi_checkbox_widget}
+
+    accordion_widget = ipywidgets.Accordion(children=[exp_multi_checkbox_widget, rep_multi_checkbox_widget],
+                                            selected_index=None)
+    accordion_widget.set_title(0, 'Experiments')
+    accordion_widget.set_title(1, 'Repetitions')
+
+    def internal_func(**kwargs):
+        func(experiment_ids=[exp_multi_checkbox_widget.value], repetition_ids=[rep_multi_checkbox_widget.value], **func_paramaters)
+
+    out = ipywidgets.interactive_output(internal_func, {**control_exp, **control_rep} )
+
+    display(out, accordion_widget)
+    
+    # hack: I need to change the value of one control element to force the plot to replot
+    # otherwise it will not be shown in the beginning
+    control_exp["exp_rb"].value = exp_options[0]
+    control_rep["rep_rb"].value = rep_options[0]
+
+    return out, accordion_widget

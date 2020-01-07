@@ -214,6 +214,8 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
                 batch_losses = self.loss_f(loss_inputs, loss_targets, reduction=False, logger=logger)
                 
                 # save results
+                if self.config.loss.parameters.reconstruction_dist == "bernouilli":
+                    recon_x = torch.sigmoid(recon_x)
                 if 'recon_x' in predictions:
                     predictions['recon_x'] = np.vstack([predictions['recon_x'], recon_x.detach().cpu().numpy()])
                 else:
@@ -280,7 +282,7 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
         """   
         if not self.config.freeze_decoder:
             # all the evaluation models are plugged to the frozen representation and trained for 100 epochs
-            n_epochs = 100
+            n_epochs = 50
              
             # Save the graph in the logger
             if logger is not None:

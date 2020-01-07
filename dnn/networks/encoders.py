@@ -42,7 +42,6 @@ def get_encoder(model_architecture):
     """
     model_architecture: string such that the class encoder called is <model_architecture>Encoder
     """
-    model_architecture = model_architecture.lower().capitalize()
     return eval("{}Encoder".format(model_architecture))
 
 
@@ -80,6 +79,42 @@ class BurgessEncoder (BaseDNNEncoder):
         self.encoder.add_module("conv_{}".format(1), nn.Sequential(nn.Conv2d(self.n_channels, hidden_channels, kernels_size[0], strides[0], pads[0], dils[0]), nn.ReLU()))
         for conv_layer_id in range(1, self.n_conv_layers):
             self.encoder.add_module("conv_{}".format(conv_layer_id+1), nn.Sequential(nn.Conv2d(hidden_channels, hidden_channels, kernels_size[conv_layer_id], strides[conv_layer_id], pads[conv_layer_id], dils[conv_layer_id]), nn.ReLU()))
+        self.encoder.add_module("flatten", Flatten())
+        
+        # linear layers
+        self.encoder.add_module("lin_1", nn.Sequential(nn.Linear(hidden_channels * h_after_convs * w_after_convs, hidden_dim), nn.ReLU()))
+        self.encoder.add_module("lin_2", nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.ReLU()))
+        self.encoder.add_module("mu_logvar_gen", nn.Linear(hidden_dim, 2 * self.n_latents))
+
+        
+    def forward(self, x):
+        return torch.chunk(self.encoder(x), 2, dim=1)
+    
+    def calc_embedding(self, x):
+        mu, logvar = self.forward(x)
+        return mu
+    
+    
+class CIFAREncoder (BaseDNNEncoder):
+        
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        # network architecture
+        hidden_channels = 32
+        hidden_dim = 128
+        kernels_size=[4,4]*self.n_conv_layers
+        strides=[1,2]*self.n_conv_layers
+        pads=[1,1]*self.n_conv_layers
+        dils=[1,1]*self.n_conv_layers
+        feature_map_sizes = conv2d_output_sizes(self.input_size, 2*self.n_conv_layers, kernels_size, strides, pads, dils)
+        h_after_convs, w_after_convs = feature_map_sizes[-1]
+        self.encoder = nn.Sequential()
+        
+        # convolution layers
+        self.encoder.add_module("conv_{}".format(1), nn.Sequential(nn.Conv2d(self.n_channels, self.n_channels, kernels_size[0], strides[0], pads[0], dils[0]), nn.ReLU(), nn.Conv2d(self.n_channels, hidden_channels, kernels_size[1], strides[1], pads[1], dils[1]), nn.ReLU()))
+        for conv_layer_id in range(1, self.n_conv_layers):
+            self.encoder.add_module("conv_{}".format(conv_layer_id+1), nn.Sequential(nn.Conv2d(hidden_channels, hidden_channels, kernels_size[2*conv_layer_id], strides[2*conv_layer_id], pads[2*conv_layer_id], dils[2*conv_layer_id]), nn.ReLU(), nn.Conv2d(hidden_channels, hidden_channels, kernels_size[2*conv_layer_id+1], strides[2*conv_layer_id+1], pads[2*conv_layer_id+1], dils[2*conv_layer_id+1]), nn.ReLU()))
         self.encoder.add_module("flatten", Flatten())
         
         # linear layers
