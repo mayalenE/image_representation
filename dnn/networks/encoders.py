@@ -129,6 +129,42 @@ class CIFAREncoder (BaseDNNEncoder):
     def calc_embedding(self, x):
         mu, logvar = self.forward(x)
         return mu
+    
+class HjlemCIFAREncoder (BaseDNNEncoder):
+        
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        # network architecture
+        hidden_channels = 64
+        hidden_dim = 1024
+        kernels_size=[4]*self.n_conv_layers
+        strides=[2]*self.n_conv_layers
+        pads=[1]*self.n_conv_layers
+        dils=[1]*self.n_conv_layers
+        feature_map_sizes = conv2d_output_sizes(self.input_size, self.n_conv_layers, kernels_size, strides, pads, dils)
+        h_after_convs, w_after_convs = feature_map_sizes[-1]
+        self.encoder = nn.Sequential()
+        
+        # convolution layers
+        self.encoder.add_module("conv_{}".format(1), nn.Sequential(nn.Conv2d(self.n_channels, hidden_channels, kernels_size[0], strides[0], pads[0], dils[0]), nn.ReLU()))
+        for conv_layer_id in range(1, self.n_conv_layers):
+            self.encoder.add_module("conv_{}".format(conv_layer_id+1), nn.Sequential(nn.Conv2d(hidden_channels, hidden_channels*2, kernels_size[conv_layer_id], strides[conv_layer_id], pads[conv_layer_id], dils[conv_layer_id]), nn.BatchNorm2d(hidden_channels*2), nn.ReLU()))
+            hidden_channels *= 2
+        self.encoder.add_module("flatten", Flatten())
+        
+        # linear layers
+        self.encoder.add_module("lin_1", nn.Sequential(nn.Linear(hidden_channels * h_after_convs * w_after_convs, hidden_dim), nn.ReLU()))
+        self.encoder.add_module("lin_2", nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.ReLU()))
+        self.encoder.add_module("mu_logvar_gen", nn.Linear(hidden_dim, 2 * self.n_latents))
+
+        
+    def forward(self, x):
+        return torch.chunk(self.encoder(x), 2, dim=1)
+    
+    def calc_embedding(self, x):
+        mu, logvar = self.forward(x)
+        return mu
 
 '''
 class EncoderBurgess2 (BaseDNNEncoder):

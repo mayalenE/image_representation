@@ -60,7 +60,10 @@ class SVMClassifierModel(evaluationmodels.BaseClassifierModel):
         z_train = np.nan_to_num(z_train)
         if update_range: 
             self.feature_range = (z_train.min(axis=0), z_train.max(axis=0)) # save (min, max) for normalization
-        z_train = (z_train - self.feature_range[0]) / (self.feature_range[1] - self.feature_range[0])
+        z_train = (z_train - self.feature_range[0]) 
+        scale = self.feature_range[1] - self.feature_range[0]
+        scale[np.where(scale==0)] = 1.0 # trick when some some latents are the same for every point (no scale and divide by 1)
+        z_train = z_train / scale
         self.algorithm.fit(z_train, y_train)
         
         self.n_epochs += 1

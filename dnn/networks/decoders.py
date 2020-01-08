@@ -1,5 +1,6 @@
 from abc import ABCMeta, abstractmethod
 from  goalrepresent.helper.nnmodulehelper import Channelize, conv2d_output_sizes, convtranspose2d_get_output_padding
+import math
 from torch import nn
 
 EPS = 1e-12
@@ -75,11 +76,13 @@ class BurgessDecoder (BaseDNNDecoder):
         # convolution layers
         for conv_layer_id in range(0, self.n_conv_layers-1):
             # For convTranspose2d the padding argument effectively adds kernel_size - 1 - padding amount of zero padding to both sizes of the input
-            self.decoder.add_module("convT_{}".format(conv_layer_id+1), nn.Sequential(nn.ConvTranspose2d(hidden_channels, hidden_channels, kernels_size[conv_layer_id], strides[conv_layer_id], pads[conv_layer_id], output_padding=output_pads[conv_layer_id]), nn.ReLU()))
-        self.decoder.add_module("convT_{}".format(self.n_conv_layers), nn.ConvTranspose2d(hidden_channels, self.n_channels, kernels_size[self.n_conv_layers-1], strides[self.n_conv_layers-1], pads[self.n_conv_layers-1], output_padding=output_pads[self.n_conv_layers-1]))
-    
+            self.decoder.add_module("convT_{}".format(conv_layer_id+1), nn.Sequential(nn.ConvTranspose2d(hidden_channels, hidden_channels, kernels_size[-(conv_layer_id+1)], strides[-(conv_layer_id+1)], pads[-(conv_layer_id+1)], output_padding=output_pads[conv_layer_id]), nn.ReLU()))
+        self.decoder.add_module("convT_{}".format(self.n_conv_layers), nn.ConvTranspose2d(hidden_channels, self.n_channels, kernels_size[0], strides[0], pads[0], output_padding=output_pads[self.n_conv_layers-1]))
+        
     def forward(self, z):
         return self.decoder(z)
+    
+    
     
 class CIFARDecoder (BaseDNNDecoder):
 
@@ -117,6 +120,51 @@ class CIFARDecoder (BaseDNNDecoder):
         self.decoder.add_module("convT_{}".format(self.n_conv_layers), nn.Sequential(nn.ConvTranspose2d(hidden_channels, hidden_channels, kernels_size[1], strides[1], pads[1], output_padding=output_pads[2*self.n_conv_layers-2]), nn.ReLU(), nn.ConvTranspose2d(hidden_channels, self.n_channels, kernels_size[0], strides[0], pads[0], output_padding=output_pads[2*self.n_conv_layers-1])))   
     def forward(self, z):
         return self.decoder(z)
+    
+    
+    
+class HjlemCIFARDecoder (BaseDNNDecoder):
+    """ 
+    Extended Decoder of the model proposed in Burgess, Christopher P., et al. "Understanding disentangling in $\beta$-VAE." 
+    """
+        
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        
+        # network architecture
+        hidden_channels = 64
+        hidden_dim = 1024
+        kernels_size=[4]*self.n_conv_layers
+        strides=[2]*self.n_conv_layers
+        pads=[1]*self.n_conv_layers
+        dils=[1]*self.n_conv_layers
+        feature_map_sizes = conv2d_output_sizes(self.input_size, self.n_conv_layers, kernels_size, strides, pads, dils)
+        output_pads = [None]*self.n_conv_layers
+        for conv_layer_id in range(self.n_conv_layers-1):
+            output_pads[conv_layer_id] = convtranspose2d_get_output_padding(feature_map_sizes[-(conv_layer_id+1)], feature_map_sizes[-(conv_layer_id+2)], kernels_size[conv_layer_id], strides[conv_layer_id], pads[conv_layer_id])
+        output_pads[-1] = convtranspose2d_get_output_padding(feature_map_sizes[0], self.input_size, kernels_size[conv_layer_id], strides[conv_layer_id], pads[conv_layer_id])
+        h_after_convs, w_after_convs = feature_map_sizes[-1]
+        
+        self.decoder = nn.Sequential()
+        
+        hidden_channels = int(hidden_channels * math.pow(2, self.n_conv_layers))
+        
+        # linear layers
+        self.decoder.add_module("lin_1", nn.Sequential(nn.Linear(self.n_latents, hidden_dim), nn.ReLU()))
+        self.decoder.add_module("lin_2", nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.ReLU()))
+        self.decoder.add_module("lin_3", nn.Sequential(nn.Linear(hidden_dim, hidden_channels * h_after_convs * w_after_convs), nn.ReLU()))
+        self.decoder.add_module("channelize", Channelize(hidden_channels,  h_after_convs, w_after_convs))
+                
+        # convolution layers
+        for conv_layer_id in range(0, self.n_conv_layers-1):
+            # For convTranspose2d the padding argument effectively adds kernel_size - 1 - padding amount of zero padding to both sizes of the input
+            self.decoder.add_module("convT_{}".format(conv_layer_id+1), nn.Sequential(nn.ConvTranspose2d(hidden_channels, hidden_channels//2, kernels_size[-(conv_layer_id+1)], strides[-(conv_layer_id+1)], pads[-(conv_layer_id+1)], output_padding=output_pads[conv_layer_id]), nn.BatchNorm2d(hidden_channels //2), nn.ReLU()))
+            hidden_channels = hidden_channels // 2
+        self.decoder.add_module("convT_{}".format(self.n_conv_layers), nn.ConvTranspose2d(hidden_channels, self.n_channels, kernels_size[0], strides[0], pads[0], output_padding=output_pads[self.n_conv_layers-1]))
+    
+    def forward(self, z):
+        return self.decoder(z)
+    
 '''  
 class DecoderBurgess2 (nn.Module):
     """ 
