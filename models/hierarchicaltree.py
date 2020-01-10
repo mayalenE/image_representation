@@ -1,3 +1,4 @@
+from copy import deepcopy
 import goalrepresent as gr
 from goalrepresent import dnn, models
 from goalrepresent.dnn.losses.losses import BaseLoss
@@ -477,7 +478,7 @@ class HierarchicalTreeEncoder(encoders.BaseDNNEncoder):
         super().__init__(**kwargs)
         
 
-        self.network = network
+        self.network = deepcopy(network)
         self.max_depth = max_depth
         self.n_latents = int ((self.max_depth + 1) * n_leaf_latents)
         
@@ -571,7 +572,7 @@ class HierarchicalTreeDecoder(decoders.BaseDNNDecoder):
             return decoder_list
             
 
-        self.decoder_list = get_decoder_list(network, nn.ModuleList())
+        self.decoder_list = get_decoder_list(deepcopy(network), nn.ModuleList())
         
     def forward(self, z, path_taken):
         batch_size = z.size(0)

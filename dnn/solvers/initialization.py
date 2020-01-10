@@ -1,4 +1,6 @@
 import math
+import os
+import torch
 from torch.nn.init import kaiming_normal_, kaiming_uniform_, xavier_normal_, xavier_uniform_
         
 
@@ -9,6 +11,13 @@ def get_initialization(initialization_name):
     initialization_name = initialization_name.lower()
     return eval("weights_init_{}".format(initialization_name))
 
+def weights_init_pretrain(network, checkpoint_filepath):
+    if os.path.exists(checkpoint_filepath):
+        saved_model = torch.load (checkpoint_filepath, map_location='cpu')
+        network.load_state_dict(saved_model['network_state_dict'])
+    else:
+        print("WARNING: the checkpoint filepath for a pretrain initialization has not been found, skipping the initialization")
+    return network
 
 
 def weights_init_pytorch(m):

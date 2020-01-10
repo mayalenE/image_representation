@@ -1,3 +1,4 @@
+from copy import deepcopy
 from itertools import chain
 import goalrepresent as gr
 from goalrepresent import dnn
@@ -237,10 +238,10 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         return losses
     
     def get_encoder(self):
-        return self.network.encoder
+        return deepcopy(self.network.encoder)
     
     def get_decoder(self):
-        return self.network.decoder
+        return deepcopy(self.network.decoder)
 
 """ ========================================================================================================================
 State-of-the-art modifications of the basic VAE

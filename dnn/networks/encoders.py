@@ -1,6 +1,7 @@
 from abc import ABCMeta, abstractmethod
 import goalrepresent as gr
 from  goalrepresent.helper.nnmodulehelper import Flatten, conv2d_output_sizes
+import math
 import torch
 from torch import nn
 
@@ -165,6 +166,58 @@ class HjlemCIFAREncoder (BaseDNNEncoder):
     def calc_embedding(self, x):
         mu, logvar = self.forward(x)
         return mu
+    
+    
+class HjlemEncoder (BaseDNNEncoder):
+        
+    def __init__(self, feature_layer = 2, **kwargs):
+        super().__init__(**kwargs)
+
+        # network architecture
+        hidden_channels = 64
+        hidden_dim = 1024
+        kernels_size=[4]*self.n_conv_layers
+        strides=[2]*self.n_conv_layers
+        pads=[1]*self.n_conv_layers
+        dils=[1]*self.n_conv_layers
+        feature_map_sizes = conv2d_output_sizes(self.input_size, self.n_conv_layers, kernels_size, strides, pads, dils)
+        h_after_convs, w_after_convs = feature_map_sizes[-1]
+        
+        # feature map
+        self.feature_layer = feature_layer
+        self.local_feature_shape = (int(hidden_channels * math.pow(2, feature_layer)), feature_map_sizes[feature_layer][0], feature_map_sizes[feature_layer][1])
+        
+        # encoder
+        self.encoder = nn.Sequential()
+        
+        # convolution layers
+        self.encoder.add_module("conv_{}".format(0), nn.Sequential(nn.Conv2d(self.n_channels, hidden_channels, kernels_size[0], strides[0], pads[0], dils[0]), nn.ReLU()))
+        for conv_layer_id in range(1, self.n_conv_layers):
+            self.encoder.add_module("conv_{}".format(conv_layer_id), nn.Sequential(nn.Conv2d(hidden_channels, hidden_channels*2, kernels_size[conv_layer_id], strides[conv_layer_id], pads[conv_layer_id], dils[conv_layer_id]), nn.BatchNorm2d(hidden_channels*2), nn.ReLU()))
+            hidden_channels *= 2
+        self.encoder.add_module("flatten", Flatten())
+        
+        # linear layers
+        self.encoder.add_module("lin_0", nn.Sequential(nn.Linear(hidden_channels * h_after_convs * w_after_convs, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ReLU()))
+        self.encoder.add_module("z_gen", nn.Linear(hidden_dim, self.n_latents))
+        
+        
+    def forward(self, x):
+        # feature map
+        h = x
+        for conv_layer_id in range(self.feature_layer+1):
+            h = eval("self.encoder.conv_{}".format(conv_layer_id))(h)
+        feature_map = h
+        # encoding
+        for conv_layer_id in range(self.feature_layer+1, self.n_conv_layers):
+            h = eval("self.encoder.conv_{}".format(conv_layer_id))(h)
+        h = self.encoder.flatten(h)
+        z = self.encoder.z_gen(self.encoder.lin_0(h))
+        return z, feature_map
+    
+    def calc_embedding(self, x):
+        z, feature_map = self.forward(x)
+        return z
 
 '''
 class EncoderBurgess2 (BaseDNNEncoder):

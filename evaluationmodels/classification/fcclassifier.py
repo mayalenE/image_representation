@@ -135,6 +135,7 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
         for data in train_loader:
             x =  Variable(data["obs"])
             y = Variable(data["label"]).squeeze()
+            y = self.push_variable_to_device(y)
             # forward
             batch_predictions = self.forward(x)
             loss_inputs =  {"predicted_y": batch_predictions}

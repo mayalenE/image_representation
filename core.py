@@ -145,7 +145,7 @@ class BaseRepresentation(metaclass=ABCMeta):
     @staticmethod
     def load(filepath = 'representation.pickle', map_location='cpu', config=None):
         representation = datahelper.load(filepath, map_location = map_location, config = config)
-        
+        randomhelper.set_seed(representation.config.seed)
         if hasattr(representation, 'model'):
             if hasattr(representation.model.config, 'device'):
                 if map_location == 'cpu':

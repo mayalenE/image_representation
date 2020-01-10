@@ -63,6 +63,8 @@ class BaseClassifierModel(gr.BaseEvaluationModel):
         return predicted_y
     
     def do_evaluation_pass(self, dataloader, logger = None):
+        if isinstance(self, gr.dnn.BaseDNN):
+            self.eval()
         predictions = {}
         losses = {}
         log_top10_images = (logger is not None) and (self.n_epochs % self.config.logging.record_top10_images_every == 0)
@@ -81,6 +83,8 @@ class BaseClassifierModel(gr.BaseEvaluationModel):
             for batch_idx, data in enumerate(dataloader):
                 x =  Variable(data["obs"])
                 y = Variable(data["label"]).squeeze()
+                if isinstance(self, gr.dnn.BaseDNN):
+                    y = self.push_variable_to_device(y)
                 # forward
                 batch_predictions = self.forward(x)
                 loss_inputs =  {"predicted_y": batch_predictions}

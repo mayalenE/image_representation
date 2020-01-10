@@ -98,8 +98,11 @@ class BaseDNN(nn.Module):
     
     
     def init_network(self, initialization_name, initialization_parameters):
-        initialization_class = initialization.get_initialization(initialization_name)
-        self.network.apply(initialization_class)
+        initialization_function = initialization.get_initialization(initialization_name)
+        if initialization_name == "pretrain":
+            self.network = initialization_function(self.network, initialization_parameters.checkpoint_filepath)
+        else:
+            self.network.apply(initialization_function)
             
         # update config
         self.config.network.initialization.name = initialization_name
@@ -166,19 +169,21 @@ class BaseDNN(nn.Module):
         torch.save(network, checkpoint_filepath)
         
     @staticmethod    
-    def load_checkpoint(checkpoint_filepath, use_gpu = False):
+    def load_checkpoint(checkpoint_filepath, use_gpu = False, representation_model = None):
         if os.path.exists(checkpoint_filepath):
                 saved_model = torch.load (checkpoint_filepath, map_location='cpu')
                 # the saved dnn can belong to gr.dnn, gr.models, gr.evaluationmodels
                 if hasattr(gr.dnn, saved_model['type']):
                     model_cls = getattr(gr.dnn, saved_model['type'])
+                    model = model_cls (config = saved_model['config'])
                 elif hasattr(gr.models, saved_model['type']):
                     model_cls = getattr(gr.models, saved_model['type'])
+                    model = model_cls (config = saved_model['config'])
                 elif hasattr(gr.evaluationmodels, saved_model['type']):
                     model_cls = getattr(gr.evaluationmodels, saved_model['type'])
+                    model = model_cls (representation_model = representation_model, config = saved_model['config'])
                 else:
                     raise ValueError("the model cannot be load as it does not iherit from the BaseDNN class")
-                model = model_cls (config = saved_model['config'])        
                 model.network.load_state_dict(saved_model['network_state_dict'])
                 model.optimizer.load_state_dict(saved_model['optimizer_state_dict'])
                 model.set_device(use_gpu)

@@ -207,6 +207,7 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
         with torch.no_grad():
             for batch_idx, data in enumerate(dataloader):
                 x =  Variable(data['obs'])
+                x = self.push_variable_to_device(x)
                 # forward
                 recon_x, mu, logvar, z = self.forward(x)
                 loss_inputs = {'recon_x': recon_x, 'mu': mu, 'logvar': logvar}
