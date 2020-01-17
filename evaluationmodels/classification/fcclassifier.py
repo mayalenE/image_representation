@@ -125,8 +125,8 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
         
     def forward(self, x):
         x = self.push_variable_to_device(x)
-        mu = self.network.encoder(x) [0]
-        return self.network.fc(mu)
+        encoder_outputs = self.representation_encoder(x)
+        return self.network.fc(encoder_outputs["z"])
     
     
     def train_epoch (self, train_loader, logger=None):
@@ -138,9 +138,8 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
             y = self.push_variable_to_device(y)
             # forward
             batch_predictions = self.forward(x)
-            loss_inputs =  {"predicted_y": batch_predictions}
-            loss_targets = {"y": y}
-            batch_losses = self.loss_f(loss_inputs, loss_targets, reduction=True, logger=logger)
+            loss_inputs =  {"predicted_y": batch_predictions, "y": y}
+            batch_losses = self.loss_f(loss_inputs, reduction=True)
             # backward
             loss = batch_losses["total"]
             self.optimizer.zero_grad()

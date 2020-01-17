@@ -8,7 +8,7 @@ from torch.nn import functional as F
 
 class BaseLoss(ABC):
     @abstractmethod
-    def __call__(self, loss_inputs, loss_targets, reduction = True, **kwargs):
+    def __call__(self, loss_inputs, reduction = True, **kwargs):
         pass
     
 def get_loss(loss_name):
@@ -24,37 +24,60 @@ class DIMLoss(BaseLoss):
         self.beta = beta
         self.gamma = gamma
         
-    def __call__(self, loss_inputs, loss_targets, reduction = True, **kwargs):
+        self.input_keys_list = ['global_pos', 'global_neg', 'local_pos', 'local_neg', 'prior_pos', 'prior_neg']
+        
+    def __call__(self, loss_inputs, reduction = True, **kwargs):
         try:
+            global_pos = loss_inputs['global_pos']
             global_neg = loss_inputs['global_neg']
+            local_pos = loss_inputs['local_pos']
             local_neg = loss_inputs['local_neg']
+            prior_pos = loss_inputs['prior_pos']
             prior_neg = loss_inputs['prior_neg']
-            global_pos = loss_targets['global_pos']
-            local_pos = loss_targets['local_pos']
-            prior_pos = loss_targets['prior_pos']
+            
         except:
-            raise ValueError("VAELoss needs global_neg, local_neg, prior_neg inputs and global_pos, local_pos, prior_pos targets")
-        global_loss = _mi_bce_loss(global_pos, global_neg, reduction=reduction)
-        local_loss = _mi_bce_loss(local_pos, local_neg, reduction=reduction)
-        prior_loss = _mi_bce_loss(prior_pos, prior_neg, reduction=reduction)
+            raise ValueError("DIMLoss needs {} inputs".format(self.input_keys_list))
+        global_loss = _gan_loss(global_pos, global_neg, reduction=reduction)
+        local_loss = _gan_loss(local_pos, local_neg, reduction=reduction)
+        prior_loss = _gan_loss(prior_pos, prior_neg, reduction=reduction)
         
         total_loss = self.alpha * global_loss + self.beta * local_loss + self.gamma * prior_loss
         
         return {'total': total_loss, 'global': global_loss, 'local': local_loss, 'prior': prior_loss}
+
+
+class BiGANLoss(BaseLoss):
+    def __init__(self, **kwargs): 
+        self.input_keys_list = ['prob_pos', 'prob_neg']
+        
+    def __call__(self, loss_inputs, reduction = True, **kwargs):
+        try:
+            prob_neg = loss_inputs['prob_pos']
+            prob_pos = loss_inputs['prob_neg']
+        except:
+            raise ValueError("BiGANLoss needs {} inputs".format(self.input_keys_list))
+        
+        discriminator_loss = _gan_loss(prob_pos, prob_neg)
+        generator_loss = _gan_loss(prob_neg, prob_pos)
+        total_loss = discriminator_loss + generator_loss
+        
+        return {'discriminator': discriminator_loss, 'generator': generator_loss, 'total': total_loss}
     
 
 class VAELoss(BaseLoss):
     def __init__(self, reconstruction_dist="bernouilli", **kwargs):
         self.reconstruction_dist = reconstruction_dist
         
-    def __call__(self, loss_inputs, loss_targets, reduction = True, **kwargs):
+        self.input_keys_list = ['x', 'recon_x', 'mu', 'logvar']
+        
+    def __call__(self, loss_inputs, reduction = True, **kwargs):
         try:
             recon_x = loss_inputs['recon_x']
             mu = loss_inputs['mu']
             logvar = loss_inputs['logvar']
-            x = loss_targets['x']
+            x = loss_inputs['x']
         except:
-            raise ValueError("VAELoss needs recon_x, mu, logvar inputs and x targets")
+            raise ValueError("VAELoss needs {} inputs".format(self.input_keys_list))
         recon_loss = _reconstruction_loss(recon_x, x, self.reconstruction_dist, reduction=reduction)
         KLD_loss, KLD_per_latent_dim, KLD_var = _kld_loss(mu, logvar, reduction=reduction)
         total_loss = recon_loss + KLD_loss
@@ -68,14 +91,16 @@ class BetaVAELoss(BaseLoss):
         self.reconstruction_dist = reconstruction_dist
         self.beta = beta
         
-    def __call__(self, loss_inputs, loss_targets, reduction = True, **kwargs):
+        self.input_keys_list = ['x', 'recon_x', 'mu', 'logvar']
+        
+    def __call__(self, loss_inputs, reduction = True, **kwargs):
         try:
             recon_x = loss_inputs['recon_x']
             mu = loss_inputs['mu']
             logvar = loss_inputs['logvar']
-            x = loss_targets['x']
+            x = loss_inputs['x']
         except:
-            raise ValueError("BetaVAELoss needs recon_x, mu, logvar inputs and x targets")
+            raise ValueError("BetaVAELoss needs {} inputs".format(self.input_keys_list))
         recon_loss = _reconstruction_loss(recon_x, x, self.reconstruction_dist, reduction=reduction)
         KLD_loss, KLD_per_latent_dim, KLD_var = _kld_loss(mu, logvar, reduction=reduction)
         total_loss = recon_loss + self.beta * KLD_loss
@@ -90,14 +115,16 @@ class AnnealedVAELoss(BaseLoss):
         self.gamma = gamma
         self.capacity = capacity
         
-    def __call__(self, loss_inputs, loss_targets, reduction = True, **kwargs):
+        self.input_keys_list = ['x', 'recon_x', 'mu', 'logvar']
+        
+    def __call__(self, loss_inputs, reduction = True, **kwargs):
         try:
             recon_x = loss_inputs['recon_x']
             mu = loss_inputs['mu']
             logvar = loss_inputs['logvar']
-            x = loss_targets['x']
+            x = loss_inputs['x']
         except:
-            raise ValueError("AnnealedVAELoss needs recon_x, mu, logvar inputs and x targets")
+            raise ValueError("AnnealedVAELoss needs {} inputs".format(self.input_keys_list))
         recon_loss = _reconstruction_loss(recon_x, x, self.reconstruction_dist)
         KLD_loss, KLD_per_latent_dim, KLD_var = _kld_loss(mu, logvar)
         total_loss = recon_loss +  self.gamma * (KLD_loss - self.capacity).abs()
@@ -115,15 +142,17 @@ class BetaTCVAELoss(BaseLoss):
         self.tc_approximate == tc_approximate
         self.dataset_size = dataset_size
         
-    def __call__(self, loss_inputs, loss_targets, reduction = True, **kwargs):
+        self.input_keys_list = ['x', 'recon_x', 'mu', 'logvar', 'z']
+        
+    def __call__(self, loss_inputs, reduction = True, **kwargs):
         try:
             recon_x = loss_inputs['recon_x']
             mu = loss_inputs['mu']
             logvar = loss_inputs['logvar']
-            sampled_z = loss_inputs['sampled_z']
-            x = loss_targets['x']
+            sampled_z = loss_inputs['z']
+            x = loss_inputs['x']
         except:
-            raise ValueError("VAELoss needs recon_x, mu, logvar, sampled_z inputs and x targets")
+            raise ValueError("BetaTCVAELoss needs {} inputs".format(self.input_keys_list))
         # reconstruction loss
         recon_loss = _reconstruction_loss(recon_x, x, self.reconstruction_dist)
                 
@@ -172,28 +201,28 @@ class BetaTCVAELoss(BaseLoss):
     
 class FCClassifierLoss(BaseLoss):
     def __init__(self, **kwargs):
-        pass
+        self.input_keys_list = ['y', 'predicted_y']
         
-    def __call__(self, loss_inputs, loss_targets, reduction = True, **kwargs):
+    def __call__(self, loss_inputs, reduction = True, **kwargs):
         try:
             predicted_y = loss_inputs['predicted_y']
-            y = loss_targets['y']
+            y = loss_inputs['y']
         except:
-            raise ValueError("FCClassifierLoss needs predicted_y inputs and y targets")
+            raise ValueError("FCClassifierLoss needs {} inputs".format(self.input_keys_list))
         CE_loss = _ce_loss(predicted_y, y, reduction=reduction)
         
         return {'total': CE_loss}
     
 class SVMClassifierLoss(BaseLoss):
     def __init__(self, **kwargs):
-        pass
+        self.input_keys_list = ['y', 'predicted_y']
         
-    def __call__(self, loss_inputs, loss_targets, reduction = True, **kwargs):
+    def __call__(self, loss_inputs, reduction = True, **kwargs):
         try:
             predicted_y = loss_inputs['predicted_y']
-            y = loss_targets['y']
+            y = loss_inputs['y']
         except:
-            raise ValueError("SVMlassifierLoss needs predicted_y inputs and y targets")
+            raise ValueError("SVMlassifierLoss needs {} inputs".format(self.input_keys_list))
         # predicted_y is already a log probabilities here
         CE_loss = _nll_loss(predicted_y, y, reduction=reduction)
         
@@ -239,20 +268,27 @@ def _mse_loss(recon_x, x, reduction=True):
         """ Returns the reconstruction loss (mean squared error) summed on the image dims and averaged on the batch size """
         return F.mse_loss(recon_x, x, reduction = "sum" ) / x.size(0) 
     else:
-        return F.mse_loss(recon_x, x, reduction = "none").sum(3).sum(2).sum(1) # sum on the image dims but not on the batch dimension
+        mse_loss =  F.mse_loss(recon_x, x, reduction = "none")
+        mse_loss = mse_loss.view(mse_loss.size(0), -1).sum(1)
+        return # sum on the image dims but not on the batch dimension
 
 def _bce_loss(recon_x, x, reduction=True):
     if reduction:
         """ Returns the reconstruction loss (binary cross entropy) summed on the image dims and averaged on the batch size """
         return F.binary_cross_entropy(recon_x, x, reduction = "sum" ) / x.size(0)
     else:
-        return F.binary_cross_entropy(recon_x, x, reduction = "none").sum(3).sum(2).sum(1)
+        bce_loss = F.binary_cross_entropy(recon_x, x, reduction = "none")
+        bce_loss = bce_loss.view(bce_loss.size(0), -1).sum(1)
+        return bce_loss
+    
 def _bce_with_digits_loss(recon_x, x, reduction=True): 
     if reduction:
         """ Returns the reconstruction loss (sigmoid + binary cross entropy) summed on the image dims and averaged on the batch size """
         return F.binary_cross_entropy_with_logits(recon_x, x, reduction = "sum" ) / x.size(0) 
     else:
-        return F.binary_cross_entropy_with_logits(recon_x, x, reduction = "none").sum(3).sum(2).sum(1)
+        bce_loss = F.binary_cross_entropy_with_logits(recon_x, x, reduction = "none")
+        bce_loss = bce_loss.view(bce_loss.size(0), -1).sum(1)
+        return bce_loss
 
 def _ce_loss(recon_y, y, reduction=True):
     """ Returns the cross entropy loss (softmax + NLLLoss) averaged on the batch size """
@@ -268,7 +304,7 @@ def _nll_loss(recon_y, y, reduction=True):
     else:
         return F.nll_loss(recon_y, y, reduction = "none")
     
-def _mi_bce_loss(positive, negative,  reduction=True):
+def _gan_loss(positive, negative,  reduction=True):
     """ Eq. 4 from the DIM paper is equivalent to binary cross-entropy 
     i.e. minimizing the output of this function is equivalent to maximizing
     the output of jsd_mi(positive, negative)
@@ -280,6 +316,8 @@ def _mi_bce_loss(positive, negative,  reduction=True):
             fake /= negative.size(0)
         return real + fake
     else:
-        real = F.binary_cross_entropy_with_logits(positive, torch.ones_like(positive), reduction = "none").sum(3).sum(2).sum(1)
-        fake = F.binary_cross_entropy_with_logits(negative, torch.zeros_like(negative), reduction = "none").sum(3).sum(2).sum(1)
+        real = F.binary_cross_entropy_with_logits(positive, torch.ones_like(positive), reduction = "none")
+        real = real.view(real.size(0), -1).sum(1)
+        fake = F.binary_cross_entropy_with_logits(negative, torch.zeros_like(negative), reduction = "none")
+        fake = fake.view(fake.size(0), -1).sum(1)
         return real + fake

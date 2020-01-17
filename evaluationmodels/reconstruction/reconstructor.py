@@ -134,29 +134,20 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
         # update config
         self.config.optimizer.name = optimizer_name
         self.config.optimizer.parameters = gr.config.update_config(optimizer_parameters, self.config.optimizer.parameters)
-    
-    def reparameterize(self, mu, logvar):
-        mu = self.push_variable_to_device(mu)
-        logvar = self.push_variable_to_device(logvar)
-        if self.training:
-            std = logvar.mul(0.5).exp_()
-            eps = torch.randn_like(std)
-            return eps.mul(std).add_(mu)
-        else:
-            return mu
+        
         
     def forward(self, x):
         x = self.push_variable_to_device(x)
         encoder_outputs = self.network.encoder(x)
-        mu = encoder_outputs[0]
-        logvar = encoder_outputs[1]
-        z = self.reparameterize(mu, logvar)
+        z = encoder_outputs["z"]
         if self.network.decoder.__class__ is gr.models.hierarchicaltree.HierarchicalTreeDecoder:
-            path_taken = encoder_outputs[-2]
+            path_taken = encoder_outputs["path_taken"]
             recon_x = self.network.decoder(z, path_taken)
         else:
             recon_x = self.network.decoder(z)
-        return recon_x, mu, logvar, z
+        model_outputs = encoder_outputs
+        model_outputs["recon_x"] = recon_x
+        return model_outputs
     
     
     def train_epoch (self, train_loader, logger=None):
@@ -166,9 +157,9 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
             x =  Variable(data['obs'])
             x = self.push_variable_to_device(x)
             # forward
-            outputs = self.forward(x)
-            recon_x, mu, logvar, z = outputs
-            batch_losses = self.loss_f(x, recon_x, mu, logvar, logger=logger)
+            model_outputs = self.forward(x)
+            loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
+            batch_losses = self.loss_f(loss_inputs)
             # backward
             loss = batch_losses['total']
             self.optimizer.zero_grad()
@@ -209,12 +200,12 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
                 x =  Variable(data['obs'])
                 x = self.push_variable_to_device(x)
                 # forward
-                recon_x, mu, logvar, z = self.forward(x)
-                loss_inputs = {'recon_x': recon_x, 'mu': mu, 'logvar': logvar}
-                loss_targets = {'x': x}
-                batch_losses = self.loss_f(loss_inputs, loss_targets, reduction=False, logger=logger)
+                model_outputs = self.forward(x)
+                loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
+                batch_losses = self.loss_f(loss_inputs)
                 
                 # save results
+                recon_x = model_outputs["recon_x"]
                 if self.config.loss.parameters.reconstruction_dist == "bernouilli":
                     recon_x = torch.sigmoid(recon_x)
                 if 'recon_x' in predictions:

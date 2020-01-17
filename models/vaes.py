@@ -3,7 +3,7 @@ from itertools import chain
 import goalrepresent as gr
 from goalrepresent import dnn
 from goalrepresent.dnn import losses
-from goalrepresent.dnn.networks import encoders, decoders, discriminators
+from goalrepresent.dnn.networks import decoders, discriminators
 from goalrepresent.helper import mathhelper
 import numpy as np
 import math
@@ -36,6 +36,8 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         default_config.network.parameters.input_size = (64,64)
         default_config.network.parameters.n_latents = 10
         default_config.network.parameters.n_conv_layers = 4
+        default_config.network.parameters.feature_layer = 2
+        default_config.network.parameters.conditional_type = "gaussian"
         
         # initialization parameters
         default_config.network.initialization = gr.Config()
@@ -60,39 +62,35 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
     def __init__(self, config = None, **kwargs):
         super().__init__(config=config, **kwargs) # calls all constructors up to BaseDNN (MRO)
         
+        self.output_keys_list = self.network.encoder.output_keys_list + ["recon_x"]
+        
+        
     def set_network(self, network_name, network_parameters):
         super().set_network(network_name, network_parameters)
         # add a decoder to the network for the VAE
         decoder_class = decoders.get_decoder(network_name)
         self.network.decoder = decoder_class(**network_parameters)
         
+    def forward_from_encoder(self, encoder_outputs):
+        recon_x = self.network.decoder(encoder_outputs["z"])
+        model_outputs = encoder_outputs
+        model_outputs["recon_x"] = recon_x
+        return model_outputs
         
-    def encode(self, x):
-        x = self.push_variable_to_device(x)
-        return self.network.encoder(x)
-    
-    
-    def decode(self, z):
-        z = self.push_variable_to_device(z)
-        return self.network.decoder(z)
-        
-    
-    def reparameterize(self, mu, logvar):
-        mu = self.push_variable_to_device(mu)
-        logvar = self.push_variable_to_device(logvar)
-        if self.training:
-            std = logvar.mul(0.5).exp_()
-            eps = torch.randn_like(std)
-            return eps.mul(std).add_(mu)
-        else:
-            return mu
-
     def forward(self, x):
+        if torch._C._get_tracing_state():
+            return self.forward_for_graph_tracing(x)
+        
         x = self.push_variable_to_device(x)
-        mu, logvar = self.encode(x)
-        z = self.reparameterize(mu, logvar)
-        recon_x = self.decode(z)
-        return recon_x, mu, logvar, z
+        encoder_outputs = self.network.encoder(x)
+        return self.forward_from_encoder(encoder_outputs)
+    
+    def forward_for_graph_tracing(self, x):
+        x = self.push_variable_to_device(x)
+        z, feature_map = self.network.encoder.forward_for_graph_tracing(x)
+        recon_x = self.network.decoder(z)
+        return recon_x
+    
     
     def calc_embedding(self, x):
         ''' the function calc outputs a representation vector of size batch_size*n_latents'''
@@ -108,7 +106,9 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         if logger is not None:
             dummy_input = torch.FloatTensor(1, self.config.network.parameters.n_channels, self.config.network.parameters.input_size[0], self.config.network.parameters.input_size[1]).uniform_(0,1)
             dummy_input = self.push_variable_to_device(dummy_input)
-            logger.add_graph(self, dummy_input, verbose = False)
+            self.eval()
+            with torch.no_grad():
+                logger.add_graph(self, dummy_input, verbose = False)
             
         if valid_loader is not None:
             best_valid_loss = sys.float_info.max
@@ -149,10 +149,9 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
             x =  Variable(data['obs'])
             x = self.push_variable_to_device(x)
             # forward
-            recon_x, mu, logvar, z = self.forward(x)
-            loss_inputs = {'recon_x': recon_x, 'mu': mu, 'logvar': logvar}
-            loss_targets = {'x': x}
-            batch_losses = self.loss_f(loss_inputs, loss_targets, logger=logger)
+            model_outputs = self.forward(x)
+            loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
+            batch_losses = self.loss_f(loss_inputs)
             # backward
             loss = batch_losses['total']
             self.optimizer.zero_grad()
@@ -194,10 +193,9 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
                 x =  Variable(data['obs'])
                 x = self.push_variable_to_device(x)
                 # forward
-                recon_x, mu, logvar, z = self.forward(x)
-                loss_inputs = {'recon_x': recon_x, 'mu': mu, 'logvar': logvar}
-                loss_targets = {'x': x}
-                batch_losses = self.loss_f(loss_inputs, loss_targets, logger=logger)
+                model_outputs = self.forward(x)
+                loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
+                batch_losses = self.loss_f(loss_inputs)
                 # save losses
                 for k, v in batch_losses.items():
                     if k not in losses:
@@ -206,7 +204,7 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
                         losses[k].append(v.data.item())
                 # record embeddings
                 if record_embeddings:
-                     embedding_samples.append(mu)
+                     embedding_samples.append(model_outputs["z"])
                      embedding_metadata.append(data['label'])
                      embedding_images.append(x)
                     
@@ -215,9 +213,9 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
             
         if record_valid_images:
             input_images = x.cpu().data
-            output_images = recon_x.cpu().data
+            output_images = model_outputs['recon_x'].cpu().data
             if self.config.loss.parameters.reconstruction_dist == "bernouilli":
-                output_images = torch.sigmoid(recon_x).cpu().data
+                output_images = torch.sigmoid(model_outputs['recon_x']).cpu().data
             n_images = data['obs'].size()[0]
             vizu_tensor_list = [None] * (2*n_images)
             vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]

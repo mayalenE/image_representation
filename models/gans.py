@@ -1,447 +1,292 @@
-import copy
-from goalrepresent import models
+from copy import deepcopy
+import goalrepresent as gr
 from goalrepresent import dnn
-from goalrepresent.dnn import losses
-from goalrepresent.dnn.networks import encoders, decoders, discriminators
+from goalrepresent.dnn.networks import decoders, discriminators
 from itertools import chain
 import numpy as np
 import os
+import sys
+import time
 import torch
-from torch import nn
 from torch.autograd import Variable
-from torchvision.utils import save_image
+from torchvision.utils import make_grid
 
-EPS = 1e-12
 
 """ ========================================================================================================================
-GAN Architectures:
+Base BiGAN architecture
 ========================================================================================================================="""
-class DCGANModel(dnn.BaseDNN):
-    '''
-    DCGAN Class
-    '''
-    def __init__(self, n_channels = 1, input_size = (64,64), n_latents = 10, model_architecture = "Radford", n_conv_layers = 4, reconstruction_dist = 'bernouilli', use_gpu = True, **kwargs):
-        super(DCGANModel, self).__init__()
-        
-        # store the initial parameters used to create the model
-        self.init_params = locals()
-        del self.init_params['self']
-        
-        # define the device to use (gpu or cpu)
-        if use_gpu and torch.cuda.is_available():
-            self.use_gpu = True
-        else:
-            self.use_gpu = False
-        
-        # network parameters
-        self.n_channels = n_channels
-        self.input_size = input_size
-        self.n_conv_layers = n_conv_layers
-        self.n_latents = n_latents
-        
-        # network
-        decoder = decoders.get_decoder(model_architecture)
-        discriminator = discriminators.get_discriminator(model_architecture)
-        self.decoder = decoder(self.n_channels, self.input_size, self.n_conv_layers, self.n_latents)
-        self.discriminator = discriminator(self.n_channels, self.input_size, self.n_conv_layers, output_size = 1)
-        self.reconstruction_dist = reconstruction_dist
-        
-        self.n_epochs = 0
-    
-    def decode(self, z):
-        if self.use_gpu and not z.is_cuda:
-           z = z.cuda()
-        return self.decoder(z)
-    
-    def discriminate(self, x):
-        if self.use_gpu and not x.is_cuda:
-            x = x.cuda()
-        return self.discriminator(x)
 
-    def forward(self, x_real):
-        if self.use_gpu and not x_real.is_cuda:
-            x_real = x_real.cuda()
-        return {'recon_x': x_real, 'mu': torch.zeros((x_real.size(0), self.n_latents)), 'logvar':  torch.zeros((x_real.size(0), self.n_latents))}
-    
-    def set_optimizer(self, optimizer_name, optimizer_hyperparameters):
-        optimizer = eval("torch.optim.{}".format(optimizer_name))
-        self.optimizer_generator = optimizer(self.decoder.parameters(), **optimizer_hyperparameters)
-        self.optimizer_discriminator = optimizer(self.discriminator.parameters(), **optimizer_hyperparameters)
-        self.criterion = nn.BCEWithLogitsLoss()
-
-    def train_epoch (self, train_loader):
-        self.train()
-        losses = {}
-        for data in train_loader:
-            x_real = Variable(data['image'], requires_grad = True)    
-            
-            z_fake = Variable(torch.randn(x_real.size(0), self.n_latents))
-            x_fake = self.decode(z_fake)
-            
-            real_label = Variable(torch.ones(x_real.size(0)))
-            fake_label = Variable(torch.zeros(x_real.size(0)))
-            
-            # (1) Train the discriminator
-            output_prob_real = self.discriminate(x_real)
-            output_prob_fake = self.discriminate(x_fake.detach())
-
-            if self.use_gpu: 
-                output_prob_real = output_prob_real.cuda()
-                output_prob_fake = output_prob_fake.cuda()
-                real_label = real_label.cuda()
-                fake_label = fake_label.cuda()
-            
-            loss_discriminator = (self.criterion(output_prob_real, real_label) + self.criterion(output_prob_fake, fake_label)) / 2.0
-            self.optimizer_discriminator.zero_grad()
-            loss_discriminator.backward()
-            self.optimizer_discriminator.step()
-            
-            
-            
-            # (2) Train the generator
-            output_prob_fake = self.discriminate(x_fake)
-            if self.use_gpu:
-                output_prob_fake = output_prob_fake.cuda()
-            loss_generator = self.criterion(output_prob_fake, real_label)
-            self.optimizer_generator.zero_grad()
-            loss_generator.backward()
-            self.optimizer_generator.step()
-#            for name, param in self.decoder.named_parameters():
-#                if param.requires_grad:
-#                    print(name, '{:0.2f}'.format(param.data.sum().item()))
-        
-
-            # save losses
-            final_losses = {'discriminator': loss_discriminator, 'generator': loss_generator, 'total': loss_discriminator+loss_generator}
-            for k, v in final_losses.items():
-                if k not in losses:
-                    losses[k] = [v.data.item()]
-                else:
-                    losses[k].append(v.data.item())
-            # debug only on first batch:        
-            #break
-                    
-        for k, v in losses.items():
-            losses [k] = np.mean (v)
-        
-        self.n_epochs +=1
-        return losses
-    
-    
-    def valid_epoch (self, valid_loader, save_image_in_folder=None):
-        self.eval()
-        losses = {}
-        with torch.no_grad():
-            for data in valid_loader:
-                x_real = Variable(data['image'])    
-                
-                z_fake = Variable(torch.randn(x_real.size(0), self.n_latents))
-                x_fake = self.decode(z_fake)
-                
-                real_label = Variable(torch.ones(x_real.size(0)))
-                fake_label = Variable(torch.zeros(x_real.size(0)))
-
-                output_prob_real = self.discriminate(x_real)
-                output_prob_fake = self.discriminate(x_fake)
-                
-                if self.use_gpu: 
-                    output_prob_real = output_prob_real.cuda()
-                    output_prob_fake = output_prob_fake.cuda()
-                    real_label = real_label.cuda()
-                    fake_label = fake_label.cuda()
-                
-                loss_discriminator = self.criterion(output_prob_real, real_label) + self.criterion(output_prob_fake, fake_label)
-                loss_generator = self.criterion(output_prob_fake, real_label)
-                
-    
-                # save losses
-                final_losses = {'discriminator': loss_discriminator, 'generator': loss_generator, 'total': loss_discriminator+loss_generator}
-                for k, v in final_losses.items():
-                    if k not in losses:
-                        losses[k] = [v.data.item()]
-                    else:
-                        losses[k].append(v.data.item())
-                # debug only on first batch:        
-                #break
-           
-        for k, v in losses.items():
-            losses [k] = np.mean (v)
-            
-        # save images
-        if save_image_in_folder is not None and self.n_epochs % 5 == 0:
-            generated_images = x_fake.cpu().data
-            n_images = x_fake.size(0)
-            vizu_tensor_list = [generated_images[n] for n in range(n_images)]
-            filename = os.path.join (save_image_in_folder, 'Epoch{0}.png'.format(self.n_epochs))
-            n_cols = (n_images // 4) + 1
-            save_image(vizu_tensor_list, filename, nrow=n_cols, padding=0, normalize = True, range = (-1.,1.))
-
-        return losses
-
+#TODO: implement FID and early stopped on it
 
 class BiGANModel(dnn.BaseDNN):
     '''
     BiGAN Class
     '''
-    def __init__(self, n_channels = 1, input_size = (64,64), n_latents = 10, model_architecture = "Burgess", n_conv_layers = 4, reconstruction_dist = 'bernouilli', use_gpu = True, **kwargs):
-        super(BiGANModel, self).__init__()
-        
-        # store the initial parameters used to create the model
-        self.init_params = locals()
-        del self.init_params['self']
-        
-        # define the device to use (gpu or cpu)
-        if use_gpu and torch.cuda.is_available():
-            self.use_gpu = True
-        else:
-            self.use_gpu = False
+    @staticmethod
+    def default_config():
+        default_config = dnn.BaseDNN.default_config()
         
         # network parameters
-        self.n_channels = n_channels
-        self.input_size = input_size
-        self.n_conv_layers = n_conv_layers
-        self.n_latents = n_latents
+        default_config.network = gr.Config()
+        default_config.network.name = "Dumoulin"
+        default_config.network.parameters = gr.Config()
+        default_config.network.parameters.n_channels = 1
+        default_config.network.parameters.input_size = (64,64)
+        default_config.network.parameters.n_latents = 10
+        default_config.network.parameters.n_conv_layers = 4
+        default_config.network.parameters.feature_layer = 2
+        default_config.network.parameters.conditional_type = "gaussian"
         
-        # network
-        encoder = encoders.get_encoder(model_architecture)
-        decoder = decoders.get_decoder(model_architecture)
-        discriminator = discriminators.get_discriminator(model_architecture)
-        self.encoder = encoder(self.n_channels, self.input_size, self.n_conv_layers, self.n_latents)
-        self.decoder = decoder(self.n_channels, self.input_size, self.n_conv_layers, self.n_latents)
-        self.discriminator = discriminator(self.n_channels, self.input_size, self.n_conv_layers, output_size = 1)
-        self.reconstruction_dist = reconstruction_dist
+        # initialization parameters
+        default_config.network.initialization = gr.Config()
+        default_config.network.initialization.name = "pytorch"
+        default_config.network.initialization.parameters = gr.Config()
         
-        self.n_epochs = 0
-        self.n_iters = 0
+        # loss parameters
+        default_config.loss = gr.Config()
+        default_config.loss.name = "BiGAN"
+        default_config.loss.parameters = gr.Config()
         
-    def encode(self, x):
-        if self.use_gpu and not x.is_cuda:
-            x = x.cuda()
-        return self.encoder(x)
-    
-    def reparameterize(self, mu, logvar):
-        if self.use_gpu and not mu.is_cuda:
-            mu = mu.cuda()
-        if self.use_gpu and not logvar.is_cuda:
-            logvar = logvar.cuda()
-        if self.training:
-            std = logvar.mul(0.5).exp_()
-            eps = torch.randn_like(std)
-            return eps.mul(std).add_(mu)
-        else:
-            return mu
-    
-    def decode(self, z):
-        if self.use_gpu and not z.is_cuda:
-           z = z.cuda()
-        return self.decoder(z)
-    
-    def discriminate(self, x, z):
-        if self.use_gpu and not x.is_cuda:
-            x = x.cuda()
-        if self.use_gpu and not z.is_cuda:
-            z = z.cuda()
-        return self.discriminator(x, z)
-
-    def forward(self, x_real):
-        if self.use_gpu and not x_real.is_cuda:
-            x_real = x_real.cuda()
-#        mu_real, logvar_real = self.encode(x_real)
-#        z_real = self.reparameterize(mu_real, logvar_real)
-        z_real = self.encode(x_real)
-        mu_real = z_real
-        logvar_real = torch.zeros_like(mu_real)
+        # optimizer parameters
+        default_config.optimizer = gr.Config()
+        default_config.optimizer.name = "Adam"
+        default_config.optimizer.parameters = gr.Config()
+        default_config.optimizer.parameters.lr = 1e-3
+        default_config.optimizer.parameters.weight_decay = 1e-5
+        return default_config
         
-        z_fake = Variable(torch.randn(x_real.size()[0], self.n_latents))
-        x_fake = self.decode(z_fake)
+    
+    def __init__(self, config = None, **kwargs):
+        super().__init__(config=config, **kwargs) # calls all constructors up to BaseDNN (MRO)
         
-        if self.training:
-            noise1 = Variable(torch.Tensor(x_real.size()).normal_(0, 0.1 * (1000 - self.n_iters) / 1000))
-            noise2 = Variable(torch.Tensor(x_fake.size()).normal_(0, 0.1 * (1000 - self.n_iters) / 1000))
-            if self.use_gpu:
-                 noise1 = noise1.cuda()
-                 noise2 = noise2.cuda()
-            x_real = x_real + noise1
-            x_fake = x_fake + noise2
-        output_prob_real = self.discriminate(x_real, z_real)
-        output_prob_fake = self.discriminate(x_fake, z_fake)
+        self.output_keys_list = self.network.encoder.output_keys_list + ["prob_pos", "prob_neg"]
         
-        return {'recon_x': self.decode(z_real), 'mu': mu_real, 'logvar': logvar_real, 'sampled_z': z_real, 'z_fake': z_fake, 'x_fake': x_fake, 'output_prob_real': output_prob_real, 'output_prob_fake': output_prob_fake}
-    
         
-    def calc_embedding(self, x):
-        ''' the function calc outputs a representation vector of size batch_size*n_latents'''
-        if self.use_gpu and not x.is_cuda:
-            x = x.cuda()
-        mu, logvar = self.encode(x)
+    def set_network(self, network_name, network_parameters):
+        super().set_network(network_name, network_parameters)
+        # add a decoder to the network for the BiGAN
+        decoder_class = decoders.get_decoder(network_name)
+        self.network.decoder = decoder_class(**network_parameters)
+        # add a discriminator to the network for the BiGAN
+        discriminator_class = discriminators.get_discriminator(network_name)
+        self.network.discriminator = discriminator_class(**network_parameters)
+     
         
-        return mu
-    
-    def recon_loss (self, recon_x, x):
-        if self.reconstruction_dist == "bernouilli":
-            return losses.BCE_with_digits_loss(recon_x, x)  
-        elif self.reconstruction_dist == "gaussian":
-            return losses.MSE_loss(recon_x,x)
-        else:
-            raise ValueError ("Unkown decoder distribution: {}".format(self.reconstruction_dist))
-            
-    def train_loss(self, outputs, inputs):
-        output_prob_real = outputs['output_prob_real']
-        output_prob_fake = outputs['output_prob_fake']
-        real_label = Variable(torch.ones(output_prob_real.size()[0]))
-        fake_label = Variable(torch.zeros(output_prob_real.size()[0]))
-       
-        if self.use_gpu and not output_prob_real.is_cuda:
-            output_prob_real = output_prob_real.cuda()
-            
-        if self.use_gpu and not output_prob_fake.is_cuda:
-            output_prob_fake = output_prob_fake.cuda()
-            
-        if self.use_gpu and not real_label.is_cuda:
-            real_label = real_label.cuda()
-            
-        if self.use_gpu and not fake_label.is_cuda:
-            fake_label = fake_label.cuda()
-
-        discriminator_loss = self.criterion(output_prob_real, real_label) + self.criterion(output_prob_fake, fake_label)
-        generator_loss = self.criterion(output_prob_real, fake_label) + self.criterion(output_prob_fake, real_label)
-
-        return {'discriminator': discriminator_loss, 'generator': generator_loss, 'total': discriminator_loss-generator_loss}
-    
-    def valid_losses(self, outputs, inputs):
-        valid_losses = self.train_loss(outputs, inputs)
-        x = inputs['image']
-        recon_x = outputs['recon_x']        
-        if self.use_gpu and not x.is_cuda:
-            x = x.cuda()
-        if self.use_gpu and not recon_x.is_cuda:
-            recon_x = recon_x.cuda()
-        recon_loss = self.recon_loss(recon_x, x)
-        valid_losses['total'] = recon_loss
-        return valid_losses
-    
-    
     def set_optimizer(self, optimizer_name, optimizer_hyperparameters):
         optimizer = eval("torch.optim.{}".format(optimizer_name))
-        self.optimizer_generator = optimizer(chain(self.encoder.parameters(), self.decoder.parameters()), **optimizer_hyperparameters)
-        self.optimizer_discriminator = optimizer(self.discriminator.parameters(), **optimizer_hyperparameters)
-        self.criterion = nn.BCEWithLogitsLoss()
-
-    def train_epoch (self, train_loader):
+        self.optimizer_generator = optimizer(chain(self.network.encoder.parameters(), self.network.decoder.parameters()), **optimizer_hyperparameters)
+        self.optimizer_discriminator = optimizer(self.network.discriminator.parameters(), **optimizer_hyperparameters)        
+        
+        
+    def forward_from_encoder(self, encoder_outputs):
+        x_real = encoder_outputs["x"]
+        z_real = encoder_outputs["z"]
+        model_outputs = encoder_outputs
+        
+        z_fake = Variable(torch.randn_like(z_real))
+        x_fake = self.network.decoder(z_fake)
+        
+        if self.training:
+            noise1 = Variable(torch.zeros_like(x_real.detach()).normal_(0, 0.1 * (1000 - self.n_epochs) / 1000))
+            noise2 = Variable(torch.zeros_like(x_fake.detach()).normal_(0, 0.1 * (1000 - self.n_epochs) / 1000))
+            x_real = x_real + noise1
+            x_fake = x_fake + noise2
+            
+        prob_pos = self.network.discriminator(x_real, z_real)
+        prob_neg = self.network.discriminator(x_fake, z_fake)
+        
+        model_outputs["prob_pos"] = prob_pos
+        model_outputs["prob_neg"] = prob_neg
+        
+        # we reconstruct images during validation for visual evaluations
+        if not self.training:
+            with torch.no_grad():
+                model_outputs["recon_x"] = self.network.decoder(z_real)
+        
+        return model_outputs
+        
+    
+    def forward(self, x):
+        if torch._C._get_tracing_state():
+            return self.forward_for_graph_tracing(x)
+        
+        x = self.push_variable_to_device(x)
+        encoder_outputs = self.network.encoder(x)
+        return self.forward_from_encoder(encoder_outputs)
+    
+    def forward_for_graph_tracing(self, x):
+        x = self.push_variable_to_device(x)
+        z, feature_map = self.network.encoder.forward_for_graph_tracing(x)
+        prob_pos = self.network.discriminator(x, z)
+        recon_x = self.network.decoder(z)
+        return prob_pos, recon_x
+    
+    
+    def calc_embedding(self, x):
+        ''' the function calc outputs a representation vector of size batch_size*n_latents'''
+        x = self.push_variable_to_device(x)
+        return self.network.encoder.calc_embedding(x)
+    
+    
+    def run_training (self, train_loader, n_epochs, valid_loader = None, logger=None):
+        """
+        logger: tensorboard X summary writer
+        """            
+        # Save the graph in the logger
+        if logger is not None:
+            dummy_input = torch.FloatTensor(1, self.config.network.parameters.n_channels, self.config.network.parameters.input_size[0], self.config.network.parameters.input_size[1]).uniform_(0,1)
+            dummy_input = self.push_variable_to_device(dummy_input)
+            self.eval()
+            with torch.no_grad():
+                logger.add_graph(self, dummy_input, verbose = False)
+            
+        if valid_loader is not None:
+            best_valid_loss = sys.float_info.max
+            do_validation = True
+        
+        for epoch in range(n_epochs):
+            t0 = time.time()
+            train_losses = self.train_epoch (train_loader, logger=logger)
+            t1 = time.time()
+            print("Epoch {}: {:.2f} secs".format(self.n_epochs, t1-t0))
+            
+            if logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
+                for k, v in train_losses.items():
+                    logger.add_scalars('loss/{}'.format(k), {'train': v}, self.n_epochs)
+                logger.add_text('time/train', 'Train Epoch {}: {:.3f} secs'.format(self.n_epochs, t1-t0), self.n_epochs)
+            
+            if self.n_epochs % self.config.checkpoint.save_model_every == 0:
+                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
+            
+            if do_validation:
+                t2 = time.time()
+                valid_losses = self.valid_epoch (valid_loader, logger=logger)
+                t3 = time.time()
+                if logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
+                    for k, v in valid_losses.items():
+                        logger.add_scalars('loss/{}'.format(k), {'valid': v}, self.n_epochs)
+                    logger.add_text('time/valid', 'Valid Epoch {}: {:.3f} secs'.format(self.n_epochs, t3-t2), self.n_epochs)
+                
+                valid_loss = valid_losses['total']
+                if valid_loss < best_valid_loss:
+                    best_valid_loss = valid_loss
+                    self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
+    
+    
+    def train_epoch (self, train_loader, logger=None):
         self.train()
         losses = {}
         for data in train_loader:
-            input_img = Variable(data['image'], requires_grad = True)    
-            
+            x =  Variable(data['obs'])
+            x = self.push_variable_to_device(x)
             # forward
-            # train discriminator first and save it
-            outputs = self.forward(input_img)
-            batch_losses = self.train_loss(outputs, data)
-            loss_discriminator = batch_losses['discriminator']
-            final_losses =  batch_losses
-            loss_generator = batch_losses['generator']
-            if loss_generator.data.item() < 3.5:
-                self.optimizer_discriminator.zero_grad()
-                loss_discriminator.backward()
-                self.optimizer_discriminator.step()
-            backup = copy.deepcopy(self.discriminator)
-            # finetune it on this data 10 times
-            for K in range(1):
-                outputs = self.forward(input_img)
-                batch_losses = self.train_loss(outputs, data)
-                loss_discriminator = batch_losses['discriminator']
-                self.optimizer_discriminator.zero_grad()
-                loss_discriminator.backward(retain_graph=True)
-                self.optimizer_discriminator.step()
-            # train generator with the finetuned discriminator
-            outputs = self.forward(input_img)
-            batch_losses = self.train_loss(outputs, data)
-            loss_generator = batch_losses['generator']
-            final_losses ['generator'] = loss_generator
+            model_outputs = self.forward(x)
+            loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
+            batch_losses = self.loss_f(loss_inputs)
+            # backward
+            loss_d = batch_losses['discriminator']
+            loss_g = batch_losses['generator']
+
+
+            self.optimizer_discriminator.zero_grad()
+            loss_d.backward(retain_graph=True)
+            self.optimizer_discriminator.step()
+
             self.optimizer_generator.zero_grad()
-            loss_generator.backward()
+            loss_g.backward()
             self.optimizer_generator.step()
             
-            # reput discriminator not finetuned
-            self.discriminator.load_state_dict(backup.state_dict())  
-            del backup
-#            outputs = self.forward(input_img)
-#            batch_losses = self.train_loss(outputs, data)
-#            
-#            # backward
-#            loss_discriminator = batch_losses['discriminator']
-#            loss_generator = batch_losses['generator']
-#            
-#            if loss_generator.data.item() < 3.5:
-#                self.optimizer_discriminator.zero_grad()
-#                loss_discriminator.backward(retain_graph=True)
-#                '''
-#                for name, param in self.discriminator.named_parameters():
-#                    if param.requires_grad:
-#                        print(name, '{:0.2f}'.format(param.grad.data.sum().item()))
-#                '''
-#                self.optimizer_discriminator.step()
-#                            
-#
-#            self.optimizer_generator.zero_grad()
-#            loss_generator.backward()
-#            '''
-#            for name, param in self.encoder.named_parameters():
-#                    if param.requires_grad:
-#                        print(name, '{:0.2f}'.format(param.grad.data.sum().item()))
-#            for name, param in self.decoder.named_parameters():
-#                    if param.requires_grad:
-#                        print(name, '{:0.2f}'.format(param.grad.data.sum().item()))
-#            #'''
-#            self.optimizer_generator.step()
-
             # save losses
-            for k, v in final_losses.items():
+            for k, v in batch_losses.items():
                 if k not in losses:
                     losses[k] = [v.data.item()]
                 else:
                     losses[k].append(v.data.item())
-                    
-            #break
-                    
+          
         for k, v in losses.items():
             losses [k] = np.mean (v)
         
-        self.n_iters += 1
-        self.n_epochs +=1
+        self.n_epochs += 1
+        
         return losses
     
     
-    def valid_epoch (self, valid_loader, save_image_in_folder=None):
+    def valid_epoch (self, valid_loader, logger=None):
         self.eval()
         losses = {}
+        
+        record_valid_images = False
+        record_embeddings = False
+        if logger is not None:
+            if self.n_epochs % self.config.logging.record_valid_images_every == 0:
+                record_valid_images = True
+            if self.n_epochs % self.config.logging.record_embeddings_every == 0:
+                record_embeddings = True
+                embedding_samples = []
+                embedding_metadata = []
+                embedding_images = []
+                
+            
         with torch.no_grad():
             for data in valid_loader:
-                input_img = Variable(data['image'])
+                x =  Variable(data['obs'])
+                x = self.push_variable_to_device(x)
                 # forward
-                outputs = self.forward(input_img)
-                batch_losses = self.valid_losses(outputs, data)
+                model_outputs = self.forward(x)
+                loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
+                batch_losses = self.loss_f(loss_inputs)
                 # save losses
                 for k, v in batch_losses.items():
                     if k not in losses:
                         losses[k] = [v.data.item()]
                     else:
                         losses[k].append(v.data.item())
-                #break
+                # record embeddings
+                if record_embeddings:
+                     embedding_samples.append(model_outputs["z"])
+                     embedding_metadata.append(data['label'])
+                     embedding_images.append(x)
                     
         for k, v in losses.items():
             losses [k] = np.mean (v)
             
-        # save images
-        if save_image_in_folder is not None and self.n_epochs % 10 == 0:
-            input_images = input_img.cpu().data
-            output_images = torch.sigmoid(outputs['recon_x']).cpu().data
-            n_images = data['image'].size()[0]
+        if record_valid_images:
+            input_images = x.cpu().data
+            output_images = model_outputs['recon_x'].cpu().data
+            n_images = data['obs'].size()[0]
             vizu_tensor_list = [None] * (2*n_images)
-            vizu_tensor_list[:n_images] = [input_images[n] for n in range(n_images)]
-            vizu_tensor_list[n_images:] = [output_images[n] for n in range(n_images)]
-            filename = os.path.join (save_image_in_folder, 'Epoch{0}.png'.format(self.n_epochs))
-            save_image(vizu_tensor_list, filename, nrow=n_images, padding=0)
+            vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]
+            vizu_tensor_list[1::2] = [output_images[n] for n in range(n_images)]
+            img = make_grid(vizu_tensor_list, nrow = 2, padding=0)
+            logger.add_image('reconstructions', img, self.n_epochs)
+                
+        if record_embeddings: 
+            embedding_samples = torch.cat(embedding_samples)
+            embedding_metadata = torch.cat(embedding_metadata)
+            embedding_images = torch.cat(embedding_images)
+            logger.add_embedding(
+                    embedding_samples,
+                    metadata=embedding_metadata,
+                    label_img=embedding_images,
+                    global_step=self.n_epochs)
 
         return losses
-
+    
+    def get_encoder(self):
+        return deepcopy(self.network.encoder)
+    
+    def get_decoder(self):
+        return deepcopy(self.network.decoder)
+    
+    def save_checkpoint(self, checkpoint_filepath):
+        # save current epoch weight file with optimizer if we want to relaunch training from that point
+        network = {
+        "epoch": self.n_epochs,
+        "type": self.__class__.__name__,
+        "config": self.config,
+        "network_state_dict": self.network.state_dict(),
+        "optimizer_discriminator_state_dict": self.optimizer_discriminator.state_dict(),
+        "optimizer_generator_state_dict": self.optimizer_generator.state_dict(),
+        }
+        
+        torch.save(network, checkpoint_filepath)

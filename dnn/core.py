@@ -172,21 +172,28 @@ class BaseDNN(nn.Module):
     def load_checkpoint(checkpoint_filepath, use_gpu = False, representation_model = None):
         if os.path.exists(checkpoint_filepath):
                 saved_model = torch.load (checkpoint_filepath, map_location='cpu')
+                model_type = saved_model['type']
                 # the saved dnn can belong to gr.dnn, gr.models, gr.evaluationmodels
-                if hasattr(gr.dnn, saved_model['type']):
-                    model_cls = getattr(gr.dnn, saved_model['type'])
+                if hasattr(gr.dnn, model_type):
+                    model_cls = getattr(gr.dnn, model_type)
                     model = model_cls (config = saved_model['config'])
-                elif hasattr(gr.models, saved_model['type']):
-                    model_cls = getattr(gr.models, saved_model['type'])
+                elif hasattr(gr.models, model_type):
+                    model_cls = getattr(gr.models, model_type)
                     model = model_cls (config = saved_model['config'])
-                elif hasattr(gr.evaluationmodels, saved_model['type']):
-                    model_cls = getattr(gr.evaluationmodels, saved_model['type'])
+                elif hasattr(gr.evaluationmodels, model_type):
+                    model_cls = getattr(gr.evaluationmodels, model_type)
                     model = model_cls (representation_model = representation_model, config = saved_model['config'])
                 else:
                     raise ValueError("the model cannot be load as it does not iherit from the BaseDNN class")
                 model.network.load_state_dict(saved_model['network_state_dict'])
-                model.optimizer.load_state_dict(saved_model['optimizer_state_dict'])
+                if model_type == "BiGANModel":
+                    model.optimizer_discriminator.load_state_dict(saved_model['optimizer_discriminator_state_dict'])
+                    model.optimizer_generator.load_state_dict(saved_model['optimizer_generator_state_dict'])
+                else:
+                    model.optimizer.load_state_dict(saved_model['optimizer_state_dict'])
                 model.set_device(use_gpu)
                 return model
+        else:
+            raise ValueError("checkpoint filepath does not exist")
             
     

@@ -47,8 +47,8 @@ class SVMClassifierModel(evaluationmodels.BaseClassifierModel):
         
         
     def forward(self, x):
-        mu = self.representation_encoder(x) [0]
-        predicted_y = torch.from_numpy(self.algorithm.predict_log_proba(mu.detach().numpy()))
+        encoder_outputs = self.representation_encoder(x)
+        predicted_y = torch.from_numpy(self.algorithm.predict_log_proba(encoder_outputs["z"].detach().numpy()))
         return predicted_y
     
     
@@ -86,10 +86,10 @@ class SVMClassifierModel(evaluationmodels.BaseClassifierModel):
             x =  batch_data['obs']
             y = batch_data['label'].squeeze()
             # forward
-            mu = self.representation_encoder(x) [0]
+            encoder_outputs = self.representation_encoder(x)
             start = batch_idx*train_loader.batch_size
             end = min((batch_idx+1)*train_loader.batch_size, n_train_samples)
-            z_train[start:end, :] = mu.detach().numpy()
+            z_train[start:end, :] = encoder_outputs["z"].detach().numpy()
             y_train[start:end] = y
         
         # fit the svm algorithm

@@ -87,9 +87,8 @@ class BaseClassifierModel(gr.BaseEvaluationModel):
                     y = self.push_variable_to_device(y)
                 # forward
                 batch_predictions = self.forward(x)
-                loss_inputs =  {"predicted_y": batch_predictions}
-                loss_targets = {"y": y}
-                batch_losses = self.loss_f(loss_inputs, loss_targets, reduction=False, logger=logger)
+                loss_inputs =  {"predicted_y": batch_predictions, "y": y}
+                batch_losses = self.loss_f(loss_inputs, reduction=False)
                 
                 # save results
                 if 'predicted_y' in predictions:

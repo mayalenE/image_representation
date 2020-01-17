@@ -147,12 +147,14 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
         
         # network parameters
         default_config.network = gr.Config()
-        default_config.network.name = "Burgess"
+        default_config.network.name = "Hjelm"
         default_config.network.parameters = gr.Config()
         default_config.network.parameters.n_channels = 1
         default_config.network.parameters.input_size = (64,64)
         default_config.network.parameters.n_latents = 10
         default_config.network.parameters.n_conv_layers = 4
+        default_config.network.parameters.feature_layer = 2
+        default_config.network.parameters.conditional_type = "deterministic"
         
         # initialization parameters
         default_config.network.initialization = gr.Config()
@@ -179,6 +181,8 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
     def __init__(self, config = None, **kwargs):
         super().__init__(config=config, **kwargs) # calls all constructors up to BaseDNN (MRO)
         
+        self.output_keys_list = self.network.encoder.output_keys_list + ["global_pos", "global_neg", "local_pos", "local_neg", "prior_pos", "prior_neg"]
+        
         
     def set_network(self, network_name, network_parameters):
         # defines the encoder
@@ -192,37 +196,53 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
         # add a prior discriminator
         self.network.prior_discrim = PriorDiscriminator(n_latents)
         
+    def forward_from_encoder(self, encoder_outputs):
+        z = encoder_outputs["z"]
+        feature_map = encoder_outputs["feature_map"]
         
-    def encode(self, x):
-        x = self.push_variable_to_device(x)
-        return self.network.encoder(x)
-    
-
-    def forward(self, x):
-        x = self.push_variable_to_device(x)
-        
-        batch_size = x.size(0)
+        batch_size = z.detach().size(0)
         indices = list(range(batch_size))
         neg_indices = []
         for i in range(batch_size):
             all_cur_neg_indices = indices[i+1:] + indices[:i]
             cur_neg_indices = random.sample(all_cur_neg_indices, self.config.num_negative)
             neg_indices.append(cur_neg_indices)
-            
-        z, feature_map = self.encode(x)
+        
         feature_map_prime = feature_map[neg_indices, ...]   # Shape is [batch_size, batch_size-1, C, H, W]
         
-        # global
-        global_pos = self.network.global_discrim(z, feature_map)
-        global_neg = torch.mean(torch.stack([self.network.global_discrim(z, feature_map_prime[:,i]) for i in range(self.config.num_negative)]))
-        # local
-        local_pos = self.network.local_discrim(z, feature_map)
-        local_neg = torch.mean(torch.stack([self.network.local_discrim(z, feature_map_prime[:,i]) for i in range(self.config.num_negative)]))
-        # prior
+        # outputs
+        model_outputs = dict()
+        model_outputs = encoder_outputs
+        ## global
+        model_outputs['global_pos'] = self.network.global_discrim(z, feature_map)
+        model_outputs['global_neg'] = torch.stack([self.network.global_discrim(z, feature_map_prime[:,i]) for i in range(self.config.num_negative)]).mean(dim=0)
+        ## local
+        model_outputs['local_pos'] = self.network.local_discrim(z, feature_map)
+        model_outputs['local_neg'] = torch.stack([self.network.local_discrim(z, feature_map_prime[:,i]) for i in range(self.config.num_negative)]).mean(dim=0)
+        ## prior
         prior_sample = torch.rand_like(z) # uniform prior on [0,1]
-        prior_pos = self.network.prior_discrim(prior_sample)
-        prior_neg = self.network.prior_discrim(torch.sigmoid(z))
-        return z, feature_map, global_pos, global_neg, local_pos, local_neg, prior_pos, prior_neg 
+        model_outputs['prior_pos'] = self.network.prior_discrim(prior_sample)
+        model_outputs['prior_neg'] = self.network.prior_discrim(torch.sigmoid(z))
+        
+        return model_outputs
+
+    def forward(self, x):
+        if torch._C._get_tracing_state():
+            return self.forward_for_graph_tracing(x)
+            
+        x = self.push_variable_to_device(x)
+        encoder_outputs = self.network.encoder(x)
+        return self.forward_from_encoder(encoder_outputs)
+   
+    
+    def forward_for_graph_tracing(self, x):
+        x = self.push_variable_to_device(x)
+        z, feature_map = self.network.encoder.forward_for_graph_tracing(x)
+        global_pred = self.network.global_discrim(z, feature_map)
+        local_pred = self.network.local_discrim(z, feature_map)
+        prior_pred = self.network.prior_discrim(torch.sigmoid(z))
+        return global_pred, local_pred, prior_pred
+    
     
     def calc_embedding(self, x):
         ''' the function calc outputs a representation vector of size batch_size*n_latents'''
@@ -238,8 +258,9 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
         if logger is not None:
             dummy_input = torch.FloatTensor(self.config.num_negative+1, self.config.network.parameters.n_channels, self.config.network.parameters.input_size[0], self.config.network.parameters.input_size[1]).uniform_(0,1)
             dummy_input = self.push_variable_to_device(dummy_input)
-            #TODO: debug graph
-            #logger.add_graph(self, dummy_input, verbose = False)
+            self.eval()
+            with torch.no_grad():
+                logger.add_graph(self, dummy_input, verbose = False)
             
         if valid_loader is not None:
             best_valid_loss = sys.float_info.max
@@ -280,10 +301,9 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
             x =  Variable(data['obs'])
             x = self.push_variable_to_device(x)
             # forward
-            z, feature_map, global_pos, global_neg, local_pos, local_neg, prior_pos, prior_neg = self.forward(x)
-            loss_inputs = {'global_neg': global_neg, 'local_neg': local_neg, 'prior_neg': prior_neg}
-            loss_targets = {'global_pos': global_pos, 'local_pos': local_pos, 'prior_pos': prior_pos}
-            batch_losses = self.loss_f(loss_inputs, loss_targets)
+            model_outputs = self.forward(x)
+            loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
+            batch_losses = self.loss_f(loss_inputs)
             # backward
             loss = batch_losses['total']
             self.optimizer.zero_grad()
@@ -322,10 +342,9 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
                 x =  Variable(data['obs'])
                 x = self.push_variable_to_device(x)
                 # forward
-                z, feature_map, global_pos, global_neg, local_pos, local_neg, prior_pos, prior_neg = self.forward(x)
-                loss_inputs = {'global_neg': global_neg, 'local_neg': local_neg, 'prior_neg': prior_neg}
-                loss_targets = {'global_pos': global_pos, 'local_pos': local_pos, 'prior_pos': prior_pos}
-                batch_losses = self.loss_f(loss_inputs, loss_targets)
+                model_outputs = self.forward(x)
+                loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
+                batch_losses = self.loss_f(loss_inputs)
                 # save losses
                 for k, v in batch_losses.items():
                     if k not in losses:
@@ -334,7 +353,7 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
                         losses[k].append(v.data.item())
                 # record embeddings
                 if record_embeddings:
-                     embedding_samples.append(z)
+                     embedding_samples.append(model_outputs["z"])
                      embedding_metadata.append(data['label'])
                      embedding_images.append(x)
                     

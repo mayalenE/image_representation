@@ -2,7 +2,7 @@ from copy import deepcopy
 import goalrepresent as gr
 from goalrepresent import dnn, models
 from goalrepresent.dnn.losses.losses import BaseLoss
-from goalrepresent.dnn.networks import encoders, decoders
+from goalrepresent.dnn.networks import encoders, decoders, discriminators
 from goalrepresent.helper.datahelper import tensor2string
 import math
 import numpy as np
@@ -32,6 +32,8 @@ class InnerNode(nn.Module):
         default_config.network.parameters.input_size = (64,64)
         default_config.network.parameters.n_latents = 10
         default_config.network.parameters.n_conv_layers = 4
+        default_config.network.parameters.feature_layer = 2
+        default_config.network.parameters.conditional_type = "gaussian"
         
         # initialization parameters
         default_config.network.initialization = gr.Config()
@@ -41,13 +43,16 @@ class InnerNode(nn.Module):
         return default_config
     
     
-    def __init__(self, depth, config = None, **kwargs):
+    def __init__(self, depth, lf_layers = None, config = None, **kwargs):
         super().__init__()
         self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
         self.depth = depth
         self.leaf = False
         
         self.set_network(self.config.network.name, self.config.network.parameters)
+        
+        if lf_layers is not None:
+            self.network.encoder.lf = lf_layers
         
         
     def set_network(self, network_name, network_parameters):
@@ -66,15 +71,19 @@ class InnerNode(nn.Module):
         
         
     def forward(self, x):
-        mu, logvar = self.network.encoder(x)
-        if self.training:
-            std = logvar.mul(0.5).exp_()
-            eps = torch.randn_like(std)
-            z = eps.mul(std).add_(mu)
-        else:
-            z = mu
+        if torch._C._get_tracing_state():
+            return self.forward_for_graph_tracing(x)
+        inner_outputs = dict()
+        encoder_outputs = self.network.encoder(x)
+        inner_outputs = encoder_outputs
+        prob_right = torch.sigmoid(self.network.beta*self.network.fc(encoder_outputs["z"]))
+        inner_outputs['prob_right'] = prob_right
+        return inner_outputs
+    
+    def forward_for_graph_tracing(self, x):
+        z, feature_map = self.network.encoder(x)
         prob_right = torch.sigmoid(self.network.beta*self.network.fc(z))
-        return mu, logvar, z, prob_right
+        return z, prob_right
     
     
     def get_child_node(self, path):
@@ -86,66 +95,98 @@ class InnerNode(nn.Module):
                 node = node.right
         
         return node
-   
-
 
 class LeafNode(nn.Module):
     """
-    nn module with network + loss which is a copy of an existing model's network and loss
+    Leaf Node base class
     """
-    @staticmethod
-    def default_config():
-        default_config = gr.Config()
-        
-        # network and loss are taken from an existing model (VAE by default)
-        default_config.model = gr.Config()
-        default_config.model.name = "VAE"
-        default_config.model.config = models.VAEModel.default_config()
-        
-        return default_config
-    
-    
-    def __init__(self, depth, config = None, **kwargs):
-        super().__init__()
-        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
-        self.depth = depth
-        self.leaf = True
-        
-        # we set the network and the loss by copying an existing model
-        model_class = gr.BaseModel.get_model(self.config.model.name)
-        model = model_class(config = self.config.model.config)
-        
-        self.network = nn.Module()
-        self.network.encoder = model.get_encoder()
-        
-        if self.config.model.name == "VAE":
-            decoder_class = decoders.get_decoder(model.config.network.name)
-            new_network_parameters = model.config.network.parameters
-            new_network_parameters.n_latents *= (self.depth + 1) 
-            self.network.decoder = decoder_class(**new_network_parameters)
-        else:
-            raise NotImplementedError
-        
-        self.loss_f = model.loss_f
-        
-        
-    def forward(self, x, prefix_z):
-        mu, logvar = self.network.encoder(x)
-        if self.training:
-            std = logvar.mul(0.5).exp_()
-            eps = torch.randn_like(std)
-            curr_z = eps.mul(std).add_(mu)
-        else:
-            curr_z = mu
+    def __init__(self, depth, lf_layers = None, **kwargs):
+            self.depth = depth
+            self.leaf = True
             
-        z = torch.cat([prefix_z, curr_z], dim = -1)
+            #share the local feature layers
+            self.network.encoder.lf = lf_layers
+                
+    def forward(self, x, prefix_z):
+        if torch._C._get_tracing_state():
+            return self.forward_for_graph_tracing(x, prefix_z)
+        encoder_outputs = self.network.encoder(x)
         
-        if self.config.model.name == "VAE":
-            recon_x = self.network.decoder(z)
-        return recon_x, mu, logvar, z
+        cur_z = encoder_outputs["z"]
+        z = torch.cat([prefix_z, cur_z], dim = -1)
+        encoder_outputs["z"] = z
+        
+        leaf_outputs = self.forward_from_encoder(encoder_outputs)
+        return leaf_outputs 
     
     
+class VAELeafNode(LeafNode, models.VAEModel):
+    def __init__(self, depth, lf_layers = None, config = None, **kwargs):
+        super(LeafNode, self).__init__(config = config, **kwargs)
+        super().__init__(depth, lf_layers = lf_layers, **kwargs)
+        # modify the decoder :
+        decoder_class = decoders.get_decoder(self.config.network.name)
+        new_network_parameters = self.config.network.parameters
+        new_network_parameters.n_latents *= (self.depth + 1) 
+        self.network.decoder = decoder_class(**new_network_parameters)
+        
+        # update config
+        self.config.network.parameters = gr.config.update_config(new_network_parameters, self.config.network.parameters)
+            
+    def forward_for_graph_tracing(self, x, prefix_z):
+        z, feature_map = self.network.encoder.forward_for_graph_tracing(x)
+        z = torch.cat([prefix_z, z], dim = -1)
+        recon_x = self.network.decoder(z)
+        return recon_x
+            
     
+class DIMLeafNode(LeafNode, models.DIMModel):
+    def __init__(self, depth, lf_layers = None, config = None, **kwargs):
+        super(LeafNode, self).__init__(config = config, **kwargs)
+        super().__init__(depth, lf_layers = lf_layers, **kwargs)
+        # modify the discriminators:
+        new_network_parameters = self.config.network.parameters
+        new_network_parameters.n_latents *= (self.depth + 1) 
+        self.network.global_discrim = models.dim.GlobalDiscriminator(new_network_parameters.n_latents, self.network.encoder.local_feature_shape)
+        self.network.local_discrim = models.dim.LocalEncodeAndDotDiscriminator(new_network_parameters.n_latents, self.network.encoder.local_feature_shape)
+        self.network.prior_discrim = models.dim.PriorDiscriminator(new_network_parameters.n_latents)
+        
+        # update config
+        self.config.network.parameters = gr.config.update_config(new_network_parameters, self.config.network.parameters)
+
+    def forward_for_graph_tracing(self, x, prefix_z):
+        z, feature_map = self.network.encoder.forward_for_graph_tracing(x)
+        z = torch.cat([prefix_z, z], dim = -1)
+        global_pred = self.network.global_discrim(z, feature_map)
+        local_pred = self.network.local_discrim(z, feature_map)
+        prior_pred = self.network.prior_discrim(torch.sigmoid(z))
+        return global_pred, local_pred, prior_pred
+    
+    
+class BiGANLeafNode(LeafNode, models.BiGANModel):
+    def __init__(self, depth, lf_layers = None, config = None, **kwargs):
+        super(LeafNode, self).__init__(config = config, **kwargs)
+        super().__init__(depth, lf_layers = lf_layers, **kwargs)
+        # modify the decoder and discriminator:
+        decoder_class = decoders.get_decoder(self.config.network.name)
+        discriminator_class = discriminators.get_discriminator(self.config.network.name)
+        new_network_parameters = self.config.network.parameters
+        new_network_parameters.n_latents *= (self.depth + 1) 
+        self.network.decoder = decoder_class(**new_network_parameters)
+        self.network.discriminator = discriminator_class(**new_network_parameters)
+        
+        # update config
+        self.config.network.parameters = gr.config.update_config(new_network_parameters, self.config.network.parameters)
+
+    def forward_for_graph_tracing(self, x, prefix_z):
+        x = self.push_variable_to_device(x)
+        z, feature_map = self.network.encoder.forward_for_graph_tracing(x)
+        z = torch.cat([prefix_z, z], dim = -1)
+        prob_pos = self.network.discriminator(x, z)
+        recon_x = self.network.decoder(z)
+        return prob_pos, recon_x
+            
+            
 
 class HierarchicalTreeModel(dnn.BaseDNN, gr.BaseModel):
     """
@@ -159,7 +200,8 @@ class HierarchicalTreeModel(dnn.BaseDNN, gr.BaseModel):
         default_config.inner_node = InnerNode.default_config()
         
         # leaf node config
-        default_config.leaf_node = LeafNode.default_config()
+        default_config.leaf_node_classname = "VAE"
+        default_config.leaf_node = eval("gr.models.{}Model.default_config()".format(default_config.leaf_node_classname))
         
         # tree config
         default_config.tree = gr.Config()
@@ -180,27 +222,35 @@ class HierarchicalTreeModel(dnn.BaseDNN, gr.BaseModel):
         
     
     def __init__(self, config = None, **kwargs):
+        
+        self.LeafNodeClass = eval("{}LeafNode".format(config.leaf_node_classname))
+        
         super().__init__(config=config, **kwargs)
+        
         
     def set_network(self, network_name, network_parameters):
         depth = 0
-        self.network = InnerNode(depth, self.config.inner_node) #root node that links to child nodes
-        curr_depth_nodes = [self.network]
+        self.network = InnerNode(depth, config=self.config.inner_node) #root node that links to child nodes
+        lf_layers = self.network.network.encoder.lf # we gonna share the local feature layers between all rencoder
+        
+        cur_depth_nodes = [self.network]
         while depth < self.config.tree.max_depth - 1:
             depth += 1
             next_depth_nodes = []
-            for node in curr_depth_nodes:
-                node.left = InnerNode(depth, self.config.inner_node)
+            for node in cur_depth_nodes:
+                node.left = InnerNode(depth, lf_layers=lf_layers, config=self.config.inner_node)
                 next_depth_nodes.append(node.left)
-                node.right = InnerNode(depth, self.config.inner_node)
+                node.right = InnerNode(depth, lf_layers=lf_layers, config=self.config.inner_node)
                 next_depth_nodes.append(node.right)
             
-            curr_depth_nodes = next_depth_nodes
+            cur_depth_nodes = next_depth_nodes
 
         else :
-            for node in curr_depth_nodes:
-                node.left = LeafNode(depth+1, self.config.leaf_node)
-                node.right = LeafNode(depth+1, self.config.leaf_node)
+            for node in cur_depth_nodes:
+                node.left = self.LeafNodeClass(depth+1, lf_layers=lf_layers, config=self.config.leaf_node)
+                node.right = self.LeafNodeClass(depth+1, lf_layers=lf_layers, config=self.config.leaf_node)
+        
+        self.output_keys_list = node.left.output_keys_list + ["path_taken"] #node.left is a leaf node
                 
                 
     def set_loss(self, loss_name, loss_parameters):
@@ -213,67 +263,266 @@ class HierarchicalTreeModel(dnn.BaseDNN, gr.BaseModel):
 
     
     def forward(self, x):
+        if torch._C._get_tracing_state():
+            return self.forward_for_graph_tracing(x)
+        
         x = self.push_variable_to_device(x)
-        batch_size = x.size(0)
-        path_taken =  torch.zeros((batch_size, self.config.tree.max_depth+1), dtype=int)
+        batch_size = x.detach().size(0)
         
-        path_prob = Variable(torch.ones(batch_size, 1))
-        path_prob = self.push_variable_to_device(path_prob)
-        n_latent = self.network.config.network.parameters.n_latents
-        n_tot_latent = int ((self.config.tree.max_depth + 1) * n_latent)
-        mu = Variable(torch.empty(batch_size, n_tot_latent))
-        mu = self.push_variable_to_device(mu)
-        logvar = Variable(torch.empty(batch_size, n_tot_latent))
-        logvar = self.push_variable_to_device(logvar)
-        z = Variable(torch.empty(batch_size, n_tot_latent))
-        z = self.push_variable_to_device(z)
-        recon_x = Variable(torch.empty(x.size()))
-        recon_x = self.push_variable_to_device(recon_x)
-
+        encoder_cond_type = self.network.network.encoder.conditional_type
+        
         depth = 0
-        
+        tree_path_taken = torch.zeros((batch_size, 1)).int() # all the paths start with "O"
+        tree_path_taken = self.push_variable_to_device(tree_path_taken)
         # inner nodes
         while depth < self.config.tree.max_depth:
-            
-            pathes = torch.unique(path_taken[:, :depth+1], dim=0)
+            z = None
+            x_ids = []
+            pathes = torch.unique(tree_path_taken[:, :depth+1], dim=0)
             for path in pathes:
-                curr_node = self.network.get_child_node(path)
-                curr_node_x_ids = [i for i, x_path in enumerate(path_taken[:, :depth+1]) if torch.all(torch.eq(x_path, path))]
-                curr_mu, curr_logvar, curr_z, curr_prob_right = curr_node.forward(x[curr_node_x_ids]) #probability of selecting right child node
+                # go to node
+                cur_node = self.network.get_child_node(path)
+                cur_node_x_ids = [i for i, x_path in enumerate(tree_path_taken[:, :depth+1]) if torch.all(torch.eq(x_path, path))]
+                
+                # forward
+                # if batch_size = 1 deactivate batchnorm and drop out
+                if len(cur_node_x_ids) == 1:
+                    self.eval()
+                    cur_inner_outputs = cur_node.forward(x[cur_node_x_ids])
+                    self.train()
+                else:
+                    cur_inner_outputs = cur_node.forward(x[cur_node_x_ids])
+                    
+                cur_prob_right = cur_inner_outputs["prob_right"]
                 # torch bernouilli distribution allow to do "hard" samples and still be differentiable
-                curr_go_right = Bernoulli(curr_prob_right).sample()
-                curr_prob = curr_go_right * curr_prob_right + (1.0 - curr_go_right) * (1.0 - curr_prob_right)
-                for i in range(len(curr_node_x_ids)):
-                    mu[curr_node_x_ids[i], depth*n_latent : (depth+1)*n_latent] = curr_mu[i]
-                    logvar[curr_node_x_ids[i], depth*n_latent : (depth+1)*n_latent] = curr_logvar[i]
-                    z[curr_node_x_ids[i], depth*n_latent : (depth+1)*n_latent] = curr_z[i]
-                    path_prob[curr_node_x_ids[i]] *= curr_prob[i]
-                    path_taken[curr_node_x_ids[i], depth+1] = int(curr_go_right[i])
+                cur_go_right = Bernoulli(cur_prob_right).sample()
+                #cur_prob = cur_go_right * cur_prob_right + (1.0 - cur_go_right) * (1.0 - cur_prob_right)
+                #path_prob *= cur_prob
 
+                if z is None:
+                    z = cur_inner_outputs["z"]
+                    if encoder_cond_type == "gaussian":
+                        mu = cur_inner_outputs["mu"]
+                        logvar = cur_inner_outputs["logvar"]
+                    #prob_right = cur_inner_outputs["prob_right"]
+                    path_taken = cur_go_right.int()
+                else:
+                    z = torch.cat([z, cur_inner_outputs["z"]])
+                    if encoder_cond_type == "gaussian":
+                        mu = torch.cat([mu, cur_inner_outputs["mu"]])
+                        logvar = torch.cat([logvar, cur_inner_outputs["logvar"]])
+                    #prob_right = torch.cat([prob_right, cur_inner_outputs["prob_right"]])
+                    path_taken = torch.cat([path_taken, cur_go_right.int()])
+
+                # save data points that went through that node
+                x_ids += cur_node_x_ids
+                
+            # reorder points
+            sort_order = tuple(np.argsort(x_ids))
+            z = z[sort_order, :]
+            if encoder_cond_type == "gaussian":
+                mu = mu[sort_order, :]
+                logvar = logvar[sort_order, :]
+            #prob_right = prob_right[sort_order, :]
+            path_taken = path_taken[sort_order, :]
+            # append to the tree results
+            if depth == 0:
+                prefix_z = z
+                if encoder_cond_type == "gaussian":
+                    tree_mu = mu
+                    tree_logvar = logvar
+                #tree_prob_right = prob_right
+                tree_path_taken = torch.cat([tree_path_taken, path_taken], dim=1)
+            else:
+                prefix_z = torch.cat([prefix_z, z], dim=1)
+                if encoder_cond_type == "gaussian":
+                    tree_mu = torch.cat([tree_mu, mu], dim=1)
+                    tree_logvar = torch.cat([tree_logvar, logvar], dim=1)
+                #tree_prob_right = torch.cat([tree_prob_right, prob_right], dim=1)
+                tree_path_taken = torch.cat([tree_path_taken, path_taken], dim=1)
+                
+            # go to next level of the tree
             depth += 1
         
         # leaf nodes
-        pathes = torch.unique(path_taken, dim=0)
+        z = None
+        x_ids = []
+        pathes = torch.unique(tree_path_taken, dim=0)
         for path in pathes:
-            curr_node = self.network.get_child_node(path)
-            curr_node_x_ids = [i for i, x_path in enumerate(path_taken) if torch.all(torch.eq(x_path, path))]
-            if curr_node.config.model.name == "VAE":
-                curr_recon_x, curr_mu, curr_logvar, curr_z = curr_node.forward(x[curr_node_x_ids], z[curr_node_x_ids, :-n_latent])
+            # go to leaf
+            cur_leaf = self.network.get_child_node(path)
+            cur_leaf_x_ids = [i for i, x_path in enumerate(tree_path_taken) if torch.all(torch.eq(x_path, path))]
+            
+            # forward for that leaf
+            if len(cur_leaf_x_ids) == 1:
+                self.eval()
+                cur_leaf_outputs = cur_leaf.forward(x[cur_leaf_x_ids], prefix_z[cur_leaf_x_ids])
+                self.train()
             else:
-                raise NotImplementedError
-            for i in range(len(curr_node_x_ids)):
-                mu[curr_node_x_ids[i], -n_latent:] = curr_mu[i]
-                logvar[curr_node_x_ids[i], -n_latent:] = curr_logvar[i]
-                z[curr_node_x_ids[i], :] = curr_z[i]
-                recon_x[curr_node_x_ids[i]] = curr_recon_x[i]
-                
-        return recon_x, mu, logvar, z, path_taken, path_prob
+                cur_leaf_outputs = cur_leaf.forward(x[cur_leaf_x_ids], prefix_z[cur_leaf_x_ids])
+            
+            if z is None:
+                z = cur_leaf_outputs["z"]
+                if encoder_cond_type == "gaussian":
+                    mu = cur_leaf_outputs["mu"]
+                    logvar = cur_leaf_outputs["logvar"]
+                if self.config.leaf_node_classname == "VAE":
+                    recon_x = cur_leaf_outputs["recon_x"]
+                elif self.config.leaf_node_classname == "DIM":
+                    global_pos = cur_leaf_outputs["global_pos"]
+                    global_neg = cur_leaf_outputs["global_neg"]
+                    local_pos = cur_leaf_outputs["local_pos"]
+                    local_neg = cur_leaf_outputs["local_neg"]
+                    prior_pos = cur_leaf_outputs["prior_pos"]
+                    prior_neg = cur_leaf_outputs["prior_neg"]
+                elif self.config.leaf_node_classname == "BiGAN":
+                    prob_pos = cur_leaf_outputs["prob_pos"]
+                    prob_neg = cur_leaf_outputs["prob_neg"]
+                    
+            else:
+                z = torch.cat([z, cur_leaf_outputs["z"]])
+                if encoder_cond_type == "gaussian":
+                    mu = torch.cat([mu, cur_leaf_outputs["mu"]])
+                    logvar = torch.cat([logvar, cur_leaf_outputs["logvar"]])
+                if self.config.leaf_node_classname == "VAE":
+                    recon_x = torch.cat([recon_x, cur_leaf_outputs["recon_x"]])
+                elif self.config.leaf_node_classname == "DIM":
+                    global_pos = torch.cat([global_pos, cur_leaf_outputs["global_pos"]])
+                    global_neg = torch.cat([global_neg, cur_leaf_outputs["global_neg"]])
+                    local_pos = torch.cat([local_pos, cur_leaf_outputs["local_pos"]])
+                    local_neg = torch.cat([local_neg, cur_leaf_outputs["local_neg"]])
+                    prior_pos = torch.cat([prior_pos, cur_leaf_outputs["prior_pos"]])
+                    prior_neg = torch.cat([prior_neg, cur_leaf_outputs["prior_neg"]])
+                elif self.config.leaf_node_classname == "BiGAN":
+                     prob_pos = torch.cat([prob_pos, cur_leaf_outputs["prob_pos"]])
+                     prob_neg = torch.cat([prob_neg, cur_leaf_outputs["prob_neg"]])
+            
+            # save data points that went through that node
+            x_ids += cur_leaf_x_ids
+        # reorder points
+        sort_order = tuple(np.argsort(x_ids))
+        z = z[sort_order, :]
+        if encoder_cond_type == "gaussian":
+            mu = mu[sort_order, :]
+            logvar = logvar[sort_order, :]
+        if self.config.leaf_node_classname == "VAE":
+            recon_x = recon_x[sort_order, :]
+        elif self.config.leaf_node_classname == "DIM":
+            global_pos = global_pos[sort_order, :]
+            global_neg = global_neg[sort_order, :]
+            local_pos = local_pos[sort_order, :]
+            local_neg = local_neg[sort_order, :]
+            prior_pos = prior_pos[sort_order, :]
+            prior_neg = prior_neg[sort_order, :]
+        elif self.config.leaf_node_classname == "BiGAN":
+            prob_pos = prob_pos[sort_order, :]
+            prob_neg = prob_neg[sort_order, :]
+            
+        # append to the tree results
+        tree_z = z # the concatenation already happens in the leaf encoders
+        if encoder_cond_type == "gaussian":
+            tree_mu = torch.cat([tree_mu, mu], dim=1)
+            tree_logvar = torch.cat([tree_logvar, logvar], dim=1)
+
+        model_outputs = {"x": x, "z": tree_z, "path_taken": tree_path_taken}
+        if encoder_cond_type == "gaussian":
+            model_outputs.update({"mu": tree_mu, "logvar": tree_logvar})
+        if self.config.leaf_node_classname == "VAE":
+            model_outputs.update({"recon_x": recon_x})
+        elif self.config.leaf_node_classname == "DIM":
+            model_outputs.update({"global_pos": global_pos, "global_neg": global_neg, "local_pos": local_pos, "local_neg": local_neg, "prior_pos": prior_pos, "prior_neg": prior_neg})
+        elif self.config.leaf_node_classname == "BiGAN":
+            model_outputs.update({"prob_pos": prob_pos, "prob_neg": prob_neg})
+       
+        return model_outputs
+        
     
+    def forward_for_graph_tracing(self, x):
+        x = self.push_variable_to_device(x)
+        batch_size = x.detach().size(0)
+        depth = 0
+        tree_path_taken = torch.zeros((batch_size, 1)).int() # all the paths start with "O"
+        tree_path_taken = self.push_variable_to_device(tree_path_taken)
+        # inner nodes
+        while depth < self.config.tree.max_depth:
+            path_taken = None
+            x_ids = []
+            pathes = torch.unique(tree_path_taken[:, :depth+1], dim=0)
+            for path in pathes:
+                cur_node = self.network.get_child_node(path)
+                cur_node_x_ids = [i for i, x_path in enumerate(tree_path_taken[:, :depth+1]) if torch.all(torch.eq(x_path, path))]
+                cur_z, cur_prob_right = cur_node.forward_for_graph_tracing(x[cur_node_x_ids])
+                cur_go_right = cur_prob_right > 0.5
+                if path_taken is None:
+                    z = cur_z
+                    path_taken = cur_go_right.int()
+                else:
+                    z = torch.cat([z, cur_z])
+                    path_taken = torch.cat([path_taken, cur_go_right.int()])
+    
+                # save data points that went through that node
+                x_ids += cur_node_x_ids
+                
+            # reorder points
+            sort_order = tuple(np.argsort(x_ids))
+            path_taken = path_taken[sort_order, :]
+            # append to the tree results
+            tree_path_taken = torch.cat([tree_path_taken, path_taken], dim=1)
+            if depth == 0:
+                tree_z = z
+            else:
+                tree_z = torch.cat([tree_z, z], dim=1)
+            # go to next level of the tree
+            depth += 1
+        
+        # leaf nodes
+        leaf_output = None
+        pathes = torch.unique(tree_path_taken, dim=0)
+        for path in pathes:
+            # go to leaf
+            cur_leaf = self.network.get_child_node(path)
+            cur_leaf_x_ids = [i for i, x_path in enumerate(tree_path_taken) if torch.all(torch.eq(x_path, path))]
+            if self.config.leaf_node_classname == "VAE":
+                cur_recon_x = cur_leaf.forward_for_graph_tracing(x[cur_leaf_x_ids], tree_z[cur_leaf_x_ids])
+                if leaf_output is None:
+                    recon_x = cur_recon_x
+                    leaf_output = True
+                else:
+                    recon_x = torch.cat([recon_x, cur_recon_x])
+            elif self.config.leaf_node_classname == "DIM":
+                cur_global_pred, cur_local_pred, cur_prior_pred = cur_leaf.forward_for_graph_tracing(x[cur_leaf_x_ids], tree_z[cur_leaf_x_ids])
+                if leaf_output is None:
+                    global_pred = cur_global_pred
+                    local_pred = cur_local_pred
+                    prior_pred = cur_prior_pred
+                    leaf_output = True
+                else:
+                    global_pred = torch.cat([global_pred, cur_global_pred])
+                    local_pred = torch.cat([local_pred, cur_local_pred])
+                    prior_pred = torch.cat([prior_pred, cur_prior_pred])
+            elif self.config.leaf_node_classname == "BiGAN":
+                cur_prob_pos, cur_recon_x = cur_leaf.forward_for_graph_tracing(x[cur_leaf_x_ids], tree_z[cur_leaf_x_ids])
+                if leaf_output is None:
+                    prob_pos = cur_prob_pos
+                    recon_x = cur_recon_x
+                    leaf_output = True
+                else:
+                    prob_pos = torch.cat([prob_pos, cur_prob_pos])
+                    recon_x = torch.cat([recon_x, cur_recon_x])
+                    
+        if self.config.leaf_node_classname == "VAE":
+            return recon_x
+        elif self.config.leaf_node_classname == "DIM":
+            return global_pred, local_pred, prior_pred
+        elif self.config.leaf_node_classname == "BiGAN":
+            return prob_pos, recon_x
+        
+        
     
     def calc_embedding(self, x):
         ''' the function calc outputs a representation vector of size batch_size*n_latents'''
-        recon_x, mu, logvar, z, path_taken, path_prob = self.forward(x)
-        return mu
+        encoder = self.get_encoder()
+        return encoder.calc_embedding(x)
     
     
     def run_training (self, train_loader, n_epochs, valid_loader = None, logger=None):
@@ -283,12 +532,11 @@ class HierarchicalTreeModel(dnn.BaseDNN, gr.BaseModel):
         # Save the graph in the logger
         if logger is not None:
             root_network_config = self.config.inner_node.network.parameters
-            dummy_input = torch.FloatTensor(10, root_network_config.n_channels, root_network_config.input_size[0], root_network_config.input_size[1]).uniform_(0,1)
+            dummy_input = torch.FloatTensor(4, root_network_config.n_channels, root_network_config.input_size[0], root_network_config.input_size[1]).uniform_(0,1)
             dummy_input = self.push_variable_to_device(dummy_input)
-            try:
-                logger.add_graph(self, dummy_input, verbose = False)
-            except:
-                pass
+            self.eval()
+            #with torch.no_grad():
+            #    logger.add_graph(self, dummy_input, verbose = False)
             
         if valid_loader is not None:
             best_valid_loss = sys.float_info.max
@@ -305,7 +553,7 @@ class HierarchicalTreeModel(dnn.BaseDNN, gr.BaseModel):
                 logger.add_text('time/train', 'Train Epoch {}: {:.3f} secs'.format(self.n_epochs, t1-t0), self.n_epochs)
             
             if self.n_epochs % self.config.checkpoint.save_model_every == 0:
-                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
+                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'curent_weight_model.pth'))
             
             if do_validation:
                 t2 = time.time()
@@ -326,15 +574,12 @@ class HierarchicalTreeModel(dnn.BaseDNN, gr.BaseModel):
         self.train()
         losses = {}
         for data in train_loader:
-            x =  Variable(data['obs'])
+            x =  data['obs']
             x = self.push_variable_to_device(x)
-            y = Variable(data['label']).squeeze()
-            y = self.push_variable_to_device(y)
             # forward
-            recon_x, mu, logvar, z, path_taken, path_prob = self.forward(x)
-            loss_inputs = {'recon_x': recon_x, 'mu': mu, 'logvar': logvar}
-            loss_targets = {'x': x}
-            batch_losses = self.loss_f(loss_inputs, loss_targets, path_taken, path_prob, logger=logger)
+            model_outputs = self.forward(x)
+            loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
+            batch_losses = self.loss_f(loss_inputs)
             # backward
             loss = batch_losses['total']
             self.optimizer.zero_grad()
@@ -343,9 +588,9 @@ class HierarchicalTreeModel(dnn.BaseDNN, gr.BaseModel):
             # save losses
             for k, v in batch_losses.items():
                 if k not in losses:
-                    losses[k] = [v.data.item()]
+                    losses[k] = [v.item()]
                 else:
-                    losses[k].append(v.data.item())
+                    losses[k].append(v.item())
           
         for k, v in losses.items():
             losses [k] = np.mean (v)
@@ -373,35 +618,34 @@ class HierarchicalTreeModel(dnn.BaseDNN, gr.BaseModel):
             
         with torch.no_grad():
             for data in valid_loader:
-                x =  Variable(data['obs'])
+                x =  data['obs']
                 x = self.push_variable_to_device(x)
-                y = Variable(data['label']).squeeze()
+                y = data['label'].squeeze()
                 y = self.push_variable_to_device(y)
                 # forward
-                recon_x, mu, logvar, z, path_taken, path_prob = self.forward(x)
-                loss_inputs = {'recon_x': recon_x, 'mu': mu, 'logvar': logvar}
-                loss_targets = {'x': x}
-                batch_losses = self.loss_f(loss_inputs, loss_targets, path_taken, path_prob, logger=logger)
+                model_outputs = self.forward(x)
+                loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
+                batch_losses = self.loss_f(loss_inputs)
                 # save losses
                 for k, v in batch_losses.items():
                     if k not in losses:
-                        losses[k] = [v.data.item()]
+                        losses[k] = [v.item()]
                     else:
-                        losses[k].append(v.data.item())
+                        losses[k].append(v.item())
                 # record embeddings
                 if record_embeddings:
-                     embedding_samples.append(mu)
+                     embedding_samples.append(model_outputs["z"])
                      embedding_metadata.append(data['label'])
                      embedding_images.append(x)
                     
         for k, v in losses.items():
             losses [k] = np.mean (v)
             
-        if record_valid_images:
-            input_images = x.cpu().data
-            output_images = recon_x.cpu().data
+        if record_valid_images and "recon_x" in model_outputs:
+            input_images = x.cpu()
+            output_images = model_outputs["recon_x"].cpu()
             if self.config.loss.parameters.reconstruction_dist == "bernouilli":
-                output_images = torch.sigmoid(recon_x).cpu().data
+                output_images = torch.sigmoid(model_outputs["recon_x"]).cpu()
             n_images = data['obs'].size()[0]
             vizu_tensor_list = [None] * (2*n_images)
             vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]
@@ -438,23 +682,29 @@ class HierarchicalTreeLoss(BaseLoss):
         for path in pathes:
             node = tree_network.get_child_node(path)
             self.path2loss[tensor2string(path)]= node.loss_f
+            
+        self.input_keys_list = node.loss_f.input_keys_list + ["path_taken"]
         
-    def __call__(self, loss_inputs, loss_targets, path_taken, path_prob, reduction = True, logger=None, **kwargs):
+    def __call__(self, loss_inputs, reduction = True, logger=None, **kwargs):
+        try:
+            path_taken = loss_inputs["path_taken"] # add path_prob
+        except:
+            raise ValueError("HierarchicalTreeLoss needs path_taken inputs")
+        
         pathes = torch.unique(path_taken, dim=0)
         
         losses = {}
         batch_size = list(loss_inputs.values())[0].size(0)
+        
         #TODO: here work with VAE because KLD (tot_mu) = sum(KLD(small mu)), change for rest
         for path in pathes:
             node_x_ids = [i for i, x_path in enumerate(path_taken) if torch.all(torch.eq(x_path, path))]
             leaf_loss_f = self.path2loss[tensor2string(path)]
             leaf_loss_inputs = {}
-            leaf_loss_targets = {}
             for k, v in loss_inputs.items():
                 leaf_loss_inputs[k] = v[node_x_ids]
-            for k, v in loss_targets.items():
-                leaf_loss_targets[k] = v[node_x_ids]
-            leaf_losses = leaf_loss_f(leaf_loss_inputs, leaf_loss_targets, reduction = False, logger=logger)
+
+            leaf_losses = leaf_loss_f(leaf_loss_inputs, reduction = False)
             for k in leaf_losses.keys():
                 #TODO: HARD OR SOFT
                 leaf_losses[k] = leaf_losses[k] # path_prob[node_x_ids].squeeze() # we weight the gradient by path_prob to lower the influence of unsure results
@@ -492,65 +742,142 @@ class HierarchicalTreeEncoder(encoders.BaseDNNEncoder):
                 remove_decoder(node.right)
         
         remove_decoder(self.network)
-
         
+    
     def forward(self, x):
-        x = self.push_variable_to_device(x)
-        batch_size = x.size(0)
-        path_taken =  torch.zeros((batch_size, self.max_depth+1), dtype=int)
+        if torch._C._get_tracing_state():
+            return self.forward_for_graph_tracing(x)
         
-        path_prob = Variable(torch.ones(batch_size, 1))
-        path_prob = self.push_variable_to_device(path_prob)
-        mu = Variable(torch.empty(batch_size, self.n_latents))
-        mu = self.push_variable_to_device(mu)
-        logvar = Variable(torch.empty(batch_size, self.n_latents))
-        logvar = self.push_variable_to_device(logvar)
-        z = Variable(torch.empty(batch_size, self.n_latents))
-        z = self.push_variable_to_device(z)
-        recon_x = Variable(torch.empty(x.size()))
-        recon_x = self.push_variable_to_device(recon_x)
-
+        x = self.push_variable_to_device(x)
+        batch_size = x.detach().size(0)
+        
+        encoder_cond_type = self.network.network.encoder.conditional_type
+        
         depth = 0
-        n_latent = int(self.n_latents / (self.max_depth+1))
+        tree_path_taken = torch.zeros((batch_size, 1)).int() # all the paths start with "O"
+        tree_path_taken = self.push_variable_to_device(tree_path_taken)
         # inner nodes
         while depth < self.max_depth:
-            
-            pathes = torch.unique(path_taken[:, :depth+1], dim=0)
+            z = None
+            x_ids = []
+            pathes = torch.unique(tree_path_taken[:, :depth+1], dim=0)
             for path in pathes:
-                curr_node = self.network.get_child_node(path)
-                curr_node_x_ids = [i for i, x_path in enumerate(path_taken[:, :depth+1]) if torch.all(torch.eq(x_path, path))]
-                curr_mu, curr_logvar, curr_z, curr_prob_right = curr_node.forward(x[curr_node_x_ids]) #probability of selecting right child node
+                # go to node
+                cur_node = self.network.get_child_node(path)
+                cur_node_x_ids = [i for i, x_path in enumerate(tree_path_taken[:, :depth+1]) if torch.all(torch.eq(x_path, path))]
+                
+                # forward
+                # if batch_size = 1 deactivate batchnorm and drop out
+                if len(cur_node_x_ids) == 1:
+                    self.eval()
+                    cur_inner_outputs = cur_node.forward(x[cur_node_x_ids])
+                    self.train()
+                else:
+                    cur_inner_outputs = cur_node.forward(x[cur_node_x_ids])
+                    
+                cur_prob_right = cur_inner_outputs["prob_right"]
                 # torch bernouilli distribution allow to do "hard" samples and still be differentiable
-                curr_go_right = Bernoulli(curr_prob_right).sample()
-                curr_prob = curr_go_right * curr_prob_right + (1.0 - curr_go_right) * (1.0 - curr_prob_right)
-                for i in range(len(curr_node_x_ids)):
-                    mu[curr_node_x_ids[i], depth*n_latent : (depth+1)*n_latent] = curr_mu[i]
-                    logvar[curr_node_x_ids[i], depth*n_latent : (depth+1)*n_latent] = curr_logvar[i]
-                    z[curr_node_x_ids[i], depth*n_latent : (depth+1)*n_latent] = curr_z[i]
-                    path_prob[curr_node_x_ids[i]] *= curr_prob[i]
-                    path_taken[curr_node_x_ids[i], depth+1] = int(curr_go_right[i])
+                cur_go_right = Bernoulli(cur_prob_right).sample()
+                #cur_prob = cur_go_right * cur_prob_right + (1.0 - cur_go_right) * (1.0 - cur_prob_right)
+                #path_prob *= cur_prob
 
+                if z is None:
+                    z = cur_inner_outputs["z"]
+                    if encoder_cond_type == "gaussian":
+                        mu = cur_inner_outputs["mu"]
+                        logvar = cur_inner_outputs["logvar"]
+                    #prob_right = cur_inner_outputs["prob_right"]
+                    path_taken = cur_go_right.int()
+                else:
+                    z = torch.cat([z, cur_inner_outputs["z"]])
+                    if encoder_cond_type == "gaussian":
+                        mu = torch.cat([mu, cur_inner_outputs["mu"]])
+                        logvar = torch.cat([logvar, cur_inner_outputs["logvar"]])
+                    #prob_right = torch.cat([prob_right, cur_inner_outputs["prob_right"]])
+                    path_taken = torch.cat([path_taken, cur_go_right.int()])
+
+                # save data points that went through that node
+                x_ids += cur_node_x_ids
+                
+            # reorder points
+            sort_order = tuple(np.argsort(x_ids))
+            z = z[sort_order, :]
+            if encoder_cond_type == "gaussian":
+                mu = mu[sort_order, :]
+                logvar = logvar[sort_order, :]
+            #prob_right = prob_right[sort_order, :]
+            path_taken = path_taken[sort_order, :]
+            # append to the tree results
+            if depth == 0:
+                prefix_z = z
+                if encoder_cond_type == "gaussian":
+                    tree_mu = mu
+                    tree_logvar = logvar
+                #tree_prob_right = prob_right
+                tree_path_taken = torch.cat([tree_path_taken, path_taken], dim=1)
+            else:
+                prefix_z = torch.cat([prefix_z, z], dim=1)
+                if encoder_cond_type == "gaussian":
+                    tree_mu = torch.cat([tree_mu, mu], dim=1)
+                    tree_logvar = torch.cat([tree_logvar, logvar], dim=1)
+                #tree_prob_right = torch.cat([tree_prob_right, prob_right], dim=1)
+                tree_path_taken = torch.cat([tree_path_taken, path_taken], dim=1)
+                
+            # go to next level of the tree
             depth += 1
         
         # leaf nodes
-        pathes = torch.unique(path_taken, dim=0)
+        z = None
+        x_ids = []
+        pathes = torch.unique(tree_path_taken, dim=0)
         for path in pathes:
-            curr_node = self.network.get_child_node(path)
-            curr_node_x_ids = [i for i, x_path in enumerate(path_taken) if torch.all(torch.eq(x_path, path))]
-            if curr_node.config.model.name == "VAE":
-                curr_recon_x, curr_mu, curr_logvar, curr_z = curr_node.forward(x[curr_node_x_ids], z[curr_node_x_ids, :-n_latent])
+            # go to leaf
+            cur_leaf = self.network.get_child_node(path)
+            cur_leaf_x_ids = [i for i, x_path in enumerate(tree_path_taken) if torch.all(torch.eq(x_path, path))]
+            
+            # forward for that leaf
+            if len(cur_leaf_x_ids) == 1:
+                self.eval()
+                cur_leaf_encoder_outputs = cur_leaf.network.encoder.forward(x[cur_leaf_x_ids])
+                self.train()
             else:
-                raise NotImplementedError
-            for i in range(len(curr_node_x_ids)):
-                mu[curr_node_x_ids[i], -n_latent:] = curr_mu[i]
-                logvar[curr_node_x_ids[i], -n_latent:] = curr_logvar[i]
-                z[curr_node_x_ids[i], :] = curr_z[i]
-                
-        return mu, logvar, z, path_taken, path_prob
+                cur_leaf_encoder_outputs = cur_leaf.network.encoder.forward(x[cur_leaf_x_ids])
+            
+            if z is None:
+                z = cur_leaf_encoder_outputs["z"]
+                if encoder_cond_type == "gaussian":
+                    mu = cur_leaf_encoder_outputs["mu"]
+                    logvar = cur_leaf_encoder_outputs["logvar"]       
+            else:
+                z = torch.cat([z, cur_leaf_encoder_outputs["z"]])
+                if encoder_cond_type == "gaussian":
+                    mu = torch.cat([mu, cur_leaf_encoder_outputs["mu"]])
+                    logvar = torch.cat([logvar, cur_leaf_encoder_outputs["logvar"]])
+            
+            # save data points that went through that node
+            x_ids += cur_leaf_x_ids
+        # reorder points
+        sort_order = tuple(np.argsort(x_ids))
+        z = z[sort_order, :]
+        if encoder_cond_type == "gaussian":
+            mu = mu[sort_order, :]
+            logvar = logvar[sort_order, :]
+            
+        # append to the tree results
+        tree_z = torch.cat([prefix_z, z], dim=1)
+        if encoder_cond_type == "gaussian":
+            tree_mu = torch.cat([tree_mu, mu], dim=1)
+            tree_logvar = torch.cat([tree_logvar, logvar], dim=1)
+
+        encoder_outputs = {"x": x, "z": tree_z, "path_taken": tree_path_taken}
+        if encoder_cond_type == "gaussian":
+            encoder_outputs.update({"mu": tree_mu, "logvar": tree_logvar})
+       
+        return encoder_outputs
     
     def calc_embedding(self, x):
-        mu, logvar, z, path_taken, path_prob = self.forward(x)
-        return mu
+        encoder_outputs = self.forward(x)
+        return encoder_outputs["z"]
     
     
 class HierarchicalTreeDecoder(decoders.BaseDNNDecoder):
@@ -579,20 +906,17 @@ class HierarchicalTreeDecoder(decoders.BaseDNNDecoder):
         image_size = (self.decoder_list[0].n_channels,
                       self.decoder_list[0].input_size[0],
                       self.decoder_list[0].input_size[1])
-        recon_x = Variable(torch.empty(batch_size, image_size[0], image_size[1], image_size[2]))
+        recon_x = torch.empty(batch_size, image_size[0], image_size[1], image_size[2])
+        recon_x = self.push_variable_to_device(recon_x)
         pathes = torch.unique(path_taken, dim=0)
         for path in pathes:
-            curr_decoder_idx = int (tensor2string(path), 2)  # the path is given in base 2 and we convert it to integer (respect the order of decoder list)
-            curr_decoder = self.decoder_list[curr_decoder_idx]
-            curr_decoder_z_ids = [i for i, z_path in enumerate(path_taken) if torch.all(torch.eq(z_path, path))]
-            curr_recon_x = curr_decoder.forward(z[curr_decoder_z_ids])
-            for i in range(len(curr_decoder_z_ids)):
-                recon_x[curr_decoder_z_ids[i]] = curr_recon_x[i]
+            cur_decoder_idx = int (tensor2string(path), 2)  # the path is given in base 2 and we convert it to integer (respect the order of decoder list)
+            cur_decoder = self.decoder_list[cur_decoder_idx]
+            cur_decoder_z_ids = [i for i, z_path in enumerate(path_taken) if torch.all(torch.eq(z_path, path))]
+            cur_recon_x = cur_decoder.forward(z[cur_decoder_z_ids])
+            for i in range(len(cur_decoder_z_ids)):
+                recon_x[cur_decoder_z_ids[i]] = cur_recon_x[i]
         return recon_x
-    
-    def calc_embedding(self, x):
-        mu, logvar, path = self.forward(x)
-        return mu
     
     
 def generate_binary_pathes(tree_depth):
