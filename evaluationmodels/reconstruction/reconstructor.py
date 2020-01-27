@@ -202,7 +202,7 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
                 # forward
                 model_outputs = self.forward(x)
                 loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
-                batch_losses = self.loss_f(loss_inputs)
+                batch_losses = self.loss_f(loss_inputs, reduction=False)
                 
                 # save results
                 recon_x = model_outputs["recon_x"]
