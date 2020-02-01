@@ -537,7 +537,8 @@ class HierarchicalTreeModel(dnn.BaseDNN, gr.BaseModel):
             self.eval()
             #with torch.no_grad():
             #    logger.add_graph(self, dummy_input, verbose = False)
-            
+        
+        do_validation = False
         if valid_loader is not None:
             best_valid_loss = sys.float_info.max
             do_validation = True

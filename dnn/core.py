@@ -191,6 +191,7 @@ class BaseDNN(nn.Module):
                     model.optimizer_generator.load_state_dict(saved_model['optimizer_generator_state_dict'])
                 else:
                     model.optimizer.load_state_dict(saved_model['optimizer_state_dict'])
+                model.n_epochs = saved_model["epoch"]
                 model.set_device(use_gpu)
                 return model
         else:

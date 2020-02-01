@@ -1,7 +1,7 @@
 import math
 import os
 import torch
-from torch.nn.init import kaiming_normal_, kaiming_uniform_, xavier_normal_, xavier_uniform_
+from torch.nn.init import kaiming_normal_, kaiming_uniform_, xavier_normal_, xavier_uniform_, uniform_
         
 
 def get_initialization(initialization_name):
@@ -18,6 +18,17 @@ def weights_init_pretrain(network, checkpoint_filepath):
     else:
         print("WARNING: the checkpoint filepath for a pretrain initialization has not been found, skipping the initialization")
     return network
+
+def weights_init_uniform(m, a=0., b=0.01):
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1:
+        uniform_(m.weight.data, a, b)
+        if m.bias is not None:
+            m.bias.data.fill_(0)
+    elif classname.find('Linear') != -1:
+        uniform_(m.weight.data, a, b)
+        if m.bias is not None:
+            m.bias.data.fill_(0)
 
 
 def weights_init_pytorch(m):

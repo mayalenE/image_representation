@@ -76,7 +76,9 @@ class SingleModelRepresentation(gr.BaseRepresentation):
             best_model_path = os.path.join(checkpoint_folder, "best_weight_model.pth")
             if os.path.exists(best_model_path):
                 best_model = gr.dnn.BaseDNN.load_checkpoint(best_model_path, use_gpu = self.model.config.device.use_gpu)
+                cur_n_epochs = self.model.n_epochs
                 self.model = best_model
+                self.model.n_epochs = cur_n_epochs
         
         # update config
         self.config.training = gr.config.update_config(training_config, self.config.training)        
@@ -146,14 +148,6 @@ class SingleModelRepresentation(gr.BaseRepresentation):
         self.config.testing.evaluationmodels[output_name] = gr.config.update_config(evalmodel_config,old_evalmodel_config)
         
         return output_name, evalmodel_test_data
-        
-    def preprocess(self, observations):
-        x = observations #N*C*H*W 
-        return x
-        
-    def calc(self, x):
-        z = self.model.calc_embedding(x)
-        return z
         
 
 

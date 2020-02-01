@@ -2,8 +2,11 @@
 script containing all the core Abstract Class with the skeletton to follow
 """
 from abc import ABCMeta, abstractmethod
+from copy import deepcopy
 import goalrepresent as gr
 from goalrepresent.helper import datahelper, randomhelper
+import numpy as np
+import torch
 
 class BaseEncoder (metaclass=ABCMeta):
     """
@@ -130,6 +133,10 @@ class BaseRepresentation(metaclass=ABCMeta):
         # seed 
         default_config.seed = 0
         
+        #preprocess function
+        default_config.preprocess_observation = gr.Config()
+        default_config.preprocess_observation.type = None # either: None, 'function'
+        
         return default_config
 
     def __init__(self, config=None, **kwargs):
@@ -137,6 +144,10 @@ class BaseRepresentation(metaclass=ABCMeta):
         
         # set seed
         randomhelper.set_seed(self.config.seed)
+        
+        # set preprocess function
+        if self.config.preprocess_observation.type == 'function':
+            self.preprocess = deepcopy(self.config.preprocess_observation.function)
         
     def save(self, filepath = 'representation.pickle'):
         datahelper.save(self, filepath)
@@ -154,11 +165,39 @@ class BaseRepresentation(metaclass=ABCMeta):
                     representation.model.set_device(use_gpu=True)
         
         return representation
-
-    @abstractmethod
-    def preprocess(self, observations):
-        pass
+            
+    def preprocess(self, observation): 
+        return observation
     
-    @abstractmethod    
-    def calc(self, x):
-        pass
+    def calc(self, observations, **kwargs):
+        last_state = observations['states'][-1]
+        last_state = torch.from_numpy(last_state).float()
+        x = self.preprocess(last_state.unsqueeze(0)).unsqueeze(0)
+        z = self.model.calc_embedding(x, **kwargs)
+        representation = z.squeeze(0).cpu().numpy()
+        return representation
+
+    def calc_distance(self, z1, z2, goal_space_extent=None):
+        """
+        Standard Euclidean distance between representation vectors.
+        """
+        # normalize representations
+        if goal_space_extent is not None:
+            z1 = z1 - goal_space_extent[:,0]
+            z1 = z1 / (goal_space_extent[:,1] - goal_space_extent[:,0])
+            
+            z2 = z2 - goal_space_extent[:,0]
+            z2 = z2 / (goal_space_extent[:,1] - goal_space_extent[:,0])
+            
+        if len(z1) == 0 or len(z2) == 0:
+            return np.array([])
+
+        diff = np.array(z1) - np.array(z2)
+
+        if np.ndim(diff) == 1:
+            dist = np.linalg.norm(diff)
+        else:
+            dist = np.linalg.norm(diff, axis=1)
+
+        return dist
+

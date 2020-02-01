@@ -6,4 +6,5 @@ from goalrepresent.models.vaes import VAEModel, BetaVAEModel, AnnealedVAEModel, 
 from goalrepresent.models.gans import BiGANModel
 from goalrepresent.models.softdecisiontree import SoftDecisionTreeModel 
 from goalrepresent.models.hierarchicaltree import HierarchicalTreeModel 
+from goalrepresent.models.progressivetree import ProgressiveTreeModel 
 

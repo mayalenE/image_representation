@@ -48,7 +48,11 @@ class SVMClassifierModel(evaluationmodels.BaseClassifierModel):
         
     def forward(self, x):
         encoder_outputs = self.representation_encoder(x)
-        predicted_y = torch.from_numpy(self.algorithm.predict_log_proba(encoder_outputs["z"].detach().numpy()))
+        z_normalized = (encoder_outputs["z"] - self.feature_range[0]) 
+        scale = self.feature_range[1] - self.feature_range[0]
+        scale[np.where(scale==0)] = 1.0 # trick when some some latents are the same for every point (no scale and divide by 1)
+        z_normalized = z_normalized / scale
+        predicted_y = torch.from_numpy(self.algorithm.predict_log_proba(z_normalized.detach().numpy()))
         return predicted_y
     
     
