@@ -213,6 +213,16 @@ class HjelmEncoder (BaseDNNEncoder):
             self.add_module("gen", nn.Linear(hidden_dim, self.n_latents))
         else:
             raise ValueError("The conditional type must be either gaussian or deterministic" )
+            
+    def forward(self, x):
+        # batch norm cannot deal with batch_size 1 in train mode
+        if self.training and x.size(0) == 1:
+            self.eval()
+            encoder_outputs = super().forward(x)
+            self.train()
+        else:
+            encoder_outputs = super().forward(x)
+        return encoder_outputs
     
     
 class DumoulinEncoder(BaseDNNEncoder):
@@ -309,3 +319,13 @@ class DumoulinEncoder(BaseDNNEncoder):
                             nn.LeakyReLU(inplace=True),
                             nn.Conv2d(hidden_channels, self.n_latents, kernel_size=1, stride=1)
                             ))
+            
+    def forward(self, x):
+        # batch norm cannot deal with batch_size 1 in train mode
+        if self.training and x.size(0) == 1:
+            self.eval()
+            encoder_outputs = super().forward(x)
+            self.train()
+        else:
+            encoder_outputs = super().forward(x)
+        return encoder_outputs

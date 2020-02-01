@@ -121,7 +121,14 @@ class HjelmDecoder (BaseDNNDecoder):
         self.decoder.add_module("convT_{}".format(self.n_conv_layers-1), nn.ConvTranspose2d(hidden_channels, self.n_channels, kernels_size[0], strides[0], pads[0], output_padding=output_pads[self.n_conv_layers-1]))
     
     def forward(self, z):
-        return self.decoder(z)
+        # batch norm cannot deal with batch_size 1 in train mode
+        if self.training and z.size(0) == 1:
+            self.eval()
+            decoder_output = self.decoder(z)
+            self.train()
+        else:
+            decoder_output = self.decoder(z)
+        return decoder_output
     
     
 class DumoulinDecoder (BaseDNNDecoder):
@@ -178,4 +185,12 @@ class DumoulinDecoder (BaseDNNDecoder):
     def forward(self, z):
         if z.dim() == 2: #B*n_latents -> B*n_latents*1*1 
             z = z.unsqueeze(dim=-1).unsqueeze(dim=-1) 
-        return torch.sigmoid(self.decoder(z))
+        # batch norm cannot deal with batch_size 1 in train mode
+        if self.training and z.size(0) == 1:
+            self.eval()
+            decoder_output = self.decoder(z)
+            self.train()
+        else:
+            decoder_output = self.decoder(z)
+        return torch.sigmoid(decoder_output)
+            

@@ -285,13 +285,7 @@ class HierarchicalTreeModel(dnn.BaseDNN, gr.BaseModel):
                 cur_node_x_ids = [i for i, x_path in enumerate(tree_path_taken[:, :depth+1]) if torch.all(torch.eq(x_path, path))]
                 
                 # forward
-                # if batch_size = 1 deactivate batchnorm and drop out
-                if len(cur_node_x_ids) == 1:
-                    self.eval()
-                    cur_inner_outputs = cur_node.forward(x[cur_node_x_ids])
-                    self.train()
-                else:
-                    cur_inner_outputs = cur_node.forward(x[cur_node_x_ids])
+                cur_inner_outputs = cur_node.forward(x[cur_node_x_ids])
                     
                 cur_prob_right = cur_inner_outputs["prob_right"]
                 # torch bernouilli distribution allow to do "hard" samples and still be differentiable
@@ -354,12 +348,7 @@ class HierarchicalTreeModel(dnn.BaseDNN, gr.BaseModel):
             cur_leaf_x_ids = [i for i, x_path in enumerate(tree_path_taken) if torch.all(torch.eq(x_path, path))]
             
             # forward for that leaf
-            if len(cur_leaf_x_ids) == 1:
-                self.eval()
-                cur_leaf_outputs = cur_leaf.forward(x[cur_leaf_x_ids], prefix_z[cur_leaf_x_ids])
-                self.train()
-            else:
-                cur_leaf_outputs = cur_leaf.forward(x[cur_leaf_x_ids], prefix_z[cur_leaf_x_ids])
+            cur_leaf_outputs = cur_leaf.forward(x[cur_leaf_x_ids], prefix_z[cur_leaf_x_ids])
             
             if z is None:
                 z = cur_leaf_outputs["z"]
@@ -767,13 +756,7 @@ class HierarchicalTreeEncoder(encoders.BaseDNNEncoder):
                 cur_node_x_ids = [i for i, x_path in enumerate(tree_path_taken[:, :depth+1]) if torch.all(torch.eq(x_path, path))]
                 
                 # forward
-                # if batch_size = 1 deactivate batchnorm and drop out
-                if len(cur_node_x_ids) == 1:
-                    self.eval()
-                    cur_inner_outputs = cur_node.forward(x[cur_node_x_ids])
-                    self.train()
-                else:
-                    cur_inner_outputs = cur_node.forward(x[cur_node_x_ids])
+                cur_inner_outputs = cur_node.forward(x[cur_node_x_ids])
                     
                 cur_prob_right = cur_inner_outputs["prob_right"]
                 # torch bernouilli distribution allow to do "hard" samples and still be differentiable
@@ -836,12 +819,7 @@ class HierarchicalTreeEncoder(encoders.BaseDNNEncoder):
             cur_leaf_x_ids = [i for i, x_path in enumerate(tree_path_taken) if torch.all(torch.eq(x_path, path))]
             
             # forward for that leaf
-            if len(cur_leaf_x_ids) == 1:
-                self.eval()
-                cur_leaf_encoder_outputs = cur_leaf.network.encoder.forward(x[cur_leaf_x_ids])
-                self.train()
-            else:
-                cur_leaf_encoder_outputs = cur_leaf.network.encoder.forward(x[cur_leaf_x_ids])
+            cur_leaf_encoder_outputs = cur_leaf.network.encoder.forward(x[cur_leaf_x_ids])
             
             if z is None:
                 z = cur_leaf_encoder_outputs["z"]

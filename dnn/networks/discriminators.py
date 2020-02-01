@@ -87,7 +87,13 @@ class HjelmDiscriminator (BaseDNNDiscriminator):
 
         
     def forward(self, x, z):
-        output_x = self.infer_x(x)
+        if self.training and x.size(0) == 1:
+            self.eval()
+            output_x = self.infer_x(x)
+            self.train()
+            
+        else:
+            output_x = self.infer_x(x)
         output = self.infer_joint(torch.cat((output_x, z), 1))
         return output
     
@@ -152,7 +158,13 @@ class DumoulinDiscriminator(BaseDNNDiscriminator):
     def forward(self, x, z):
         if len(z.size()) == 2:
             z = z.unsqueeze(dim=-1).unsqueeze(dim=-1)
-        output_x = self.infer_x(x)
+        if self.training and x.size(0) == 1:
+            self.eval()
+            output_x = self.infer_x(x)
+            self.train()
+            
+        else:
+            output_x = self.infer_x(x)
         output_z = self.infer_z(z)
         output_joint = self.infer_joint(torch.cat([output_x, output_z], dim=1))
         return output_joint

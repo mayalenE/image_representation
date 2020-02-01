@@ -106,9 +106,14 @@ class LocalEncodeAndDotDiscriminator(nn.Module):
         
         
     def forward(self, z, feature_map):
-        g = self.G1(z) + self.G2(z)
-        l = self.block_layer_norm(self.L1(feature_map) + self.L2(feature_map))
-
+        if self.training and z.size(0) == 1:
+            self.eval()
+            g = self.G1(z) + self.G2(z)
+            l = self.block_layer_norm(self.L1(feature_map) + self.L2(feature_map))
+            self.train()
+        else:
+            g = self.G1(z) + self.G2(z)
+            l = self.block_layer_norm(self.L1(feature_map) + self.L2(feature_map))
         # broadcast over channel dimension
         g = g.view(g.size(0), g.size(1), 1, 1)
         return (g * l).sum(1)
@@ -130,7 +135,13 @@ class PriorDiscriminator(nn.Module):
             )
 
     def forward(self, x):
-        return self.network(x)
+        if self.training and x.size(0) == 1:
+            self.eval()
+            output = self.network(x)
+            self.train()
+        else:
+            output = self.network(x)
+        return output
 
 
 class DIMModel(dnn.BaseDNN, gr.BaseModel):
@@ -200,29 +211,37 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
         z = encoder_outputs["z"]
         feature_map = encoder_outputs["feature_map"]
         
-        batch_size = z.detach().size(0)
-        indices = list(range(batch_size))
-        neg_indices = []
-        for i in range(batch_size):
-            all_cur_neg_indices = indices[i+1:] + indices[:i]
-            cur_neg_indices = random.sample(all_cur_neg_indices, self.config.num_negative)
-            neg_indices.append(cur_neg_indices)
-        
-        feature_map_prime = feature_map[neg_indices, ...]   # Shape is [batch_size, batch_size-1, C, H, W]
-        
         # outputs
         model_outputs = dict()
         model_outputs = encoder_outputs
-        ## global
+        ## postive example
         model_outputs['global_pos'] = self.network.global_discrim(z, feature_map)
-        model_outputs['global_neg'] = torch.stack([self.network.global_discrim(z, feature_map_prime[:,i]) for i in range(self.config.num_negative)]).mean(dim=0)
-        ## local
         model_outputs['local_pos'] = self.network.local_discrim(z, feature_map)
-        model_outputs['local_neg'] = torch.stack([self.network.local_discrim(z, feature_map_prime[:,i]) for i in range(self.config.num_negative)]).mean(dim=0)
-        ## prior
         prior_sample = torch.rand_like(z) # uniform prior on [0,1]
         model_outputs['prior_pos'] = self.network.prior_discrim(prior_sample)
+        
+        ## negative outputs
         model_outputs['prior_neg'] = self.network.prior_discrim(torch.sigmoid(z))
+        
+        batch_size = z.detach().size(0)
+        indices = list(range(batch_size))
+        neg_indices = []
+        num_negatives = min(batch_size-1, self.config.num_negative)
+        if num_negatives > 0:
+            for i in range(batch_size):
+                all_cur_neg_indices = indices[i+1:] + indices[:i]
+                cur_neg_indices = random.sample(all_cur_neg_indices, num_negatives)
+                neg_indices.append(cur_neg_indices)
+            
+            feature_map_prime = feature_map[neg_indices, ...]   # Shape is [batch_size, batch_size-1, C, H, W]
+            model_outputs['global_neg'] = torch.stack([self.network.global_discrim(z, feature_map_prime[:,i]) for i in range(num_negatives)]).mean(dim=0)
+            model_outputs['local_neg'] = torch.stack([self.network.local_discrim(z, feature_map_prime[:,i]) for i in range(num_negatives)]).mean(dim=0)
+        else:
+            # if there is no negative example we add noise to the positive feature map
+            noise = torch.empty_like(feature_map).normal_(0.0,1.0)
+            feature_map_prime = feature_map + noise
+            model_outputs['global_neg'] = self.network.global_discrim(z, feature_map_prime)
+            model_outputs['local_neg'] = self.network.local_discrim(z, feature_map_prime)
         
         return model_outputs
 
@@ -256,7 +275,7 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
         """            
         # Save the graph in the logger
         if logger is not None:
-            dummy_input = torch.FloatTensor(self.config.num_negative+1, self.config.network.parameters.n_channels, self.config.network.parameters.input_size[0], self.config.network.parameters.input_size[1]).uniform_(0,1)
+            dummy_input = torch.FloatTensor(1, self.config.network.parameters.n_channels, self.config.network.parameters.input_size[0], self.config.network.parameters.input_size[1]).uniform_(0,1)
             dummy_input = self.push_variable_to_device(dummy_input)
             self.eval()
             with torch.no_grad():
