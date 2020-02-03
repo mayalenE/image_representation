@@ -423,7 +423,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 embedding_samples = []
                 embedding_metadata = []
                 embedding_images = []
-                taken_pathes = []
+        taken_pathes = []
                 
             
         with torch.no_grad():
@@ -447,15 +447,15 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                     samples = model_outputs["z"]
                     metadata = data['label']
                     images = x
-                    for i in range(len(samples)):
+                    for i in range(len(x)):
                         embedding_samples.append(samples[i].unsqueeze(0))
                         embedding_metadata.append(metadata[i].unsqueeze(0))
                         embedding_images.append(images[i].unsqueeze(0))
                 if record_valid_images:
                     if not record_embeddings:
-                        for i in range(len(samples)):
+                        for i in range(len(x)):
                             images.append(x[i].unsqueeze(0))
-                    for i in range(len(samples)):
+                    for i in range(len(x)):
                         recon_images.append(model_outputs["recon_x"][i].unsqueeze(0)) 
                         
                 taken_pathes += model_outputs["path_taken"]
