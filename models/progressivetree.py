@@ -4,7 +4,7 @@ from goalrepresent import dnn, models
 from goalrepresent.dnn.solvers import initialization
 import numpy as np
 import os
-from sklearn import svm
+from sklearn import cluster, svm
 import sys
 import time
 import torch
@@ -21,6 +21,7 @@ class Node(nn.Module):
         self.depth = depth
         self.leaf = True # set to Fale when node is split
         self.boundary = None
+        self.feature_range = None
         self.leaf_accumulator = []
         
     def reset_accumulator(self):
@@ -58,7 +59,7 @@ class Node(nn.Module):
         
             
     
-    def split_node(self, z_library, z_fitness):
+    def split_node(self, z_library=None, z_fitness=None):
         """
         z_library: n_samples * n_latents
         z_fitness: n_samples * 1 (eg: reconstruction loss)
@@ -70,7 +71,8 @@ class Node(nn.Module):
         self.right = self.NodeClass(self.depth+1, parent_network = deepcopy(self.network), config=self.config)
         
         # create boundary based on database history
-        self.create_boundary(z_library, z_fitness)
+        if z_library is not None:
+            self.create_boundary(z_library, z_fitness)
         
         # freeze parameters
         for param in self.network.parameters():
@@ -81,20 +83,24 @@ class Node(nn.Module):
         
         return
     
-    def create_boundary(self, z_library, z_fitness):
-        # binarize data in two classes "good" versus "bad" reconstructed points
-        z_library = z_library.detach()
-        z_fitness = z_fitness.detach()
-        y = z_fitness > z_fitness.median()
+    def create_boundary(self, z_library, z_fitness=None):
         # normalize z points
-        self.feature_range = (z_library.min(axis=0)[0], z_library.max(axis=0)[0])
+        self.feature_range = (z_library.min(axis=0), z_library.max(axis=0))
         X =  z_library - self.feature_range[0]
         scale = self.feature_range[1] - self.feature_range[0]
-        scale[np.where(scale==0)] = 1.0 # trick when some some latents are the same for every point (no scale and divide by 1)
+        scale[np.where(scale == 0)] = 1.0 # trick when some some latents are the same for every point (no scale and divide by 1)
         X = X / scale
-        # fit the linear boundary
-        self.boundary = svm.SVC(kernel='linear', C=1000)
-        self.boundary.fit(X, y)
+        
+        if z_fitness is None:
+            # fit cluster boundary
+            self.boundary = cluster.KMeans(n_clusters=2).fit(X)
+        else:
+            # fit the linear boundary
+            if z_fitness.dtype == np.bool:
+                y = z_fitness
+            else:
+                y = z_fitness > np.median(z_fitness)
+            self.boundary= svm.SVC(kernel='linear', C=1000, class_weight='balanced').fit(X, y)
         return
     
     def depth_first_forward(self, x, tree_path_taken=None, x_ids=None, ancestors_lf=None, ancestors_gf=None, ancestors_gfi=None, ancestors_lfi=None, ancestors_recon_x=None):
@@ -124,7 +130,7 @@ class Node(nn.Module):
             x_side = self.get_children_node(z)
             x_ids_left = np.where(x_side==0)[0]
             if len(x_ids_left) > 0:
-                left_leaf_accumulator = self.left.depth_first_forward(x[x_ids_left], [path + "0" for path in [tree_path_taken[x_idx] for x_idx in x_ids_left]], x_ids_left, 
+                left_leaf_accumulator = self.left.depth_first_forward(x[x_ids_left], [path + "0" for path in [tree_path_taken[x_idx] for x_idx in x_ids_left]], [x_ids[x_idx] for x_idx in x_ids_left], 
                                                                       [ancestors_lf[i][x_ids_left] for i in range(self.depth+1)], [ancestors_gf[i][x_ids_left] for i in range(self.depth+1)], 
                                                                         [ancestors_gfi[i][x_ids_left] for i in range(self.depth+1)], [ancestors_lfi[i][x_ids_left] for i in range(self.depth+1)], 
                                                                         [ancestors_recon_x[i][x_ids_left] for i in range(self.depth+1)])
@@ -132,7 +138,7 @@ class Node(nn.Module):
             
             x_ids_right = np.where(x_side==1)[0]
             if len(x_ids_right) > 0:
-                right_leaf_accumulator = self.right.depth_first_forward(x[x_ids_right], [path + "1" for path in [tree_path_taken[x_idx] for x_idx in x_ids_right]], x_ids_right, 
+                right_leaf_accumulator = self.right.depth_first_forward(x[x_ids_right], [path + "1" for path in [tree_path_taken[x_idx] for x_idx in x_ids_right]],[x_ids[x_idx] for x_idx in x_ids_right], 
                                                                         [ancestors_lf[i][x_ids_right] for i in range(self.depth+1)], [ancestors_gf[i][x_ids_right] for i in range(self.depth+1)], 
                                                                         [ancestors_gfi[i][x_ids_right] for i in range(self.depth+1)], [ancestors_lfi[i][x_ids_right] for i in range(self.depth+1)], 
                                                                         [ancestors_recon_x[i][x_ids_right] for i in range(self.depth+1)])
@@ -158,12 +164,14 @@ class Node(nn.Module):
             raise ValueError("Boundary computation is required before calling this function")
         else:
             # normalize
+            if isinstance(z, torch.Tensor):
+                z = z.detach().cpu().numpy()
             z = z - self.feature_range[0]
             scale = self.feature_range[1] - self.feature_range[0]
             scale[np.where(scale==0)] = 1.0 # trick when some some latents are the same for every point (no scale and divide by 1)
             z = z / scale
             # compute boundary side
-            side = self.boundary.predict(z.detach().numpy()) # returns 0: left, 1: right
+            side = self.boundary.predict(z) # returns 0: left, 1: right
         return side
         
     
@@ -229,6 +237,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
     def __init__(self, config = None, **kwargs):
         
         self.NodeClass = eval("{}Node".format(config.node_classname))
+        self.split_history = {} # dictionary with node path keys and boundary values
         
         super().__init__(config=config, **kwargs)
         
@@ -238,6 +247,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
         self.network = self.NodeClass(depth, config=self.config.node) #root node that links to child nodes
         self.network.optimizer_group_id = 0
         self.output_keys_list = self.network.output_keys_list + ["path_taken"] #node.left is a leaf node
+        
         
     def set_optimizer(self, optimizer_name, optimizer_parameters):
         # give only trainable parameters
@@ -256,14 +266,18 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
         if torch._C._get_tracing_state():
             return self.forward_for_graph_tracing(x)
         x = self.push_variable_to_device(x)
-        depth_first_traversal_outputs = self.network.depth_first_forward(x)
-        self.leaf_pathes = []
+        is_train = self.network.training
+        if len(x) == 1 and is_train:
+            self.network.eval()
+            depth_first_traversal_outputs = self.network.depth_first_forward(x)
+            self.network.train()
+        else:
+            depth_first_traversal_outputs = self.network.depth_first_forward(x)
         
         model_outputs = {}
         x_order_ids = []
         for leaf_idx in range(len(depth_first_traversal_outputs)):
             cur_node_path = depth_first_traversal_outputs[leaf_idx][0]
-            self.leaf_pathes.append(cur_node_path[0])
             cur_node_x_ids = depth_first_traversal_outputs[leaf_idx][1]
             cur_node_outputs = depth_first_traversal_outputs[leaf_idx][2]
             # stack results
@@ -305,14 +319,11 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
         
         return z
     
-    def split_node(self, node_path, z_library, z_fitness):
+    def split_node(self, node_path, z_library=None, z_fitness=None):
         self.eval()
         node = self.network.get_child_node(node_path)
-        node.split_node(z_library, z_fitness)
-        #optimizer_group_id_to_remove = node.optimizer_group_id
-        #optimizer_n_ids = len(self.optimizer.state_dict()['param_groups'])
-        # augment optimizer
-        #self.set_optimizer(self.config.optimizer.name, self.config.optimizer.parameters)
+        node.split_node(z_library=z_library, z_fitness=z_fitness)
+        self.split_history[node_path] = {"depth": node.depth, "leaf": node.leaf, "boundary": node.boundary, "feature_range": node.feature_range}
         self.optimizer.add_param_group({"params": node.left.parameters()})
         self.optimizer.add_param_group({"params": node.right.parameters()})
     
@@ -505,6 +516,19 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
     
     def get_decoder(self):
         pass
+    
+    def save_checkpoint(self, checkpoint_filepath):
+        # save current epoch weight file with optimizer if we want to relaunch training from that point
+        network = {
+        "epoch": self.n_epochs,
+        "type": self.__class__.__name__,
+        "config": self.config,
+        "network_state_dict": self.network.state_dict(),
+        "optimizer_state_dict": self.optimizer.state_dict(),
+        "split_history": self.split_history
+        }
+        
+        torch.save(network, checkpoint_filepath)
 
 """ =========================================================================================
 CONNECTED MODULES 
