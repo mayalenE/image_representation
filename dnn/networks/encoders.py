@@ -18,7 +18,7 @@ class BaseDNNEncoder (nn.Module, gr.BaseEncoder, metaclass=ABCMeta):
     n_latents: dimensionality of the infered latent output.
     """
     
-    def __init__(self, n_channels = 1, input_size = (64,64), n_conv_layers = 4, n_latents = 10, conditional_type = "gaussian", feature_layer = 2, **kwargs):
+    def __init__(self, n_channels = 1, input_size = (64,64), n_conv_layers = 4, n_latents = 10, encoder_conditional_type = "gaussian", feature_layer = 2, hidden_channels=None, hidden_dim=None, **kwargs):
         super().__init__()
         
         # network parameters
@@ -26,10 +26,12 @@ class BaseDNNEncoder (nn.Module, gr.BaseEncoder, metaclass=ABCMeta):
         self.input_size = input_size
         self.n_conv_layers = n_conv_layers
         self.n_latents = n_latents
-        self.conditional_type = conditional_type
+        self.conditional_type = encoder_conditional_type
         self.feature_layer = feature_layer
-        self.output_keys_list = ["x", "z", "feature_map"]
-        if conditional_type == "gaussian":
+        self.hidden_channels = hidden_channels
+        self.hidden_dim = hidden_dim
+        self.output_keys_list = ["x", "lf", "gf", "z"]
+        if self.conditional_type == "gaussian":
             self.output_keys_list += ["mu", "logvar"]
     
     def forward(self, x):
@@ -37,35 +39,35 @@ class BaseDNNEncoder (nn.Module, gr.BaseEncoder, metaclass=ABCMeta):
             return self.forward_for_graph_tracing(x)
         
         # local feature map
-        M = self.lf(x)
+        lf = self.lf(x)
         # global feature map
-        h = self.gf(M)
+        gf = self.gf(lf)
         # encoding
         if self.conditional_type == "gaussian":
-            mu, logvar = torch.chunk(self.gen(h), 2, dim=1)
+            mu, logvar = torch.chunk(self.ef(gf), 2, dim=1)
             z = self.reparameterize(mu, logvar)
             if z.ndim > 2:
                 mu = mu.squeeze(dim=-1).squeeze(dim=-1)
                 logvar = logvar.squeeze(dim=-1).squeeze(dim=-1)
                 z = z.squeeze(dim=-1).squeeze(dim=-1)
-            encoder_outputs = {"x": x, "z": z, "feature_map": M, "mu": mu, "logvar": logvar}
+            encoder_outputs = {"x": x, "lf": lf, "gf": gf, "z": z, "mu": mu, "logvar": logvar}
         elif self.conditional_type == "deterministic":
-            z = self.gen(h)
+            z = self.ef(gf)
             if z.ndim > 2:
                 z = z.squeeze(dim=-1).squeeze(dim=-1)
-            encoder_outputs = {"x": x, "z": z, "feature_map": M}
+            encoder_outputs =  {"x": x, "lf": lf, "gf": gf, "z": z}
         
         return encoder_outputs
     
     def forward_for_graph_tracing(self, x):
-        M = self.lf(x)
-        h = self.gf(M)
+        lf = self.lf(x)
+        gf = self.gf(lf)
         if self.conditional_type == "gaussian":
-            mu, logvar = torch.chunk(self.gen(h), 2, dim=1)
+            mu, logvar = torch.chunk(self.ef(gf), 2, dim=1)
             z = self.reparameterize(mu, logvar)
         else:
-            z = self.gen(h)
-        return z, M
+            z = self.ef(gf)
+        return z, lf
     
     def push_variable_to_device(self, x):
         if next(self.parameters()).is_cuda and not x.is_cuda:
@@ -115,8 +117,12 @@ class BurgessEncoder (BaseDNNEncoder):
         assert self.input_size[0] == self.input_size[1], "BurgessEncoder needs a square image input size"
 
         # network architecture
-        hidden_channels = 32
-        hidden_dim = 256
+        if self.hidden_channels is None:
+            self.hidden_channels = 32
+        hidden_channels = self.hidden_channels
+        if self.hidden_dim is None:
+            self.hidden_dim = 256
+        hidden_dim = self.hidden_dim
         kernels_size=[4]*self.n_conv_layers
         strides=[2]*self.n_conv_layers
         pads=[1]*self.n_conv_layers
@@ -125,8 +131,7 @@ class BurgessEncoder (BaseDNNEncoder):
         # feature map size
         feature_map_sizes = conv2d_output_sizes(self.input_size, self.n_conv_layers, kernels_size, strides, pads, dils)
         
-        # local feature encoder
-        ## convolutional layers
+        # local feature
         self.local_feature_shape = (hidden_channels, feature_map_sizes[self.feature_layer][0], feature_map_sizes[self.feature_layer][1])
         self.lf = nn.Sequential()
         for conv_layer_id in range(self.feature_layer+1):
@@ -134,8 +139,9 @@ class BurgessEncoder (BaseDNNEncoder):
                 self.lf.add_module("conv_{}".format(0), nn.Sequential(nn.Conv2d(self.n_channels, hidden_channels, kernels_size[0], strides[0], pads[0], dils[0]), nn.ReLU()))
             else:
                 self.lf.add_module("conv_{}".format(conv_layer_id), nn.Sequential(nn.Conv2d(hidden_channels, hidden_channels, kernels_size[conv_layer_id], strides[conv_layer_id], pads[conv_layer_id], dils[conv_layer_id]), nn.ReLU()))
-                
-        # global feature encoder
+        self.lf.out_connection_type = ("conv", hidden_channels)
+            
+        # global feature
         self.gf = nn.Sequential()
         ## convolutional layers
         for conv_layer_id in range(self.feature_layer+1, self.n_conv_layers):
@@ -145,12 +151,13 @@ class BurgessEncoder (BaseDNNEncoder):
         h_after_convs, w_after_convs = feature_map_sizes[-1]
         self.gf.add_module("lin_0", nn.Sequential(nn.Linear(hidden_channels * h_after_convs * w_after_convs, hidden_dim), nn.ReLU()))
         self.gf.add_module("lin_1", nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.ReLU()))
+        self.gf.out_connection_type = ("lin", hidden_dim)
         
-        # encoding generation
+        # encoding feature
         if self.conditional_type == "gaussian":
-            self.add_module("gen", nn.Linear(hidden_dim, 2 * self.n_latents))
+            self.add_module("ef", nn.Linear(hidden_dim, 2 * self.n_latents))
         elif self.conditional_type == "deterministic":
-            self.add_module("gen", nn.Linear(hidden_dim, self.n_latents))
+            self.add_module("ef", nn.Linear(hidden_dim, self.n_latents))
         else:
             raise ValueError("The conditional type must be either gaussian or deterministic" )
 
@@ -174,8 +181,12 @@ class HjelmEncoder (BaseDNNEncoder):
         assert self.input_size[0] == self.input_size[1], "HjlemEncoder needs a square image input size"
 
         # network architecture
-        hidden_channels = int (math.pow(2, int(math.log(self.input_size[0],2))))
-        hidden_dim = 1024
+        if self.hidden_channels is None:
+            self.hidden_channels = int (math.pow(2, 9 - int(math.log(self.input_size[0],2)) + 3))
+        hidden_channels = self.hidden_channels
+        if self.hidden_dim is None:
+            self.hidden_dim = 1024
+        hidden_dim = self.hidden_dim
         kernels_size=[4]*self.n_conv_layers
         strides=[2]*self.n_conv_layers
         pads=[1]*self.n_conv_layers
@@ -184,7 +195,7 @@ class HjelmEncoder (BaseDNNEncoder):
         # feature map size
         feature_map_sizes = conv2d_output_sizes(self.input_size, self.n_conv_layers, kernels_size, strides, pads, dils)
         
-        # local feature encoder
+        # local feature 
         ## convolutional layers
         self.local_feature_shape = (int(hidden_channels * math.pow(2, self.feature_layer)), feature_map_sizes[self.feature_layer][0], feature_map_sizes[self.feature_layer][1])
         self.lf = nn.Sequential()
@@ -194,8 +205,9 @@ class HjelmEncoder (BaseDNNEncoder):
             else:
                 self.lf.add_module("conv_{}".format(conv_layer_id), nn.Sequential(nn.Conv2d(hidden_channels, hidden_channels*2, kernels_size[conv_layer_id], strides[conv_layer_id], pads[conv_layer_id], dils[conv_layer_id]), nn.BatchNorm2d(hidden_channels*2), nn.ReLU()))
                 hidden_channels *= 2
+        self.lf.out_connection_type = ("conv", hidden_channels)
         
-        # global feature encoder
+        # global feature 
         self.gf = nn.Sequential()
         ## convolutional layers
         for conv_layer_id in range(self.feature_layer+1, self.n_conv_layers):
@@ -205,12 +217,13 @@ class HjelmEncoder (BaseDNNEncoder):
         ## linear layers
         h_after_convs, w_after_convs = feature_map_sizes[-1]
         self.gf.add_module("lin_0", nn.Sequential(nn.Linear(hidden_channels * h_after_convs * w_after_convs, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ReLU()))
+        self.gf.out_connection_type = ("lin", hidden_dim)
         
-        # encoding generation
+        # encoding feature
         if self.conditional_type == "gaussian":
-            self.add_module("gen", nn.Linear(hidden_dim, 2 * self.n_latents))
+            self.add_module("ef", nn.Linear(hidden_dim, 2 * self.n_latents))
         elif self.conditional_type == "deterministic":
-            self.add_module("gen", nn.Linear(hidden_dim, self.n_latents))
+            self.add_module("ef", nn.Linear(hidden_dim, self.n_latents))
         else:
             raise ValueError("The conditional type must be either gaussian or deterministic" )
             
@@ -256,7 +269,9 @@ class DumoulinEncoder(BaseDNNEncoder):
         assert self.n_conv_layers == power - 2 , "The number of convolutional layers in DumoulinEncoder must be log(input_size, 2) - 2 "
 
         # network architecture
-        hidden_channels = int(512 // math.pow(2, self.n_conv_layers)) #last conv channel has 512 channels (ok for 32 and 64 images)
+        if self.hidden_channels is None:
+            self.hidden_channels = int(512 // math.pow(2, self.n_conv_layers))
+        hidden_channels = self.hidden_channels
         kernels_size=[4,4]*self.n_conv_layers
         strides=[1,2]*self.n_conv_layers
         pads=[0,1]*self.n_conv_layers
@@ -265,7 +280,7 @@ class DumoulinEncoder(BaseDNNEncoder):
         # feature map size
         feature_map_sizes = conv2d_output_sizes(self.input_size, 2*self.n_conv_layers, kernels_size, strides, pads, dils)
         
-        # local feature encoder
+        # local feature 
         ## convolutional layers
         self.local_feature_shape = (int(hidden_channels * math.pow(2, self.feature_layer+1)), feature_map_sizes[2*self.feature_layer+1][0], feature_map_sizes[2*self.feature_layer+1][1])
         self.lf = nn.Sequential()
@@ -289,8 +304,9 @@ class DumoulinEncoder(BaseDNNEncoder):
                         nn.LeakyReLU(inplace=True)
                         ))
             hidden_channels *= 2
+        self.lf.out_connection_type = ("conv", hidden_channels)
             
-        # global feature encoder
+        # global feature
         self.gf = nn.Sequential()
         ## convolutional layers
         for conv_layer_id in range(self.feature_layer+1, self.n_conv_layers):
@@ -303,17 +319,18 @@ class DumoulinEncoder(BaseDNNEncoder):
                         nn.LeakyReLU(inplace=True)
                         ))
             hidden_channels *= 2
+        self.gf.out_connection_type = ("conv", hidden_channels)
             
-        # encoding generation
+        # encoding feature
         if self.conditional_type == "gaussian": 
-            self.add_module("gen", nn.Sequential(
+            self.add_module("ef", nn.Sequential(
                             nn.Conv2d(hidden_channels, hidden_channels, kernel_size=1, stride=1), 
                             nn.BatchNorm2d(hidden_channels), 
                             nn.LeakyReLU(inplace=True),
                             nn.Conv2d(hidden_channels, 2*self.n_latents, kernel_size=1, stride=1)
                             ))
         elif self.conditional_type == "deterministic":  
-            self.add_module("gen", nn.Sequential(
+            self.add_module("ef", nn.Sequential(
                             nn.Conv2d(hidden_channels, hidden_channels, kernel_size=1, stride=1), 
                             nn.BatchNorm2d(hidden_channels), 
                             nn.LeakyReLU(inplace=True),

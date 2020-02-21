@@ -11,6 +11,7 @@
 ##### instance methods
 - *preprocess (observations)*: given raw observations, convert them to the correct input format x for the representation
 - *calc (x)*: given correct input x, calc the embedding z
+- *calc_distance (z1, z2,goal_space_extent)*: calc distance between two embeddings z1,z2 given the goal space boundaries (to normalize)
 
 
 

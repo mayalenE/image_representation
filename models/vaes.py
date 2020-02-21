@@ -37,7 +37,7 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         default_config.network.parameters.n_latents = 10
         default_config.network.parameters.n_conv_layers = 4
         default_config.network.parameters.feature_layer = 2
-        default_config.network.parameters.conditional_type = "gaussian"
+        default_config.network.parameters.encoder_conditional_type = "gaussian"
         
         # initialization parameters
         default_config.network.initialization = gr.Config()
@@ -72,9 +72,9 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         self.network.decoder = decoder_class(**network_parameters)
         
     def forward_from_encoder(self, encoder_outputs):
-        recon_x = self.network.decoder(encoder_outputs["z"])
+        decoder_outputs = self.network.decoder(encoder_outputs["z"])
         model_outputs = encoder_outputs
-        model_outputs["recon_x"] = recon_x
+        model_outputs.update(decoder_outputs)
         return model_outputs
         
     def forward(self, x):
@@ -109,7 +109,8 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
             self.eval()
             with torch.no_grad():
                 logger.add_graph(self, dummy_input, verbose = False)
-            
+        
+        do_validation = False    
         if valid_loader is not None:
             best_valid_loss = sys.float_info.max
             do_validation = True

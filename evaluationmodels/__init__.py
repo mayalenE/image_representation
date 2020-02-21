@@ -1,7 +1,5 @@
 import goalrepresent.evaluationmodels.classification
-import goalrepresent.evaluationmodels.mutualinformation
 import goalrepresent.evaluationmodels.reconstruction
-import goalrepresent.evaluationmodels.statisticalproperties
 from goalrepresent.evaluationmodels.classification.core import BaseClassifierModel
 from goalrepresent.evaluationmodels.classification.fcclassifier import FCClassifierModel
 from goalrepresent.evaluationmodels.classification.svmclassifier import SVMClassifierModel

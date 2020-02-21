@@ -173,24 +173,40 @@ class BaseDNN(nn.Module):
         if os.path.exists(checkpoint_filepath):
                 saved_model = torch.load (checkpoint_filepath, map_location='cpu')
                 model_type = saved_model['type']
+                config = saved_model['config']
+                if not use_gpu:
+                    config.device.use_gpu = False
+                    if model_type == "ProgressiveTreeModel":
+                        config.node.device.use_gpu = False
                 # the saved dnn can belong to gr.dnn, gr.models, gr.evaluationmodels
                 if hasattr(gr.dnn, model_type):
                     model_cls = getattr(gr.dnn, model_type)
-                    model = model_cls (config = saved_model['config'])
+                    model = model_cls (config = config)
                 elif hasattr(gr.models, model_type):
                     model_cls = getattr(gr.models, model_type)
-                    model = model_cls (config = saved_model['config'])
+                    model = model_cls (config = config)
                 elif hasattr(gr.evaluationmodels, model_type):
                     model_cls = getattr(gr.evaluationmodels, model_type)
-                    model = model_cls (representation_model = representation_model, config = saved_model['config'])
+                    model = model_cls (representation_model = representation_model, config = config)
                 else:
                     raise ValueError("the model cannot be load as it does not iherit from the BaseDNN class")
+                
+                if model_type == "ProgressiveTreeModel":
+                   split_history = saved_model['split_history']
+                   for split_node_path, split_node_attr in split_history.items():
+                       model.split_node(split_node_path)
+                       node = model.network.get_child_node(split_node_path)
+                       node.boundary = split_node_attr["boundary"]
+                       node.feature_range = split_node_attr["feature_range"]
+                
                 model.network.load_state_dict(saved_model['network_state_dict'])
+                
                 if model_type == "BiGANModel":
                     model.optimizer_discriminator.load_state_dict(saved_model['optimizer_discriminator_state_dict'])
                     model.optimizer_generator.load_state_dict(saved_model['optimizer_generator_state_dict'])
                 else:
                     model.optimizer.load_state_dict(saved_model['optimizer_state_dict'])
+                model.n_epochs = saved_model["epoch"]
                 model.set_device(use_gpu)
                 return model
         else:
