@@ -28,11 +28,14 @@ class PlotExperimentImagesWidget(ipywidgets.Box):
         default_config.filter_selection.layout.flex = '1 1 0%'
         default_config.filter_selection.layout.width = 'auto'
 
-        default_config.color_map = np.array([[255,255,255], [119,255,255],[23,223,252],[0,190,250],[0,158,249],[0,142,249],[81,125,248],[150,109,248],[192,77,247],[232,47,247],[255,9,247],[200,0,84]])/255*8
+        default_config.color_map = np.array(
+            [[255, 255, 255], [119, 255, 255], [23, 223, 252], [0, 190, 250], [0, 158, 249], [0, 142, 249],
+             [81, 125, 248], [150, 109, 248], [192, 77, 247], [232, 47, 247], [255, 9, 247], [200, 0, 84]]) / 255 * 8
 
         return default_config
 
-    def __init__(self, experiment_definitions, repetition_ids, data_source, experiment_statistics, filters=None, config=None, **kwargs):
+    def __init__(self, experiment_definitions, repetition_ids, data_source, experiment_statistics, filters=None,
+                 config=None, **kwargs):
 
         self.config = gr.config.set_default_config(kwargs, config, PlotExperimentImagesWidget.get_default_gui_config())
 
@@ -136,8 +139,8 @@ class PlotExperimentImagesWidget(ipywidgets.Box):
             for image_id, image in self.images.items():
                 img_bytes = io.BytesIO(image)
                 img_pil = PIL.Image.open(img_bytes)
-                self.images[image_id] = gr.gui.jupyter.misc.transform_image_PIL_to_bytes(gr.gui.jupyter.misc.transform_image_from_colormap(img_pil, color_map))
-
+                self.images[image_id] = gr.gui.jupyter.misc.transform_image_PIL_to_bytes(
+                    gr.gui.jupyter.misc.transform_image_from_colormap(img_pil, color_map))
 
     def plot_images(self):
 
@@ -152,7 +155,8 @@ class PlotExperimentImagesWidget(ipywidgets.Box):
             if cur_filter is None or not cur_filter:
                 img_ids = range(len(self.images))
             else:
-                run_ids = gr.gui.jupyter.misc.filter_single_experiment_data(self.experiment_statistics[exp_id], cur_filter, int(rep_id))
+                run_ids = gr.gui.jupyter.misc.filter_single_experiment_data(self.experiment_statistics[exp_id],
+                                                                            cur_filter, int(rep_id))
                 img_ids = np.where(run_ids)[0]
 
             cur_images = [self.images[img_id] for img_id in img_ids]

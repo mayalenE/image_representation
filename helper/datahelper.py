@@ -9,19 +9,21 @@ from six import iteritems, iterkeys  # pylint: disable=unused-import
 import torch
 import warnings
 
-def save(object_instance, filepath = "saved_object.pickle"):
-        torch.save(object_instance, filepath)
-        return
-    
+
+def save(object_instance, filepath="saved_object.pickle"):
+    torch.save(object_instance, filepath)
+    return
+
+
 def load(filepath, map_location='cpu', config=None):
-    object_instance = torch.load(filepath, map_location=map_location)       
-                
+    object_instance = torch.load(filepath, map_location=map_location)
+
     if config is not None and hasattr(object_instance, "config"):
         warnings.warn("WARNING: Overwritting the configuration of the loaded representation with the given one")
         object_instance.config = gr.config.update_config(config, object_instance.config)
-    
+
     return object_instance
-    
+
 
 class AttrDict(dict):
     """ A dictionary that provides attribute-style access.
@@ -53,7 +55,6 @@ class AttrDict(dict):
         See unmunchify/Munch.toDict, munchify/Munch.fromDict for notes about conversion.
     """
 
-
     # only called if k not found in normal places
     def __getattr__(self, k):
         """ Gets key if it exists, otherwise throws AttributeError.
@@ -83,7 +84,6 @@ class AttrDict(dict):
             except KeyError:
                 raise AttributeError(k)
 
-
     def __setattr__(self, k, v):
         """ Sets attribute k if it exists, otherwise sets key k. A KeyError
             raised by set-item (only likely if you subclass Munch) will
@@ -110,7 +110,6 @@ class AttrDict(dict):
         else:
             object.__setattr__(self, k, v)
 
-
     def __delattr__(self, k):
         """ Deletes attribute k if it exists, otherwise deletes key k. A KeyError
             raised by deleting the key--such as when the key is missing--will
@@ -133,7 +132,6 @@ class AttrDict(dict):
         else:
             object.__delattr__(self, k)
 
-
     def toDict(self):
         """ Recursively converts a munch back into a dictionary.
             >>> b = AttrDict(foo=AttrDict(lol=True), hello=42, ponies='are pretty!')
@@ -143,11 +141,9 @@ class AttrDict(dict):
         """
         return unmunchify(self)
 
-
     @property
     def __dict__(self):
         return self.toDict()
-
 
     def __repr__(self):
         """ Invertible* string-form of a Munch.
@@ -165,17 +161,14 @@ class AttrDict(dict):
         """
         return '{0}({1})'.format(self.__class__.__name__, dict.__repr__(self))
 
-
     def __dir__(self):
         return list(iterkeys(self))
-
 
     def __getstate__(self):
         """ Implement a serializable interface used for pickling.
         See https://docs.python.org/3.6/library/pickle.html.
         """
         return {k: v for k, v in self.items()}
-
 
     def __setstate__(self, state):
         """ Implement a serializable interface used for pickling.
@@ -184,9 +177,7 @@ class AttrDict(dict):
         self.clear()
         self.update(state)
 
-
     __members__ = __dir__  # for python2.x compatibility
-
 
     @classmethod
     def fromDict(cls, d):
@@ -197,7 +188,6 @@ class AttrDict(dict):
             See munchify for more info.
         """
         return munchify(d, cls)
-
 
     def copy(self):
         return type(self).fromDict(self)
@@ -218,7 +208,6 @@ class DefaultAttrDict(AttrDict):
     A Munch that returns a user-specified value for missing keys.
     """
 
-
     def __init__(self, *args, **kwargs):
         """ Construct a new DefaultMunch. Like collections.defaultdict, the
             first argument is the default value; subsequent arguments are the
@@ -233,7 +222,6 @@ class DefaultAttrDict(AttrDict):
         super(DefaultAttrDict, self).__init__(*args, **kwargs)
         self.__default__ = default
 
-
     def __getattr__(self, k):
         """ Gets key if it exists, otherwise returns the default value."""
         try:
@@ -241,13 +229,11 @@ class DefaultAttrDict(AttrDict):
         except AttributeError:
             return self.__default__
 
-
     def __setattr__(self, k, v):
         if k == '__default__':
             object.__setattr__(self, k, v)
         else:
             return super(DefaultAttrDict, self).__setattr__(k, v)
-
 
     def __getitem__(self, k):
         """ Gets key if it exists, otherwise returns the default value."""
@@ -256,13 +242,11 @@ class DefaultAttrDict(AttrDict):
         except KeyError:
             return self.__default__
 
-
     def __getstate__(self):
         """ Implement a serializable interface used for pickling.
         See https://docs.python.org/3.6/library/pickle.html.
         """
         return (self.__default__, {k: v for k, v in self.items()})
-
 
     def __setstate__(self, state):
         """ Implement a serializable interface used for pickling.
@@ -273,16 +257,13 @@ class DefaultAttrDict(AttrDict):
         self.update(state_dict)
         self.__default__ = default
 
-
     @classmethod
     def fromDict(cls, d, default=None):
         # pylint: disable=arguments-differ
         return munchify(d, factory=lambda d_: cls(default, d_))
 
-
     def copy(self):
         return type(self).fromDict(self, default=self.__default__)
-
 
     def __repr__(self):
         return '{0}({1!r}, {2})'.format(
@@ -302,21 +283,17 @@ class DefaultFactoryAttrDict(defaultdict, AttrDict):
         ['hello']
     """
 
-
     def __init__(self, default_factory, *args, **kwargs):
         # pylint: disable=useless-super-delegation
         super(DefaultFactoryAttrDict, self).__init__(default_factory, *args, **kwargs)
-
 
     @classmethod
     def fromDict(cls, d, default_factory):
         # pylint: disable=arguments-differ
         return munchify(d, factory=lambda d_: cls(default_factory, d_))
 
-
     def copy(self):
         return type(self).fromDict(self, default_factory=self.default_factory)
-
 
     def __repr__(self):
         factory = self.default_factory.__name__
@@ -455,33 +432,31 @@ def json_numpy_object_hook(dct):
 
 
 def set_dict_default_values(*args, is_copy=True):
-
     args = list(args)
 
-    for arg_idx in range(len(args)-1, 0, -1):
+    for arg_idx in range(len(args) - 1, 0, -1):
 
-        if args[arg_idx-1] is None:
-            args[arg_idx-1] = {}
+        if args[arg_idx - 1] is None:
+            args[arg_idx - 1] = {}
 
         if is_copy:
-            args[arg_idx-1] = args[arg_idx-1].copy()
+            args[arg_idx - 1] = args[arg_idx - 1].copy()
         else:
-            args[arg_idx-1] = args[arg_idx-1]
+            args[arg_idx - 1] = args[arg_idx - 1]
 
         for def_key, def_item in args[arg_idx].items():
 
-            if not def_key in args[arg_idx-1]:
+            if not def_key in args[arg_idx - 1]:
                 # add default item if not found target
-                args[arg_idx-1][def_key] = def_item
+                args[arg_idx - 1][def_key] = def_item
             elif isinstance(def_item, collections.Mapping) and isinstance(args[arg_idx][def_key], collections.Mapping):
                 # if the value is a dictionary in the default and the target, then also set default values for it
-                args[arg_idx-1][def_key] = set_dict_default_values(args[arg_idx-1][def_key], def_item, is_copy=True)
+                args[arg_idx - 1][def_key] = set_dict_default_values(args[arg_idx - 1][def_key], def_item, is_copy=True)
 
     return args[0]
 
 
 def string2imgarray(text, output_img_size):
-    
     n_channels = output_img_size[0]
     if n_channels == 3:
         fill = (255, 255, 255)
@@ -489,44 +464,45 @@ def string2imgarray(text, output_img_size):
         fill = 255
     else:
         raise ValueError("Format not supported")
-        
+
     margin = 5
     x_text = margin
     y_text = [margin]
     line_spacing = 2
     font = ImageFont.load_default()
-    
+
     textlines = text.split("\n")
     max_w = 0
     for line in textlines:
         line_w, line_h = font.getsize(line)
         max_w = max(max_w, line_w)
-        y_text.append(y_text[-1]+line_h+line_spacing)
-    
+        y_text.append(y_text[-1] + line_h + line_spacing)
+
     if n_channels == 3:
-        image_size = (y_text[-1] - line_spacing + margin, max_w + 2 * margin, output_img_size[0]) # numpy ordering H*W*C
+        image_size = (
+            y_text[-1] - line_spacing + margin, max_w + 2 * margin, output_img_size[0])  # numpy ordering H*W*C
     elif n_channels == 1:
         image_size = (y_text[-1] - line_spacing + margin, max_w + 2 * margin)
-        
+
     background_img = Image.fromarray(np.zeros(image_size, dtype=np.uint8))
     draw_img = ImageDraw.Draw(background_img)
-    
+
     for line_idx, line in enumerate(textlines):
         draw_img.text((x_text, y_text[line_idx]), line, font=font, fill=fill)
 
     # reshape to desired size
     img = background_img.resize(output_img_size[1:], Image.ANTIALIAS)
     array_img = np.asarray(img)
-    
+
     if n_channels == 1:
-        array_img = np.expand_dims(array_img, axis = 0)
+        array_img = np.expand_dims(array_img, axis=0)
     elif n_channels == 3:
-        array_img = np.rollaxis(array_img, 2, 0) # torch ordering C*H*W
-        
-    
+        array_img = np.rollaxis(array_img, 2, 0)  # torch ordering C*H*W
+
     # convert to float
     array_img = (array_img / 255.0).astype(np.float32)
     return array_img
+
 
 def tensor2string(tensor):
     """

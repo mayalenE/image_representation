@@ -3,6 +3,7 @@ import ipywidgets
 import numpy as np
 import IPython.display
 
+
 class ImageListWidget(ipywidgets.VBox):
 
     @staticmethod

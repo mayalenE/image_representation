@@ -2,6 +2,7 @@ import math
 from numbers import Number
 import torch
 
+
 def logsumexp(value, dim=None, keepdim=False):
     """Numerically stable implementation of the operation
     value.exp().sum(dim, keepdim).log()

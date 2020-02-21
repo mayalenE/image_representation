@@ -1,25 +1,27 @@
 from goalrepresent.dnn.networks import encoders
 from abc import ABCMeta, abstractmethod
-from  goalrepresent.helper import nnmodulehelper
+from goalrepresent.helper import nnmodulehelper
 import torch
 from torch import nn
 
 EPS = 1e-12
 
-class BaseDNNDiscriminator (nn.Module, metaclass=ABCMeta):
+
+class BaseDNNDiscriminator(nn.Module, metaclass=ABCMeta):
     '''
     Base Discriminator class
     '''
-    def __init__(self, n_channels = 1, input_size = (64,64), n_conv_layers = 4, n_latents = 10,  **kwargs):
+
+    def __init__(self, n_channels=1, input_size=(64, 64), n_conv_layers=4, n_latents=10, **kwargs):
         super().__init__()
-        
+
         # network parameters
         self.n_channels = n_channels
         self.input_size = input_size
         self.n_conv_layers = n_conv_layers
         self.n_latents = n_latents
-    
-    @abstractmethod    
+
+    @abstractmethod
     def forward(self, x):
         pass
 
@@ -36,116 +38,113 @@ def get_discriminator(model_architecture):
 Discriminator Modules 
 ========================================================================================================================="""
 
-class BurgessDiscriminator (BaseDNNDiscriminator):
-    
+
+class BurgessDiscriminator(BaseDNNDiscriminator):
+
     def __init__(self, **kwargs):
         encoder = encoders.BurgessEncoder(**kwargs)
         super().__init__(**kwargs)
-        
+
         # inference x
         self.infer_x = nn.Sequential()
         self.infer_x.lf = encoder.lf
         self.infer_x.gf = encoder.gf
-        
+
         hidden_dim_x = 256
         hidden_dim_joint = 512
-        self.infer_joint = nn.Sequential (
-                nn.Linear(hidden_dim_x + self.n_latents, hidden_dim_joint),
-                nn.ReLU(),
-                nn.Linear(hidden_dim_joint, hidden_dim_joint),
-                nn.ReLU(),
-                nn.Linear(hidden_dim_joint, 1),
-                )
+        self.infer_joint = nn.Sequential(
+            nn.Linear(hidden_dim_x + self.n_latents, hidden_dim_joint),
+            nn.ReLU(),
+            nn.Linear(hidden_dim_joint, hidden_dim_joint),
+            nn.ReLU(),
+            nn.Linear(hidden_dim_joint, 1),
+        )
 
-        
     def forward(self, x, z):
         output_x = self.infer_x(x)
         output = self.infer_joint(torch.cat((output_x, z), 1))
         return output
-    
-    
-class HjelmDiscriminator (BaseDNNDiscriminator):
-    
+
+
+class HjelmDiscriminator(BaseDNNDiscriminator):
+
     def __init__(self, **kwargs):
         encoder = encoders.HjelmEncoder(**kwargs)
         super().__init__(**kwargs)
-        
+
         # inference x
         self.infer_x = nn.Sequential()
         self.infer_x.lf = encoder.lf
         self.infer_x.gf = encoder.gf
-        
+
         hidden_dim_x = 1024
         hidden_dim_joint = 2048
-        self.infer_joint = nn.Sequential (
-                nn.Linear(hidden_dim_x + self.n_latents, hidden_dim_joint),
-                nn.ReLU(),
-                nn.Linear(hidden_dim_joint, hidden_dim_joint),
-                nn.ReLU(),
-                nn.Linear(hidden_dim_joint, 1),
-                )
+        self.infer_joint = nn.Sequential(
+            nn.Linear(hidden_dim_x + self.n_latents, hidden_dim_joint),
+            nn.ReLU(),
+            nn.Linear(hidden_dim_joint, hidden_dim_joint),
+            nn.ReLU(),
+            nn.Linear(hidden_dim_joint, 1),
+        )
 
-        
     def forward(self, x, z):
         if self.training and x.size(0) == 1:
             self.eval()
             output_x = self.infer_x(x)
             self.train()
-            
+
         else:
             output_x = self.infer_x(x)
         output = self.infer_joint(torch.cat((output_x, z), 1))
         return output
-    
-    
+
 
 class DumoulinDiscriminator(BaseDNNDiscriminator):
 
-    def __init__(self, with_dropout = True, **kwargs):
+    def __init__(self, with_dropout=True, **kwargs):
         encoder = encoders.DumoulinEncoder(**kwargs)
         super().__init__(**kwargs)
-        
-        
+
         # inference x
         self.infer_x = nn.Sequential()
         self.infer_x.lf = encoder.lf
         self.infer_x.gf = encoder.gf
-        
+
         hidden_dim_x = 512
         hidden_dim_z = 1024
         hidden_dim_joint = 2048
-        
+
         self.infer_z = nn.Sequential(
-                    nn.Conv2d(self.n_latents, hidden_dim_z, kernel_size=1, stride=1),
-                    nn.LeakyReLU(inplace=True),
-                    nn.Conv2d(hidden_dim_z, hidden_dim_z, kernel_size=1, stride=1),
-                    nn.LeakyReLU(inplace=True),
-                )
-            
+            nn.Conv2d(self.n_latents, hidden_dim_z, kernel_size=1, stride=1),
+            nn.LeakyReLU(inplace=True),
+            nn.Conv2d(hidden_dim_z, hidden_dim_z, kernel_size=1, stride=1),
+            nn.LeakyReLU(inplace=True),
+        )
+
         self.infer_joint = nn.Sequential(
-                    nn.Conv2d(hidden_dim_z+hidden_dim_x, hidden_dim_joint, kernel_size=1, stride=1),
-                    nn.LeakyReLU(inplace=True),
-                    nn.Conv2d(hidden_dim_joint, hidden_dim_joint, kernel_size=1, stride=1),
-                    nn.LeakyReLU(inplace=True),
-                    nn.Conv2d(hidden_dim_joint, 1, kernel_size=1, stride=1)
-                )
-        
+            nn.Conv2d(hidden_dim_z + hidden_dim_x, hidden_dim_joint, kernel_size=1, stride=1),
+            nn.LeakyReLU(inplace=True),
+            nn.Conv2d(hidden_dim_joint, hidden_dim_joint, kernel_size=1, stride=1),
+            nn.LeakyReLU(inplace=True),
+            nn.Conv2d(hidden_dim_joint, 1, kernel_size=1, stride=1)
+        )
+
         self.with_dropout = with_dropout
         if self.with_dropout:
             infer_x_lf_dropout_modules = []
             for module_name, module in self.infer_x.lf.named_children():
                 module_list = [sub_mod for sub_mod in module.children()]
-                module_list.insert(3, nn.Dropout2d(0.2))   
+                module_list.insert(3, nn.Dropout2d(0.2))
                 module_list.append(nn.Dropout2d(0.2))
                 infer_x_lf_dropout_modules.append(nn.Sequential(*module_list))
-            self.infer_x.lf =nn.Sequential(*infer_x_lf_dropout_modules)
+            self.infer_x.lf = nn.Sequential(*infer_x_lf_dropout_modules)
             infer_x_gf_dropout_modules = []
             for module in self.infer_x.gf.children():
                 module_list = [sub_mod for sub_mod in module.children()]
-                module_list.insert(3, nn.Dropout2d(0.2))   
+                module_list.insert(3, nn.Dropout2d(0.2))
                 module_list.append(nn.Dropout2d(0.2))
                 infer_x_gf_dropout_modules.append(nn.Sequential(*module_list))
-            self.infer_x.gf =nn.Sequential(*infer_x_gf_dropout_modules)
+            self.infer_x.gf = nn.Sequential(*infer_x_gf_dropout_modules)
             module_list = [mod for mod in self.infer_z.children()]
             module_list.insert(2, nn.Dropout2d(0.2))
             module_list.append(nn.Dropout2d(0.2))
@@ -162,7 +161,7 @@ class DumoulinDiscriminator(BaseDNNDiscriminator):
             self.eval()
             output_x = self.infer_x(x)
             self.train()
-            
+
         else:
             output_x = self.infer_x(x)
         output_z = self.infer_z(z)

@@ -1,25 +1,27 @@
 # Helper functions
 import glob
+import goalrepresent as gr
 import os
 import numpy as np
 import warnings
-import goalrepresent as ad
 from io import BytesIO
 from PIL import Image
 
+
 def create_colormap(colors, is_marker_w=True):
-    MARKER_COLORS_W = [0x5F,0x5F,0x5F,0x7F,0x7F,0x7F,0xFF,0xFF,0xFF]
-    MARKER_COLORS_B = [0x9F,0x9F,0x9F,0x7F,0x7F,0x7F,0x0F,0x0F,0x0F]
+    MARKER_COLORS_W = [0x5F, 0x5F, 0x5F, 0x7F, 0x7F, 0x7F, 0xFF, 0xFF, 0xFF]
+    MARKER_COLORS_B = [0x9F, 0x9F, 0x9F, 0x7F, 0x7F, 0x7F, 0x0F, 0x0F, 0x0F]
     nval = 253
     ncol = colors.shape[0]
-    colors = np.vstack((colors, np.array([[0,0,0]])))
+    colors = np.vstack((colors, np.array([[0, 0, 0]])))
     v = np.repeat(range(nval), 3)  # [0 0 0 1 1 1 ... 252 252 252]
     i = np.array(list(range(3)) * nval)  # [0 1 2 0 1 2 ... 0 1 2]
-    k = v / (nval-1) * (ncol-1)  # interpolate between 0 .. ncol-1
+    k = v / (nval - 1) * (ncol - 1)  # interpolate between 0 .. ncol-1
     k1 = k.astype(int)
-    c1, c2 = colors[k1,i], colors[k1+1,i]
-    c = (k-k1) * (c2-c1) + c1  # interpolate between c1 .. c2
+    c1, c2 = colors[k1, i], colors[k1 + 1, i]
+    c = (k - k1) * (c2 - c1) + c1  # interpolate between c1 .. c2
     return np.rint(c / 8 * 255).astype(int).tolist() + (MARKER_COLORS_W if is_marker_w else MARKER_COLORS_B)
+
 
 def transform_image_from_colormap(image, colormap):
     '''
@@ -31,13 +33,14 @@ def transform_image_from_colormap(image, colormap):
     output: the transformed PIL image
     '''
     image_array = np.array(image)
-    image_array = np.uint8(image_array.astype(float)/255.0 * 252.0)
+    image_array = np.uint8(image_array.astype(float) / 255.0 * 252.0)
     transformed_image = Image.fromarray(image_array)
     transformed_image.putpalette(colormap)
-    
+
     return transformed_image
 
-def transform_image_PIL_to_bytes(image, image_format = 'png'):
+
+def transform_image_PIL_to_bytes(image, image_format='png'):
     '''
     Function that transforms a PIL image to bytes format
     
@@ -50,8 +53,9 @@ def transform_image_PIL_to_bytes(image, image_format = 'png'):
     with BytesIO() as output:
         image.save(output, image_format)
         image_bytes = output.getvalue()
-        
+
     return image_bytes
+
 
 def load_statistics(experiment_directory):
     statistics = dict()
@@ -61,7 +65,7 @@ def load_statistics(experiment_directory):
 
     for file in glob.glob(os.path.join(experiment_directory, 'statistics', '*.npy')):
         stat_name = os.path.splitext(os.path.basename(file))[0]
-        stat_val = np.load(file, allow_pickle = True)
+        stat_val = np.load(file, allow_pickle=True)
 
         if len(stat_val.shape) == 0:
             stat_val = stat_val.dtype.type(stat_val)
@@ -70,7 +74,7 @@ def load_statistics(experiment_directory):
 
     for file in glob.glob(os.path.join(experiment_directory, 'statistics', '*.npz')):
         stat_name = os.path.splitext(os.path.basename(file))[0]
-        stat_vals = dict(np.load(file, allow_pickle = True))
+        stat_vals = dict(np.load(file, allow_pickle=True))
 
         # numpy encapsulates scalars as darrays with an empty shape
         # recover the original type
@@ -103,7 +107,8 @@ def get_repetition_ids(experiment_id, repetition_ids):
     return cur_repetition_ids
 
 
-def get_experiment_data(data=None, experiment_id=None, data_source=None, repetition_ids=None, data_filter=None, data_filter_inds=None):
+def get_experiment_data(data=None, experiment_id=None, data_source=None, repetition_ids=None, data_filter=None,
+                        data_filter_inds=None):
     '''
     The datasource is a tuple which allows to spcifiy sub sources.
     Example: If "data[experimen_id] = dict(upperlevel=dict(lowerlevel=[1, 2, 3]))"
@@ -128,13 +133,16 @@ def get_experiment_data(data=None, experiment_id=None, data_source=None, repetit
     # go through data to get to final datasource
     for data_source_elem in data_source:
 
-        if isinstance(data_source_elem, str) and isinstance(rep_data, np.ndarray) and data_source_elem[0] == '[' and data_source_elem[-1] == ']':
+        if isinstance(data_source_elem, str) and isinstance(rep_data, np.ndarray) and data_source_elem[0] == '[' and \
+                data_source_elem[-1] == ']':
             rep_data = eval('rep_data[:,:,' + data_source_elem[1:-1] + ']')
         else:
             rep_data = rep_data[data_source_elem]
 
     if not isinstance(cur_repetition_ids, slice) and np.max(cur_repetition_ids) >= rep_data.shape[0]:
-        warnings.warn('Experiment {!r} does not have all requested repetitions. Only the exisiting ones are loaded.'.format(experiment_id))
+        warnings.warn(
+            'Experiment {!r} does not have all requested repetitions. Only the exisiting ones are loaded.'.format(
+                experiment_id))
         cur_repetition_ids = [id for id in cur_repetition_ids if id < rep_data.shape[0]]
 
     if np.ndim(rep_data) == 1:
@@ -227,7 +235,6 @@ def replace_str_from_dict(string, dictionary):
 
 
 def filter_single_experiment_data(data, filter, repetition_id=None):
-
     if isinstance(filter, tuple):
 
         if len(filter) == 3:
@@ -303,6 +310,7 @@ def filter_experiments_data(experiments_data, filter, repetition_id=None):
     filtered_data_inds = dict()
 
     for experiment_id, experiment_data in experiments_data.items():
-        filtered_data_inds[experiment_id] = filter_single_experiment_data(experiment_data, filter, repetition_id=repetition_id)
+        filtered_data_inds[experiment_id] = filter_single_experiment_data(experiment_data, filter,
+                                                                          repetition_id=repetition_id)
 
     return filtered_data_inds

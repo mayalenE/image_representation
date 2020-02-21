@@ -2,6 +2,7 @@ import goalrepresent as gr
 import numpy as np
 import plotly
 
+
 # plotly_box
 def plotly_box(data=None, config=None, **kwargs):
     '''
@@ -16,8 +17,10 @@ def plotly_box(data=None, config=None, **kwargs):
         init_mode='mean_std',  # mean_std, mean, elements
         layout=dict(
 
-            default_xaxis=dict(),  # if several subplots, then these are the default values for all xaxis config in fig.layout
-            default_yaxis=dict(),  # if several subplots, then these are the default values for all yaxis config in fig.layout
+            default_xaxis=dict(),
+            # if several subplots, then these are the default values for all xaxis config in fig.layout
+            default_yaxis=dict(),
+            # if several subplots, then these are the default values for all yaxis config in fig.layout
 
             xaxis=dict(),
             yaxis=dict(),

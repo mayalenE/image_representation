@@ -3,7 +3,9 @@ import collections
 import numpy as np
 import ipywidgets
 
-def interact_selection_multiple_experiments_repetitions(func, experiment_definitions=None, experiment_ids=None, repetition_ids=None, **kwargs):
+
+def interact_selection_multiple_experiments_repetitions(func, experiment_definitions=None, experiment_ids=None,
+                                                        repetition_ids=None, **kwargs):
     if experiment_definitions is not None and experiment_ids is not None:
         raise ValueError('Only experiment_definitions or experiment_ids are allowed as parameters!')
 
@@ -118,7 +120,8 @@ def interact_selection_multiple_experiments_repetitions(func, experiment_definit
     return out, accordion_widget
 
 
-def interact_selection_single_experiments_repetitions(func, experiment_definitions=None, experiment_ids=None, repetition_ids=None, **kwargs):
+def interact_selection_single_experiments_repetitions(func, experiment_definitions=None, experiment_ids=None,
+                                                      repetition_ids=None, **kwargs):
     if experiment_definitions is not None and experiment_ids is not None:
         raise ValueError('Only experiment_definitions or experiment_ids are allowed as parameters!')
 
@@ -159,7 +162,8 @@ def interact_selection_single_experiments_repetitions(func, experiment_definitio
         exp_ids[idx_name] = experiment_id
 
     exp_options = list(exp_ids.values())
-    exp_multi_checkbox_widget = ipywidgets.RadioButtons(options = exp_options, value = exp_options[-1], layout={'overflow': 'scroll'})
+    exp_multi_checkbox_widget = ipywidgets.RadioButtons(options=exp_options, value=exp_options[-1],
+                                                        layout={'overflow': 'scroll'})
     control_exp = {"exp_rb": exp_multi_checkbox_widget}
 
     rep_ids = collections.OrderedDict()
@@ -171,7 +175,8 @@ def interact_selection_single_experiments_repetitions(func, experiment_definitio
         rep_ids[idx_name] = repetition_id
 
     rep_options = list(rep_ids.values())
-    rep_multi_checkbox_widget =  ipywidgets.RadioButtons(options = rep_options, value=rep_options[-1], layout={'overflow': 'scroll'})
+    rep_multi_checkbox_widget = ipywidgets.RadioButtons(options=rep_options, value=rep_options[-1],
+                                                        layout={'overflow': 'scroll'})
     control_rep = {"rep_rb": rep_multi_checkbox_widget}
 
     accordion_widget = ipywidgets.Accordion(children=[exp_multi_checkbox_widget, rep_multi_checkbox_widget],
@@ -180,12 +185,13 @@ def interact_selection_single_experiments_repetitions(func, experiment_definitio
     accordion_widget.set_title(1, 'Repetitions')
 
     def internal_func(**kwargs):
-        func(experiment_ids=[exp_multi_checkbox_widget.value], repetition_ids=[rep_multi_checkbox_widget.value], **func_paramaters)
+        func(experiment_ids=[exp_multi_checkbox_widget.value], repetition_ids=[rep_multi_checkbox_widget.value],
+             **func_paramaters)
 
-    out = ipywidgets.interactive_output(internal_func, {**control_exp, **control_rep} )
+    out = ipywidgets.interactive_output(internal_func, {**control_exp, **control_rep})
 
     display(out, accordion_widget)
-    
+
     # hack: I need to change the value of one control element to force the plot to replot
     # otherwise it will not be shown in the beginning
     control_exp["exp_rb"].value = exp_options[0]

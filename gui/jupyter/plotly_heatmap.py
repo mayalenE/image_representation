@@ -2,6 +2,7 @@ import goalrepresent as gr
 import numpy as np
 import plotly
 
+
 # plotly_box
 def plotly_heatmap(data=None, config=None, **kwargs):
     '''
@@ -16,8 +17,10 @@ def plotly_heatmap(data=None, config=None, **kwargs):
         init_mode='mean_std',  # mean_std, mean, elements
         layout=dict(
 
-            default_xaxis=dict(),  # if several subplots, then these are the default values for all xaxis config in fig.layout
-            default_yaxis=dict(),  # if several subplots, then these are the default values for all yaxis config in fig.layout
+            default_xaxis=dict(),
+            # if several subplots, then these are the default values for all xaxis config in fig.layout
+            default_yaxis=dict(),
+            # if several subplots, then these are the default values for all yaxis config in fig.layout
 
             xaxis=dict(),
             yaxis=dict(),
@@ -60,7 +63,6 @@ def plotly_heatmap(data=None, config=None, **kwargs):
     elif config.subplots.rows is None and config.subplots.cols is not None:
         config.subplots.rows = int(np.ceil(n_subplots / config.subplots.cols))
 
-
     # make figure with subplots
     fig = plotly.tools.make_subplots(**config.subplots)
 
@@ -80,8 +82,8 @@ def plotly_heatmap(data=None, config=None, **kwargs):
             # create a trace for each repetition
             # if more than one, do mean
             z = []
-            for elem_idx, elem_data in enumerate(cur_data):  
-                
+            for elem_idx, elem_data in enumerate(cur_data):
+
                 # get element data which should be in array format (H*W) 
                 if np.ndim(elem_data) == 2:
                     cur_elem_data = elem_data
@@ -94,44 +96,40 @@ def plotly_heatmap(data=None, config=None, **kwargs):
                         raise ValueError('Invalid data format!')
                 else:
                     raise ValueError('Invalid data format!')
-                
-                
+
                 for j in range(cur_elem_data.shape[1]):
                     if elem_idx == 0:
                         z.append(cur_elem_data[:, j].tolist())
                     else:
-                        z[j] = [x+y for x, y in zip(z[j], cur_elem_data[:, j].tolist())]
-                        
+                        z[j] = [x + y for x, y in zip(z[j], cur_elem_data[:, j].tolist())]
+
                 # handle trace for mean values
                 group_label = config.default_group_label
                 if len(config.group_labels) > elem_idx:
                     group_label = config.group_labels[elem_idx]
                 group_label = gr.gui.jupyter.misc.replace_str_from_dict(str(group_label), {'group_idx': elem_idx})
-    
+
                 elem_labels.extend([group_label] * len(cur_elem_data))
-                    
-                        
+
                 if elem_idx == len(cur_data) - 1:
-                    x=[str(i) for i in range(cur_elem_data.shape[0])]
-                    y=[str(j) for j in range(cur_elem_data.shape[1])]
+                    x = [str(i) for i in range(cur_elem_data.shape[0])]
+                    y = [str(j) for j in range(cur_elem_data.shape[1])]
                     annotations = []
                     for j in range(cur_elem_data.shape[1]):
                         for i in range(cur_elem_data.shape[0]):
-                            z[j][i] /= float(len(cur_data)) # we do the mean over repetitions
+                            z[j][i] /= float(len(cur_data))  # we do the mean over repetitions
                             annotation = {
                                 "x": str(i),
                                 "y": str(j),
                                 "font": {
-                                  "color": "white"
+                                    "color": "white"
                                 },
                                 "text": str(z[j][i]),
                                 "xref": "x1",
                                 "yref": "y1",
                                 "showarrow": False
-                              }
+                            }
                             annotations.append(annotation)
-
-            
 
             # handle trace for mean values
             trace_label = config.default_trace_label
@@ -153,7 +151,7 @@ def plotly_heatmap(data=None, config=None, **kwargs):
                 trace_config = gr.config.set_default_config(config.traces[data_idx], trace_config)
 
             trace_params = gr.config.set_default_config(trace_config, trace_params)
-            
+
             cur_trace = plotly.graph_objs.Heatmap(**trace_params)
             subplot_traces.append(cur_trace)
 

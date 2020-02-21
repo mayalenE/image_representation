@@ -2,6 +2,7 @@ import goalrepresent as gr
 import numpy as np
 import plotly
 
+
 def plotly_meanstd_bar(data=None, config=None, **kwargs):
     '''
     param repetition_ids: Either scalar int with single id, list with several that are used for each experiment, or a dict with repetition ids per experiment.
@@ -15,8 +16,10 @@ def plotly_meanstd_bar(data=None, config=None, **kwargs):
         init_mode='mean_std',  # mean_std, mean, elements
         layout=dict(
 
-            default_xaxis=dict(),  # if several subplots, then these are the default values for all xaxis config in fig.layout
-            default_yaxis=dict(),  # if several subplots, then these are the default values for all yaxis config in fig.layout
+            default_xaxis=dict(),
+            # if several subplots, then these are the default values for all xaxis config in fig.layout
+            default_yaxis=dict(),
+            # if several subplots, then these are the default values for all yaxis config in fig.layout
 
             xaxis=dict(),
             yaxis=dict(),

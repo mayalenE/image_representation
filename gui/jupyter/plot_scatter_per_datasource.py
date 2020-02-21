@@ -1,6 +1,8 @@
 import goalrepresent
 
-def plot_scatter_per_datasource(experiment_ids=None, repetition_ids=None, data_source=None, data=None, config=None, **kwargs):
+
+def plot_scatter_per_datasource(experiment_ids=None, repetition_ids=None, data_source=None, data=None, config=None,
+                                **kwargs):
     default_config = dict(
         default_mean_label='<exp_id>',
         mean_labels=[]
@@ -27,7 +29,10 @@ def plot_scatter_per_datasource(experiment_ids=None, repetition_ids=None, data_s
         cur_data_source_data = []
 
         for experiment_id in experiment_ids:
-            cur_data_source_data.append(goalrepresent.gui.jupyter.misc.get_experiment_data(data=data, experiment_id=experiment_id, data_source=cur_data_source, repetition_ids=repetition_ids))
+            cur_data_source_data.append(
+                goalrepresent.gui.jupyter.misc.get_experiment_data(data=data, experiment_id=experiment_id,
+                                                                   data_source=cur_data_source,
+                                                                   repetition_ids=repetition_ids))
 
         plot_data.append(cur_data_source_data)
 
@@ -39,7 +44,7 @@ def plot_scatter_per_datasource(experiment_ids=None, repetition_ids=None, data_s
         if len(config.mean_labels) > data_idx:
             mean_label = config.mean_labels[data_idx]
         mean_label = goalrepresent.gui.jupyter.misc.replace_str_from_dict(str(mean_label), {'exp_idx': data_idx,
-                                                                                       'exp_id': experiment_id})
+                                                                                            'exp_id': experiment_id})
 
         new_mean_labels.append(mean_label)
     config.mean_labels = new_mean_labels

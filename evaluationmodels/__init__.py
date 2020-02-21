@@ -1,5 +1,3 @@
-import goalrepresent.evaluationmodels.classification
-import goalrepresent.evaluationmodels.reconstruction
 from goalrepresent.evaluationmodels.classification.core import BaseClassifierModel
 from goalrepresent.evaluationmodels.classification.fcclassifier import FCClassifierModel
 from goalrepresent.evaluationmodels.classification.svmclassifier import SVMClassifierModel

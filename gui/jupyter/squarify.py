@@ -1,7 +1,7 @@
 # Code from https://github.com/laserson/squarify
 # FILE: /squarify/__init__.py
 
-#Copyright 2013 Uri Laserson
+# Copyright 2013 Uri Laserson
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -138,7 +138,7 @@ def squarify(sizes, x, y, dx, dy):
     # figure out where 'split' should be
     i = 1
     while i < len(sizes) and worst_ratio(sizes[:i], x, y, dx, dy) >= worst_ratio(
-        sizes[: (i + 1)], x, y, dx, dy
+            sizes[: (i + 1)], x, y, dx, dy
     ):
         i += 1
     current = sizes[:i]
@@ -183,17 +183,17 @@ def normalize_sizes(sizes, dx, dy):
 
 
 def plot(
-    sizes,
-    norm_x=100,
-    norm_y=100,
-    color=None,
-    label=None,
-    value=None,
-    ax=None,
-    pad=False,
-    bar_kwargs=None,
-    text_kwargs=None,
-    **kwargs
+        sizes,
+        norm_x=100,
+        norm_y=100,
+        color=None,
+        label=None,
+        value=None,
+        ax=None,
+        pad=False,
+        bar_kwargs=None,
+        text_kwargs=None,
+        **kwargs
 ):
     """Plotting with Matplotlib.
     Parameters
