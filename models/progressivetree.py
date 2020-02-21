@@ -55,10 +55,26 @@ class Node(nn.Module):
             self.reset_accumulator()
             
         return leaf_accumulator
-        
-        
-            
     
+        
+    def get_node_pathes(self, path_taken=[]):
+        if self.depth == 0:
+            path_taken = "0"
+        if self.leaf:
+            return ([path_taken])
+  
+        else:
+            self.leaf_accumulator.extend([path_taken])
+            left_leaf_accumulator = self.left.get_node_pathes(path_taken=path_taken+"0")
+            self.leaf_accumulator.extend(left_leaf_accumulator)
+            right_leaf_accumulator = self.right.get_node_pathes(path_taken=path_taken+"1")
+            self.leaf_accumulator.extend(right_leaf_accumulator)
+            leaf_accumulator = self.leaf_accumulator
+            self.reset_accumulator()
+            
+        return leaf_accumulator
+        
+        
     def split_node(self, z_library=None, z_fitness=None):
         """
         z_library: n_samples * n_latents
@@ -100,7 +116,10 @@ class Node(nn.Module):
                 y = z_fitness
             else:
                 y = z_fitness > np.median(z_fitness)
-            self.boundary= svm.SVC(kernel='linear', C=1000, class_weight='balanced').fit(X, y)
+            #center_0 = np.mean(X[y], axis=0)
+            #center_1 = np.mean(X[1 - y], axis=0)
+            #self.boundary = cluster.KMeans(n_clusters=2, init=np.stack([center_0,center_1])).fit(X)
+            self.boundary = svm.SVC(kernel='rbf', C=100).fit(X, y)
         return
     
     def depth_first_forward(self, x, tree_path_taken=None, x_ids=None, ancestors_lf=None, ancestors_gf=None, ancestors_gfi=None, ancestors_lfi=None, ancestors_recon_x=None):
@@ -139,6 +158,55 @@ class Node(nn.Module):
             x_ids_right = np.where(x_side==1)[0]
             if len(x_ids_right) > 0:
                 right_leaf_accumulator = self.right.depth_first_forward(x[x_ids_right], [path + "1" for path in [tree_path_taken[x_idx] for x_idx in x_ids_right]],[x_ids[x_idx] for x_idx in x_ids_right], 
+                                                                        [ancestors_lf[i][x_ids_right] for i in range(self.depth+1)], [ancestors_gf[i][x_ids_right] for i in range(self.depth+1)], 
+                                                                        [ancestors_gfi[i][x_ids_right] for i in range(self.depth+1)], [ancestors_lfi[i][x_ids_right] for i in range(self.depth+1)], 
+                                                                        [ancestors_recon_x[i][x_ids_right] for i in range(self.depth+1)])
+                self.leaf_accumulator.extend(right_leaf_accumulator)
+            
+            leaf_accumulator = self.leaf_accumulator
+            self.reset_accumulator()
+            
+        return leaf_accumulator
+    
+    
+    def depth_first_forward_all_nodes_preorder(self, x, tree_path_taken=None, x_ids=None, ancestors_lf=None, ancestors_gf=None, ancestors_gfi=None, ancestors_lfi=None, ancestors_recon_x=None):
+        if self.depth == 0:
+            tree_path_taken = ["0"]*len(x) # all the paths start with "O"
+            x_ids = list(range(len(x)))
+            ancestors_lf = []
+            ancestors_gf = []
+            ancestors_gfi = []
+            ancestors_lfi = []
+            ancestors_recon_x = []
+        
+        node_outputs = self.node_forward(x,ancestors_lf, ancestors_gf, ancestors_gfi, ancestors_lfi, ancestors_recon_x)
+        
+        ancestors_lf.append(node_outputs["lf"].detach())
+        ancestors_gf.append(node_outputs["gf"].detach())
+        ancestors_gfi.append(node_outputs["gfi"].detach())
+        ancestors_lfi.append(node_outputs["lfi"].detach())
+        ancestors_recon_x.append(node_outputs["recon_x"].detach())
+    
+        if self.leaf:
+            # return path_taken, x_ids, leaf_outputs
+            return ([[tree_path_taken, x_ids, node_outputs]])
+  
+        else:
+            self.leaf_accumulator.extend([[tree_path_taken, x_ids, node_outputs]])
+            
+            z = node_outputs["z"]
+            x_side = self.get_children_node(z)
+            x_ids_left = np.where(x_side==0)[0]
+            if len(x_ids_left) > 0:
+                left_leaf_accumulator = self.left.depth_first_forward_all_nodes_preorder(x[x_ids_left], [path + "0" for path in [tree_path_taken[x_idx] for x_idx in x_ids_left]], [x_ids[x_idx] for x_idx in x_ids_left], 
+                                                                      [ancestors_lf[i][x_ids_left] for i in range(self.depth+1)], [ancestors_gf[i][x_ids_left] for i in range(self.depth+1)], 
+                                                                        [ancestors_gfi[i][x_ids_left] for i in range(self.depth+1)], [ancestors_lfi[i][x_ids_left] for i in range(self.depth+1)], 
+                                                                        [ancestors_recon_x[i][x_ids_left] for i in range(self.depth+1)])
+                self.leaf_accumulator.extend(left_leaf_accumulator)
+            
+            x_ids_right = np.where(x_side==1)[0]
+            if len(x_ids_right) > 0:
+                right_leaf_accumulator = self.right.depth_first_forward_all_nodes_preorder(x[x_ids_right], [path + "1" for path in [tree_path_taken[x_idx] for x_idx in x_ids_right]],[x_ids[x_idx] for x_idx in x_ids_right], 
                                                                         [ancestors_lf[i][x_ids_right] for i in range(self.depth+1)], [ancestors_gf[i][x_ids_right] for i in range(self.depth+1)], 
                                                                         [ancestors_gfi[i][x_ids_right] for i in range(self.depth+1)], [ancestors_lfi[i][x_ids_right] for i in range(self.depth+1)], 
                                                                         [ancestors_recon_x[i][x_ids_right] for i in range(self.depth+1)])
@@ -194,6 +262,8 @@ class VAENode(Node, models.VAEModel):
         if self.depth > 0:
             self.network.encoder = ConnectedEncoder(parent_network.encoder, depth, connect_lf = True, connect_gf = False)
             self.network.decoder = ConnectedDecoder(parent_network.decoder, depth, connect_gfi = True, connect_lfi = True, connect_recon = True)
+            
+        self.set_device(self.config.device.use_gpu)
             
     
     def node_forward_from_encoder(self, encoder_outputs, ancestors_gfi=None, ancestors_lfi=None, ancestors_recon_x=None):
@@ -254,7 +324,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
         trainable_parameters = [p for p in self.network.parameters() if p.requires_grad]
         optimizer_class = eval("torch.optim.{}".format(optimizer_name))
         self.optimizer = optimizer_class(trainable_parameters, **optimizer_parameters) 
-        
+        self.network.optimizer_group_id = 0
         # update config
         self.config.optimizer.name = optimizer_name
         self.config.optimizer.parameters = gr.config.update_config(optimizer_parameters, self.config.optimizer.parameters)
@@ -308,15 +378,22 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
         if node_path is None:
             warnings.warn("WARNING: computing the embedding in root node of progressive tree as no path specified")
             node_path = "0"
+        n_latents = self.network.config.network.parameters.n_latents
+        z = torch.Tensor().new_full((len(x), n_latents), float("nan"))
+        x = self.push_variable_to_device(x)
         self.eval()
         with torch.no_grad():
-            model_outputs = self.forward(x)
-            z = model_outputs["z"]
-            path_taken =  model_outputs["path_taken"]
-            # put NaN values for z not in node_path
-            for x_idx in np.where(np.array(path_taken, copy=False) != node_path)[0]:
-                z[x_idx] = float('NaN')
-        
+            all_nodes_outputs = self.network.depth_first_forward_all_nodes_preorder(x)
+            for node_idx in range(len(all_nodes_outputs)):
+                cur_node_path = all_nodes_outputs[node_idx][0][0]
+                if cur_node_path != node_path:
+                    continue;
+                else:
+                    cur_node_x_ids = all_nodes_outputs[node_idx][1]
+                    cur_node_outputs = all_nodes_outputs[node_idx][2]
+                    for idx in range(len(cur_node_x_ids)):
+                        z[cur_node_x_ids[idx]] = cur_node_outputs["z"][idx] 
+                    break;
         return z
     
     def split_node(self, node_path, z_library=None, z_fitness=None):
@@ -324,8 +401,15 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
         node = self.network.get_child_node(node_path)
         node.split_node(z_library=z_library, z_fitness=z_fitness)
         self.split_history[node_path] = {"depth": node.depth, "leaf": node.leaf, "boundary": node.boundary, "feature_range": node.feature_range}
+        
+        # remove group from optimizer and add one group per children
+        del self.optimizer.param_groups[node.optimizer_group_id]
+        node.optimizer_group_id = None
+        n_groups = len(self.optimizer.param_groups)
         self.optimizer.add_param_group({"params": node.left.parameters()})
+        node.left.optimizer_group_id = n_groups
         self.optimizer.add_param_group({"params": node.right.parameters()})
+        node.right.optimizer_group_id = n_groups + 1
     
     
     def run_training (self, train_loader, n_epochs, valid_loader = None, logger=None):
@@ -368,16 +452,18 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                         logger.add_scalars('loss/{}'.format(k), {'valid': v}, self.n_epochs)
                     logger.add_text('time/valid', 'Valid Epoch {}: {:.3f} secs'.format(self.n_epochs, t3-t2), self.n_epochs)
                 
-                valid_loss = valid_losses['total']
-                if valid_loss < best_valid_loss:
-                    best_valid_loss = valid_loss
-                    self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
+                if valid_losses:
+                    valid_loss = valid_losses['total']
+                    if valid_loss < best_valid_loss:
+                        best_valid_loss = valid_loss
+                        self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
         
                     
                     
     def train_epoch (self, train_loader, logger=None):
         self.train()
         losses = {}
+        taken_pathes = []
         for data in train_loader:
             x =  data['obs']
             x = self.push_variable_to_device(x)
@@ -398,11 +484,11 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                     losses[k] = np.expand_dims(v.detach().cpu().numpy(), axis = -1)
                 else:
                     losses[k]= np.vstack([losses[k], np.expand_dims(v.detach().cpu().numpy(), axis = -1)])
+            taken_pathes += model_outputs["path_taken"]
         
         self.n_epochs += 1
         
         # LOGGER SAVE RESULT PER LEAF
-        taken_pathes = model_outputs["path_taken"]
         for leaf_path in list(set(taken_pathes)):
             if len(leaf_path) > 1:
                 leaf_x_ids = np.where(np.array(taken_pathes, copy=False) == leaf_path)[0]
@@ -479,12 +565,15 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 leaf_embedding_samples = torch.cat([embedding_samples[i] for i in leaf_x_ids])
                 leaf_embedding_metadata = torch.cat([embedding_metadata[i] for i in leaf_x_ids])
                 leaf_embedding_images = torch.cat([embedding_images[i] for i in leaf_x_ids])
-                logger.add_embedding(
-                        leaf_embedding_samples,
-                        metadata=leaf_embedding_metadata,
-                        label_img=leaf_embedding_images,
-                        global_step=self.n_epochs,
-                        tag = "leaf_{}".format(leaf_path))
+                try:
+                    logger.add_embedding(
+                            leaf_embedding_samples,
+                            metadata=leaf_embedding_metadata,
+                            label_img=leaf_embedding_images,
+                            global_step=self.n_epochs,
+                            tag = "leaf_{}".format(leaf_path))
+                except:
+                    pass
             
             if record_valid_images:
                 n_images = min(len(leaf_x_ids), 40)
@@ -500,7 +589,10 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]
                 vizu_tensor_list[1::2] = [output_images[n] for n in range(n_images)]
                 img = make_grid(vizu_tensor_list, nrow = 2, padding=0)
-                logger.add_image("leaf_{}".format(leaf_path), img, self.n_epochs)
+                try:
+                    logger.add_image("leaf_{}".format(leaf_path), img, self.n_epochs)
+                except:
+                    pass
                     
             
                 

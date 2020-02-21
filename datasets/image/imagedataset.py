@@ -128,7 +128,7 @@ class DatasetHDF5(Dataset):
             self.has_labels = bool('labels' in file[self.split])
             if self.has_labels:
                 label_dtype = file[self.split]['labels'].dtype
-                if (label_dtype == int):
+                if (label_dtype == int) or (label_dtype == "<f4"):
                     self.n_classes = np.max(file[self.split]['labels']) - np.min(file[self.split]['labels']) + 1
                 elif (label_dtype == np.bool):
                     self.n_classes = len(file[self.split]['labels'][0])
@@ -154,5 +154,7 @@ class DatasetHDF5(Dataset):
         label = -1
         if self.has_labels:
             label = self.data_group['labels'][idx]
+            if label.dtype == float:
+                label = int(label)
 
         return {'obs': img_tensor, 'label': label}
