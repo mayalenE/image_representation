@@ -18,8 +18,9 @@ class SingleModelRepresentation(gr.BaseRepresentation):
         
         # training parameters
         default_config.training = gr.Config()
-        default_config.training.n_epochs = 0
         default_config.training.output_folder = None
+        default_config.training_data_type = "iid" # either "iid" or "sequential"
+        default_config.training.n_epochs = 0
         
         default_config.testing = gr.Config()
         default_config.testing.output_folder = None
@@ -43,6 +44,8 @@ class SingleModelRepresentation(gr.BaseRepresentation):
         self.config.model.config = gr.config.update_config(model_config, self.config.model.config)
         
     def run_training(self, train_loader, valid_loader, training_config, keep_best_model=True, logging=True):
+        training_config = gr.config.update_config(training_config, self.config.training)
+
         # prepare output folders
         output_folder = training_config.output_folder
         if (output_folder is not None) and (not os.path.exists (output_folder)):
@@ -52,6 +55,11 @@ class SingleModelRepresentation(gr.BaseRepresentation):
         if (checkpoint_folder is not None) and (not os.path.exists (checkpoint_folder)):
             os.makedirs(checkpoint_folder)
         self.model.config.checkpoint.folder = checkpoint_folder
+
+        evaluation_folder = os.path.join(output_folder, "evaluation")
+        if (evaluation_folder is not None) and (not os.path.exists(evaluation_folder)):
+            os.makedirs(evaluation_folder)
+        self.model.config.evaluation.folder = evaluation_folder
         
         # prepare logger
         if logging: 
@@ -62,9 +70,14 @@ class SingleModelRepresentation(gr.BaseRepresentation):
             logger = SummaryWriter(logging_folder, 'w')
         else:
             logger = None
-        
-        # run_training
-        self.model.run_training(train_loader, training_config.n_epochs, valid_loader, logger=logger)
+
+        # run training
+        if training_config.training_data_type == "iid":
+            self.model.run_training(train_loader, training_config, valid_loader, logger=logger)
+        elif training_config.training_data_type == "sequential":
+            self.model.run_sequential_training(train_loader, training_config, valid_loader, logger=logger)
+        else:
+            raise ValueError('The training data type must be "iid" or "sequential"')
         
         # export scalar data to JSON for external processing
         if logger is not None:
@@ -81,9 +94,9 @@ class SingleModelRepresentation(gr.BaseRepresentation):
                 self.model.n_epochs = cur_n_epochs
         
         # update config
-        self.config.training = gr.config.update_config(training_config, self.config.training)        
-        
-        
+        self.config.training = gr.config.update_config(training_config, self.config.training)
+
+
     def run_testing(self, test_loader, testing_config, train_loader=None, valid_loader=None, logging=True):
         # prepare output folders
         output_folder = testing_config.output_folder

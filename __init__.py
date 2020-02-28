@@ -1,5 +1,12 @@
 from goalrepresent.config import Config
 from goalrepresent.core import BaseEncoder, BaseModel, BaseEvaluationModel, BaseRepresentation
+import goalrepresent.datasets
+import goalrepresent.dnn
+import goalrepresent.models
+import goalrepresent.representations
+import goalrepresent.evaluationmodels
+import goalrepresent.gui
+
 
 
 # version meaning: <major-release>.<non-compatible-update>.<compatible-update>

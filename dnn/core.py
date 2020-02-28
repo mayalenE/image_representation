@@ -48,16 +48,22 @@ class BaseDNN(nn.Module):
         default_config.optimizer.parameters.lr = 1e-3
         default_config.optimizer.parameters.weight_decay = 1e-5
 
-        # logging config (will save every X epochs)
+        # In training folder:
+        ## logging (will save every X epochs)
         default_config.logging = gr.Config()
         default_config.logging.record_loss_every = 1
         default_config.logging.record_valid_images_every = 1
         default_config.logging.record_embeddings_every = 1
 
-        # checkpoint config
+        ## checkpoints (will save model every X epochs)
         default_config.checkpoint = gr.Config()
         default_config.checkpoint.folder = None
         default_config.checkpoint.save_model_every = 10
+
+        ## evaluation (when we do testing during training, save every X epochs)
+        default_config.evaluation = gr.Config()
+        default_config.evaluation.folder = None
+        default_config.evaluation.save_results_every = 1
 
         return default_config
 

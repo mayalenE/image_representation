@@ -25,7 +25,7 @@ class HOLMESDataset(Dataset):
         default_config = gr.Config()
         default_config.data_augmentation = False
         default_config.transform = None
-        default_config.target_transform = False
+        default_config.target_transform = None
         default_config.download = True
 
         return default_config
@@ -129,6 +129,9 @@ class MNISTDataset(torchvision.datasets.MNIST):
         self.labels = self.targets
         del self.targets
 
+    def __len__(self):
+        return len(self.images)
+
     def __getitem__(self, index):
        return {'obs': self.images[index], 'label': self.labels[index]}
 
@@ -154,6 +157,9 @@ class SVHNDataset(torchvision.datasets.SVHN):
         del self.data
 
         self.labels = torch.from_numpy(self.labels)
+
+    def __len__(self):
+        return len(self.images)
 
     def __getitem__(self, index):
        return {'obs': self.images[index], 'label': self.labels[index]}
@@ -186,6 +192,9 @@ class CIFAR10Dataset(torchvision.datasets.CIFAR10):
 
         self.labels = self.targets
         del self.targets
+
+    def __len__(self):
+        return len(self.images)
 
     def __getitem__(self, index):
        return {'obs': self.images[index], 'label': self.labels[index]}
@@ -220,6 +229,9 @@ class CIFAR100Dataset(torchvision.datasets.CIFAR100):
 
         self.labels = self.targets
         del self.targets
+
+    def __len__(self):
+        return len(self.images)
 
     def __getitem__(self, index):
        return {'obs': self.images[index], 'label': self.labels[index]}

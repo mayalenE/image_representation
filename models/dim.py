@@ -266,10 +266,13 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
         x = self.push_variable_to_device(x)
         return self.network.encoder.calc_embedding(x)
 
-    def run_training(self, train_loader, n_epochs, valid_loader=None, logger=None):
+    def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
         """
         logger: tensorboard X summary writer
         """
+        if "n_epochs" not in training_config:
+            training_config.n_epochs = 0
+
         # Save the graph in the logger
         if logger is not None:
             dummy_input = torch.FloatTensor(1, self.config.network.parameters.n_channels,
@@ -285,7 +288,7 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
             best_valid_loss = sys.float_info.max
             do_validation = True
 
-        for epoch in range(n_epochs):
+        for epoch in range(training_config.n_epochs):
             t0 = time.time()
             train_losses = self.train_epoch(train_loader, logger=logger)
             t1 = time.time()
