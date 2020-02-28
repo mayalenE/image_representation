@@ -126,24 +126,19 @@ class Node(nn.Module):
             self.boundary = svm.SVC(kernel='linear', C=10).fit(X, y)
         return
 
-    def depth_first_forward(self, x, tree_path_taken=None, x_ids=None, ancestors_lf=None, ancestors_gf=None,
-                            ancestors_gfi=None, ancestors_lfi=None, ancestors_recon_x=None):
+    def depth_first_forward(self, x, tree_path_taken=None, x_ids=None, parent_lf=None, parent_gf=None,
+                            parent_gfi=None, parent_lfi=None, parent_recon_x=None):
         if self.depth == 0:
             tree_path_taken = ["0"] * len(x)  # all the paths start with "O"
             x_ids = list(range(len(x)))
-            ancestors_lf = []
-            ancestors_gf = []
-            ancestors_gfi = []
-            ancestors_lfi = []
-            ancestors_recon_x = []
 
-        node_outputs = self.node_forward(x, ancestors_lf, ancestors_gf, ancestors_gfi, ancestors_lfi, ancestors_recon_x)
+        node_outputs = self.node_forward(x, parent_lf, parent_gf, parent_gfi, parent_lfi, parent_recon_x)
 
-        ancestors_lf.append(node_outputs["lf"].detach())
-        ancestors_gf.append(node_outputs["gf"].detach())
-        ancestors_gfi.append(node_outputs["gfi"].detach())
-        ancestors_lfi.append(node_outputs["lfi"].detach())
-        ancestors_recon_x.append(node_outputs["recon_x"].detach())
+        parent_lf = node_outputs["lf"].detach()
+        parent_gf = node_outputs["gf"].detach()
+        parent_gfi = node_outputs["gfi"].detach()
+        parent_lfi = node_outputs["lfi"].detach()
+        parent_recon_x = node_outputs["recon_x"].detach()
 
         if self.leaf:
             # return path_taken, x_ids, leaf_outputs
@@ -158,16 +153,11 @@ class Node(nn.Module):
                                                                                       [tree_path_taken[x_idx] for x_idx
                                                                                        in x_ids_left]],
                                                                       [x_ids[x_idx] for x_idx in x_ids_left],
-                                                                      [ancestors_lf[i][x_ids_left] for i in
-                                                                       range(self.depth + 1)],
-                                                                      [ancestors_gf[i][x_ids_left] for i in
-                                                                       range(self.depth + 1)],
-                                                                      [ancestors_gfi[i][x_ids_left] for i in
-                                                                       range(self.depth + 1)],
-                                                                      [ancestors_lfi[i][x_ids_left] for i in
-                                                                       range(self.depth + 1)],
-                                                                      [ancestors_recon_x[i][x_ids_left] for i in
-                                                                       range(self.depth + 1)])
+                                                                      parent_lf[x_ids_left],
+                                                                      parent_gf[x_ids_left],
+                                                                      parent_gfi[x_ids_left],
+                                                                      parent_lfi[x_ids_left],
+                                                                      parent_recon_x[x_ids_left])
                 self.leaf_accumulator.extend(left_leaf_accumulator)
 
             x_ids_right = np.where(x_side == 1)[0]
@@ -176,16 +166,11 @@ class Node(nn.Module):
                                                                                          [tree_path_taken[x_idx] for
                                                                                           x_idx in x_ids_right]],
                                                                         [x_ids[x_idx] for x_idx in x_ids_right],
-                                                                        [ancestors_lf[i][x_ids_right] for i in
-                                                                         range(self.depth + 1)],
-                                                                        [ancestors_gf[i][x_ids_right] for i in
-                                                                         range(self.depth + 1)],
-                                                                        [ancestors_gfi[i][x_ids_right] for i in
-                                                                         range(self.depth + 1)],
-                                                                        [ancestors_lfi[i][x_ids_right] for i in
-                                                                         range(self.depth + 1)],
-                                                                        [ancestors_recon_x[i][x_ids_right] for i in
-                                                                         range(self.depth + 1)])
+                                                                        parent_lf[x_ids_right],
+                                                                        parent_gf[x_ids_right],
+                                                                        parent_gfi[x_ids_right],
+                                                                        parent_lfi[x_ids_right],
+                                                                        parent_recon_x[x_ids_right])
                 self.leaf_accumulator.extend(right_leaf_accumulator)
 
             leaf_accumulator = self.leaf_accumulator
@@ -193,25 +178,19 @@ class Node(nn.Module):
 
         return leaf_accumulator
 
-    def depth_first_forward_all_nodes_preorder(self, x, tree_path_taken=None, x_ids=None, ancestors_lf=None,
-                                               ancestors_gf=None, ancestors_gfi=None, ancestors_lfi=None,
-                                               ancestors_recon_x=None):
+    def depth_first_forward_all_nodes_preorder(self, x, tree_path_taken=None, x_ids=None, parent_lf=None, parent_gf=None,
+                            parent_gfi=None, parent_lfi=None, parent_recon_x=None):
         if self.depth == 0:
             tree_path_taken = ["0"] * len(x)  # all the paths start with "O"
             x_ids = list(range(len(x)))
-            ancestors_lf = []
-            ancestors_gf = []
-            ancestors_gfi = []
-            ancestors_lfi = []
-            ancestors_recon_x = []
 
-        node_outputs = self.node_forward(x, ancestors_lf, ancestors_gf, ancestors_gfi, ancestors_lfi, ancestors_recon_x)
+        node_outputs = self.node_forward(x, parent_lf, parent_gf, parent_gfi, parent_lfi, parent_recon_x)
 
-        ancestors_lf.append(node_outputs["lf"].detach())
-        ancestors_gf.append(node_outputs["gf"].detach())
-        ancestors_gfi.append(node_outputs["gfi"].detach())
-        ancestors_lfi.append(node_outputs["lfi"].detach())
-        ancestors_recon_x.append(node_outputs["recon_x"].detach())
+        parent_lf = node_outputs["lf"].detach()
+        parent_gf = node_outputs["gf"].detach()
+        parent_gfi = node_outputs["gfi"].detach()
+        parent_lfi = node_outputs["lfi"].detach()
+        parent_recon_x = node_outputs["recon_x"].detach()
 
         if self.leaf:
             # return path_taken, x_ids, leaf_outputs
@@ -224,52 +203,28 @@ class Node(nn.Module):
             x_side = self.get_children_node(z)
             x_ids_left = np.where(x_side == 0)[0]
             if len(x_ids_left) > 0:
-                left_leaf_accumulator = self.left.depth_first_forward_all_nodes_preorder(x[x_ids_left],
-                                                                                         [path + "0" for path in
-                                                                                          [tree_path_taken[x_idx] for
-                                                                                           x_idx in x_ids_left]],
-                                                                                         [x_ids[x_idx] for x_idx in
-                                                                                          x_ids_left],
-                                                                                         [ancestors_lf[i][x_ids_left]
-                                                                                          for i in
-                                                                                          range(self.depth + 1)],
-                                                                                         [ancestors_gf[i][x_ids_left]
-                                                                                          for i in
-                                                                                          range(self.depth + 1)],
-                                                                                         [ancestors_gfi[i][x_ids_left]
-                                                                                          for i in
-                                                                                          range(self.depth + 1)],
-                                                                                         [ancestors_lfi[i][x_ids_left]
-                                                                                          for i in
-                                                                                          range(self.depth + 1)],
-                                                                                         [ancestors_recon_x[i][
-                                                                                              x_ids_left] for i in
-                                                                                          range(self.depth + 1)])
+                left_leaf_accumulator = self.left.depth_first_forward(x[x_ids_left], [path + "0" for path in
+                                                                                      [tree_path_taken[x_idx] for x_idx
+                                                                                       in x_ids_left]],
+                                                                      [x_ids[x_idx] for x_idx in x_ids_left],
+                                                                      parent_lf[x_ids_left],
+                                                                      parent_gf[x_ids_left],
+                                                                      parent_gfi[x_ids_left],
+                                                                      parent_lfi[x_ids_left],
+                                                                      parent_recon_x[x_ids_left])
                 self.leaf_accumulator.extend(left_leaf_accumulator)
 
             x_ids_right = np.where(x_side == 1)[0]
             if len(x_ids_right) > 0:
-                right_leaf_accumulator = self.right.depth_first_forward_all_nodes_preorder(x[x_ids_right],
-                                                                                           [path + "1" for path in
-                                                                                            [tree_path_taken[x_idx] for
-                                                                                             x_idx in x_ids_right]],
-                                                                                           [x_ids[x_idx] for x_idx in
-                                                                                            x_ids_right],
-                                                                                           [ancestors_lf[i][x_ids_right]
-                                                                                            for i in
-                                                                                            range(self.depth + 1)],
-                                                                                           [ancestors_gf[i][x_ids_right]
-                                                                                            for i in
-                                                                                            range(self.depth + 1)],
-                                                                                           [ancestors_gfi[i][
-                                                                                                x_ids_right] for i in
-                                                                                            range(self.depth + 1)], [
-                                                                                               ancestors_lfi[i][
-                                                                                                   x_ids_right] for i in
-                                                                                               range(self.depth + 1)],
-                                                                                           [ancestors_recon_x[i][
-                                                                                                x_ids_right] for i in
-                                                                                            range(self.depth + 1)])
+                right_leaf_accumulator = self.right.depth_first_forward(x[x_ids_right], [path + "1" for path in
+                                                                                         [tree_path_taken[x_idx] for
+                                                                                          x_idx in x_ids_right]],
+                                                                        [x_ids[x_idx] for x_idx in x_ids_right],
+                                                                        parent_lf[x_ids_right],
+                                                                        parent_gf[x_ids_right],
+                                                                        parent_gfi[x_ids_right],
+                                                                        parent_lfi[x_ids_right],
+                                                                        parent_recon_x[x_ids_right])
                 self.leaf_accumulator.extend(right_leaf_accumulator)
 
             leaf_accumulator = self.leaf_accumulator
@@ -277,16 +232,16 @@ class Node(nn.Module):
 
         return leaf_accumulator
 
-    def node_forward(self, x, ancestors_lf=None, ancestors_gf=None, ancestors_gfi=None, ancestors_lfi=None,
-                     ancestors_recon_x=None):
+    def node_forward(self, x, parent_lf=None, parent_gf=None, parent_gfi=None, parent_lfi=None,
+                     parent_recon_x=None):
         if torch._C._get_tracing_state():
-            return self.forward_for_graph_tracing(x, ancestors_lf, ancestors_gf, ancestors_gfi, ancestors_lfi,
-                                                  ancestors_recon_x)
+            return self.forward_for_graph_tracing(x, parent_lf, parent_gf, parent_gfi, parent_lfi,
+                                                  parent_recon_x)
         if self.depth == 0:
             encoder_outputs = self.network.encoder(x)
         else:
-            encoder_outputs = self.network.encoder(x, ancestors_lf, ancestors_gf)
-        model_outputs = self.node_forward_from_encoder(encoder_outputs, ancestors_gfi, ancestors_lfi, ancestors_recon_x)
+            encoder_outputs = self.network.encoder(x, parent_lf, parent_gf)
+        model_outputs = self.node_forward_from_encoder(encoder_outputs, parent_gfi, parent_lfi, parent_recon_x)
         return model_outputs
 
     def get_boundary_side(self, z):
@@ -328,13 +283,13 @@ class VAENode(Node, models.VAEModel):
 
         self.set_device(self.config.device.use_gpu)
 
-    def node_forward_from_encoder(self, encoder_outputs, ancestors_gfi=None, ancestors_lfi=None,
-                                  ancestors_recon_x=None):
+    def node_forward_from_encoder(self, encoder_outputs, parent_gfi=None, parent_lfi=None,
+                                  parent_recon_x=None):
         if self.depth == 0:
             decoder_outputs = self.network.decoder(encoder_outputs["z"])
         else:
-            decoder_outputs = self.network.decoder(encoder_outputs["z"], ancestors_gfi, ancestors_lfi,
-                                                   ancestors_recon_x)
+            decoder_outputs = self.network.decoder(encoder_outputs["z"], parent_gfi, parent_lfi,
+                                                   parent_recon_x)
         model_outputs = encoder_outputs
         model_outputs.update(decoder_outputs)
         return model_outputs
@@ -553,7 +508,8 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
         split_trigger = training_config.split_trigger
         if split_trigger["active"] and ("n_max_splits" not in split_trigger or split_trigger.n_max_splits > 1e8):
             split_trigger.n_max_splits = 1e8 # maximum splits
-        n_epochs_min_between_split = 10 # a node should at least be trained one epoch before being splitted again
+        if split_trigger["active"] and ("n_epochs_min_between_splits" not in split_trigger):
+            split_trigger.n_epochs_min_between_splits = 10 # a node should at least be trained X epoch before being splitted again
         epochs_since_split = 0
         n_epochs_total = np.asarray(n_epochs_per_episodes).sum()
 
@@ -656,7 +612,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                         # check if split condition is met in one node
                         if hasattr(leaf_node, "trigger_split_signal") and leaf_node.trigger_split_signal == True:
                             # before split check if the model is elligible for expansion:
-                            if len(self.split_history) < split_trigger.n_max_splits and epochs_since_split > n_epochs_min_between_split and epoch < (n_epochs_total-n_epochs_min_between_split):
+                            if len(self.split_history) < split_trigger.n_max_splits and epochs_since_split > split_trigger.n_epochs_min_between_splits and epoch < (n_epochs_total-split_trigger.n_epochs_min_between_splits):
                                 # Split Node
                                 self.split_node(leaf_node_path, leaf_node.split_z_library, leaf_node.split_z_fitness)
                                 leaf_node.trigger_split_signal = False
@@ -764,7 +720,9 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                     # v1
                     #leaf_node.split_z_fitness = leaf_losses
                     # v2
-                    leaf_node.split_z_fitness = (leaf_losses > split_trigger.loss_threshold)
+                    #leaf_node.split_z_fitness = (leaf_losses > split_trigger.loss_threshold)
+                    # v3
+                    leaf_node.split_z_fitness = None
                 # save poor data buffer
                 if not os.path.exists(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer")):
                     os.makedirs(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer"))
@@ -1029,55 +987,53 @@ class ConnectedEncoder(gr.dnn.networks.encoders.BaseDNNEncoder):
 
         # add lateral connections
         ## lf
-        self.lf_c = nn.ModuleList()
         if self.connect_lf:
             if self.lf.out_connection_type[0] == "conv":
                 connection_channels = self.lf.out_connection_type[1]
                 for ancestor_depth in range(self.depth):
-                    self.lf_c.append(
-                        nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1),
-                                      nn.ReLU()))
+                    self.lf_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1), nn.ReLU())
             elif self.lf.out_connection_type[0] == "lin":
                 connection_dim = self.lf.out_connection_type[1]
                 for ancestor_depth in range(self.depth):
-                    self.lf_c.append(nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU()))
+                    self.lf_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
 
         ## gf
-        self.gf_c = nn.ModuleList()
         if self.connect_gf:
             if self.gf.out_connection_type[0] == "conv":
                 connection_channels = self.gf.out_connection_type[1]
                 for ancestor_depth in range(self.depth):
-                    self.gf_c.append(
-                        nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1),
-                                      nn.ReLU()))
+                    self.gf_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1), nn.ReLU())
             elif self.gf.out_connection_type[0] == "lin":
                 connection_dim = self.gf.out_connection_type[1]
                 for ancestor_depth in range(self.depth):
-                    self.gf_c.append(nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU()))
+                    self.gf_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
 
         # lf is initialized with parent weights, gf and ef with kaiming, connections with small random weights
         initialization_net = initialization.get_initialization("kaiming_uniform")
         self.gf.apply(initialization_net)
         self.ef.apply(initialization_net)
         initialization_c = initialization.get_initialization("uniform")
-        self.lf_c.apply(initialization_c)
-        self.gf_c.apply(initialization_c)
+        if self.connect_lf:
+            self.lf_c.apply(initialization_c)
+        if self.connect_gf:
+            self.gf_c.apply(initialization_c)
 
-    def forward(self, x, ancestors_lf=None, ancestors_gf=None):
+    def forward(self, x, parent_lf=None, parent_gf=None):
         if torch._C._get_tracing_state():
             return self.forward_for_graph_tracing(x)
 
         # local feature map
         lf = self.lf(x)
-        # loop over the connections
-        for lf_c_idx in range(len(self.lf_c)):
-            lf += self.lf_c[lf_c_idx](ancestors_lf[lf_c_idx])
+        # add the connections
+        if self.connect_lf:
+            lf += self.lf_c(parent_lf)
 
         # global feature map
         gf = self.gf(lf)
-        for gf_c_idx in range(len(self.gf_c)):
-            gf += self.gf_c[gf_c_idx](ancestors_gf[gf_c_idx])
+        # add the connections
+        if self.connect_gf:
+            gf += self.gf_c(parent_gf)
+
         # encoding
         if self.conditional_type == "gaussian":
             mu, logvar = torch.chunk(self.ef(gf), 2, dim=1)
@@ -1095,17 +1051,19 @@ class ConnectedEncoder(gr.dnn.networks.encoders.BaseDNNEncoder):
 
         return encoder_outputs
 
-    def forward_for_graph_tracing(self, x, ancestors_lf=None, ancestors_gf=None):
+    def forward_for_graph_tracing(self, x, parent_lf=None, parent_gf=None):
         # local feature map
         lf = self.lf(x)
-        # loop over the connections
-        for lf_c_idx in range(len(self.lf_c)):
-            lf += self.lf_c[lf_c_idx](ancestors_lf[lf_c_idx])
+        # add the connections
+        if self.connect_lf:
+            lf += self.lf_c(parent_lf)
 
         # global feature map
         gf = self.gf(lf)
-        for gf_c_idx in range(len(self.gf_c)):
-            gf += self.gf_c[gf_c_idx](ancestors_gf[gf_c_idx])
+        # add the connections
+        if self.connect_gf:
+            gf += self.gf_c(parent_gf)
+
         if self.conditional_type == "gaussian":
             mu, logvar = torch.chunk(self.ef(gf), 2, dim=1)
             z = self.reparameterize(mu, logvar)
@@ -1134,45 +1092,33 @@ class ConnectedDecoder(gr.dnn.networks.decoders.BaseDNNDecoder):
 
         # add lateral connections
         ## gfi
-        self.gfi_c = nn.ModuleList()
         if self.connect_gfi:
             if self.efi.out_connection_type[0] == "conv":
                 connection_channels = self.efi.out_connection_type[1]
                 for ancestor_depth in range(self.depth):
-                    self.gfi_c.append(
-                        nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1),
-                                      nn.ReLU()))
+                    self.gfi_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1), nn.ReLU())
             elif self.efi.out_connection_type[0] == "lin":
                 connection_dim = self.efi.out_connection_type[1]
                 for ancestor_depth in range(self.depth):
-                    self.gfi_c.append(nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU()))
+                    self.gfi_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
         ## lfi
-        self.lfi_c = nn.ModuleList()
         if self.connect_lfi:
             if self.gfi.out_connection_type[0] == "conv":
                 connection_channels = self.gfi.out_connection_type[1]
-                for ancestor_depth in range(self.depth):
-                    self.lfi_c.append(
-                        nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1),
-                                      nn.ReLU()))
+                self.lfi_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1), nn.ReLU())
             elif self.gfi.out_connection_type[0] == "lin":
                 connection_dim = self.gfi.out_connection_type[1]
-                for ancestor_depth in range(self.depth):
-                    self.lfi_c.append(nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU()))
+                self.lfi_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
 
         ## lfi
-        self.recon_c = nn.ModuleList()
         if self.connect_recon:
             if self.lfi.out_connection_type[0] == "conv":
                 connection_channels = self.lfi.out_connection_type[1]
                 for ancestor_depth in range(self.depth):
-                    self.recon_c.append(
-                        nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1),
-                                      nn.ReLU()))
+                    self.recon_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1), nn.ReLU())
             elif self.lfi.out_connection_type[0] == "lin":
                 connection_dim = self.lfi.out_connection_type[1]
-                for ancestor_depth in range(self.depth):
-                    self.recon_c.append(nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU()))
+                self.recon_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
 
         # lf is initialized with parent weights, gf and ef with kaiming, connections with small random weights
         initialization_net = initialization.get_initialization("kaiming_uniform")
@@ -1180,59 +1126,63 @@ class ConnectedDecoder(gr.dnn.networks.decoders.BaseDNNDecoder):
         self.gfi.apply(initialization_net)
         self.lfi.apply(initialization_net)
         initialization_c = initialization.get_initialization("uniform")
-        self.gfi_c.apply(initialization_c)
-        self.lfi_c.apply(initialization_c)
-        self.recon_c.apply(initialization_c)
+        if self.connect_gfi:
+            self.gfi_c.apply(initialization_c)
+        if self.connect_lfi:
+            self.lfi_c.apply(initialization_c)
+        if self.connect_recon:
+            self.recon_c.apply(initialization_c)
 
-    def forward(self, z, ancestors_gfi=None, ancestors_lfi=None, ancestors_recon_x=None):
+    def forward(self, z, parent_gfi=None, parent_lfi=None, parent_recon_x=None):
         if torch._C._get_tracing_state():
             return self.forward_for_graph_tracing(z)
 
         if z.dim() == 2 and type(self).__name__ == "DumoulinDecoder":  # B*n_latents -> B*n_latents*1*1
             z = z.unsqueeze(dim=-1).unsqueeze(dim=-1)
 
-            # global feature map
+        # global feature map
         gfi = self.efi(z)
-        # loop over the connections
-        for gfi_c_idx in range(len(self.gfi_c)):
-            gfi += self.gfi_c[gfi_c_idx](ancestors_gfi[gfi_c_idx])
+        # add the connections
+        if self.connect_gfi:
+            gfi += self.gfi_c(parent_gfi)
 
         # local feature map
         lfi = self.gfi(gfi)
-        # loop over the connections
-        for lfi_c_idx in range(len(self.lfi_c)):
-            lfi += self.lfi_c[lfi_c_idx](ancestors_lfi[lfi_c_idx])
+        # add the connections
+        if self.connect_lfi:
+            lfi += self.lfi_c(parent_lfi)
 
         # recon_x
         recon_x = self.lfi(lfi)
-        # loop over the connections
-        for recon_c_idx in range(len(self.recon_c)):
-            recon_x += self.recon_c[recon_c_idx](ancestors_recon_x[recon_c_idx])
+        # add the connections
+        if self.connect_recon:
+            recon_x += self.recon_c(parent_recon_x)
 
         # decoder output
         decoder_outputs = {"z": z, "gfi": gfi, "lfi": lfi, "recon_x": recon_x}
 
         return decoder_outputs
 
-    def forward_for_graph_tracing(self, z, ancestors_gfi=None, ancestors_lfi=None, ancestors_recon_x=None):
+    def forward_for_graph_tracing(self, z,  parent_gfi=None, parent_lfi=None, parent_recon_x=None):
         if z.dim() == 2:  # B*n_latents -> B*n_latents*1*1
             z = z.unsqueeze(dim=-1).unsqueeze(dim=-1)
 
-            # global feature map
+        # global feature map
         gfi = self.efi(z)
-        # loop over the connections
-        for gfi_c_idx in range(len(self.gfi_c)):
-            gfi += self.lf_c[gfi_c_idx](ancestors_gfi[gfi_c_idx])
+        # add the connections
+        if self.connect_gfi:
+            gfi += self.gfi_c(parent_gfi)
 
         # local feature map
         lfi = self.gfi(gfi)
-        # loop over the connections
-        for lfi_c_idx in range(len(self.lfi_c)):
-            lfi += self.lf_c[lfi_c_idx](ancestors_lfi[lfi_c_idx])
+        # add the connections
+        if self.connect_lfi:
+            lfi += self.lfi_c(parent_lfi)
 
         # recon_x
         recon_x = self.lfi(lfi)
-        # loop over the connections
-        for recon_c_idx in range(len(self.recon_c)):
-            recon_x += self.lf_c[recon_c_idx](ancestors_recon_x[recon_c_idx])
+        # add the connections
+        if self.connect_recon:
+            recon_x += self.recon_c(parent_recon_x)
+
         return recon_x
