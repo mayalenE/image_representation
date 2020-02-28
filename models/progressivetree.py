@@ -890,7 +890,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 tree_depth = (split["depth"]+2)
 
         test_results = {}
-        test_results["path_taken"] = np.empty(n_images)
+        test_results["path_taken"] = [None] * n_images
         test_results["label"] = np.empty(n_images, dtype=np.int)
         test_results["z"] = -1 * np.ones((n_images, tree_depth, self.network.config.network.parameters.n_latents),
                                      dtype=np.float)
@@ -928,7 +928,8 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                     cur_node_outputs = all_nodes_outputs[node_idx][2]
                     loss_inputs = {key: cur_node_outputs[key] for key in self.loss_f.input_keys_list}
                     cur_losses = self.loss_f(loss_inputs, reduction=False)
-                    test_results["path_taken"][cur_node_x_ids] = cur_node_path  # preorder so inner path are overwritten by leaf pathes
+                    for x_idx in cur_node_x_ids:
+                        test_results["path_taken"][idx_offset + x_idx] = cur_node_path  # preorder so inner path are overwritten by leaf pathes
                     test_results["z"][idx_offset + cur_node_x_ids, len(cur_node_path) - 1] = cur_node_outputs["z"].detach().cpu().numpy()
                     test_results["recon_x"][idx_offset + cur_node_x_ids, len(cur_node_path) - 1] = cur_node_outputs["x"].detach().cpu().numpy()
                     test_results["loss_kld"][idx_offset + cur_node_x_ids, len(cur_node_path) - 1] = cur_losses["KLD"].detach().cpu().numpy()
@@ -949,13 +950,16 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 if label_count > max_n_votes:
                     max_n_votes = label_count
                     majority_voted_class = label
-            cur_node_x_ids = np.where(np.array(test_results["path_taken"]) == node_path) [0] # this time cur_node_x_ids are absolute, no need of idx_offset
+            cur_depth_path_taken = np.array(test_results["path_taken"])
+            for x_idx in range(cur_depth_path_taken.shape[0]):
+                cur_depth_path_taken[x_idx] = cur_depth_path_taken[x_idx][:len(node_path)]
+            cur_node_x_ids = np.where( cur_depth_path_taken == node_path) [0] # this time cur_node_x_ids are absolute, no need of idx_offset
             test_results["cluster_classification"][cur_node_x_ids, len(node_path) - 1] = majority_voted_class
             test_results["cluster_classification_acc"][cur_node_x_ids, len(node_path) - 1] = (majority_voted_class == test_results["label"][cur_node_x_ids])
 
             # k-NN classification accuracy
             for idx in cur_node_x_ids:
-                distances_to_point_in_node = np.linalg.norm(test_results["z"][idx, len(cur_node_path)-1] - test_results["z"][cur_node_x_ids, len(cur_node_path)-1])
+                distances_to_point_in_node = np.linalg.norm(test_results["z"][idx, len(cur_node_path)-1] - test_results["z"][cur_node_x_ids, len(cur_node_path)-1], axis=1)
                 closest_point_ids = np.argpartition(distances_to_point_in_node, K[-1])
                 for k_idx, k in enumerate(K):
                     voting_labels = test_results["label"][closest_point_ids[:k]]
@@ -966,8 +970,8 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                         if label_count > max_n_votes:
                             max_n_votes = label_count
                             majority_voted_class = label
-                    test_results["kNN_classification"][idx_offset + cur_node_x_ids[idx], len(cur_node_path) - 1][k_idx] = majority_voted_class
-                    test_results["kNN_classification_acc"][idx_offset + cur_node_x_ids[idx], len(cur_node_path) - 1][k_idx] = (majority_voted_class == test_results["label"][cur_node_x_ids])
+                    test_results["kNN_classification"][cur_node_x_ids[idx], len(cur_node_path) - 1][k_idx] = majority_voted_class
+                    test_results["kNN_classification_acc"][cur_node_x_ids[idx], len(cur_node_path) - 1][k_idx] = (majority_voted_class == test_results["label"][cur_node_x_ids[idx]])
 
                     # k-NN "spread" classification accuracy: recurse over descendency
 
