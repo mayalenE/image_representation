@@ -970,8 +970,8 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                         if label_count > max_n_votes:
                             max_n_votes = label_count
                             majority_voted_class = label
-                    test_results["kNN_classification"][cur_node_x_ids[idx], len(cur_node_path) - 1][k_idx] = majority_voted_class
-                    test_results["kNN_classification_acc"][cur_node_x_ids[idx], len(cur_node_path) - 1][k_idx] = (majority_voted_class == test_results["label"][cur_node_x_ids[idx]])
+                    test_results["kNN_classification"][idx, len(cur_node_path) - 1][k_idx] = majority_voted_class
+                    test_results["kNN_classification_acc"][idx, len(cur_node_path) - 1][k_idx] = (majority_voted_class == test_results["label"][idx])
 
                     # k-NN "spread" classification accuracy: recurse over descendency
 
