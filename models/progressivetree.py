@@ -123,7 +123,7 @@ class Node(nn.Module):
             # center_0 = np.mean(X[y], axis=0)
             # center_1 = np.mean(X[1 - y], axis=0)
             # self.boundary = cluster.KMeans(n_clusters=2, init=np.stack([center_0,center_1])).fit(X)
-            self.boundary = svm.SVC(kernel='linear', C=1000).fit(X, y)
+            self.boundary = svm.SVC(kernel='linear', C=10).fit(X, y)
         return
 
     def depth_first_forward(self, x, tree_path_taken=None, x_ids=None, ancestors_lf=None, ancestors_gf=None,
@@ -761,7 +761,10 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                     leaf_node = self.network.get_child_node(leaf_path)
                     leaf_node.trigger_split_signal = True
                     leaf_node.split_z_library = z_library[leaf_x_ids, :].cpu().numpy()
-                    leaf_node.split_z_fitness = leaf_losses
+                    # v1
+                    #leaf_node.split_z_fitness = leaf_losses
+                    # v2
+                    leaf_node.split_z_fitness = (leaf_losses > split_trigger.loss_threshold)
                 # save poor data buffer
                 if not os.path.exists(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer")):
                     os.makedirs(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer"))
