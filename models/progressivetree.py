@@ -2,6 +2,7 @@ from copy import deepcopy
 import goalrepresent as gr
 from goalrepresent import dnn, models
 from goalrepresent.dnn.solvers import initialization
+from goalrepresent.helper import tensorboardhelper
 from goalrepresent.helper.misc import do_filter_boolean
 import numpy as np
 import os
@@ -10,7 +11,6 @@ import sys
 import time
 import torch
 from torch import nn
-from torch.utils.data import Subset
 from torchvision.utils import make_grid
 import warnings
 
@@ -123,7 +123,7 @@ class Node(nn.Module):
             # center_0 = np.mean(X[y], axis=0)
             # center_1 = np.mean(X[1 - y], axis=0)
             # self.boundary = cluster.KMeans(n_clusters=2, init=np.stack([center_0,center_1])).fit(X)
-            self.boundary = svm.SVC(kernel='linear', C=10).fit(X, y)
+            self.boundary = svm.SVC(kernel='linear', C=1.0).fit(X, y)
         return
 
     def depth_first_forward(self, x, tree_path_taken=None, x_ids=None, parent_lf=None, parent_gf=None,
@@ -559,16 +559,16 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
             for epoch in range(n_epochs_per_episodes[episode_idx]):
                 #1) Prepare DataLoader by blending with prev/next episode
                 if blend_between_episodes["active"]:
-                    cur_epoch_images = images[episode_idx]
-                    cur_epoch_labels = labels[episode_idx]
+                    cur_epoch_images = deepcopy(images[episode_idx])
+                    cur_epoch_labels = deepcopy(labels[episode_idx])
                     # blend images from previous experiment
                     blend_with_prev_episode = blend_between_episodes["blend_with_prev"]
                     if episode_idx > 0 and blend_with_prev_episode["active"]:
-                        cur_episode_fraction = float((epoch + 1) / n_epochs_per_episodes[episode_idx])
+                        cur_episode_fraction = float(epoch / n_epochs_per_episodes[episode_idx])
                         if cur_episode_fraction < blend_with_prev_episode["time_fraction"]:
                             if blend_with_prev_episode["blend_type"] == "linear":
-                                blend_prev_proportion = - 1.0 / blend_with_prev_episode[
-                                    "time_fraction"] * cur_episode_fraction + 1
+                                blend_prev_proportion = - 0.5 / blend_with_prev_episode[
+                                    "time_fraction"] * cur_episode_fraction + 0.5
                                 n_data_from_prev = int(blend_prev_proportion * n_images[episode_idx])
                                 ids_to_take_from_prev_episode = torch.multinomial(weights[episode_idx - 1],
                                                                                   n_data_from_prev, True)
@@ -584,12 +584,12 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                     # blend images from next experiment
                     blend_with_next_episode = blend_between_episodes["blend_with_next"]
                     if episode_idx < n_episodes - 1 and blend_with_next_episode["active"]:
-                        cur_episode_fraction = float((epoch + 1) / n_epochs_per_episodes[episode_idx])
+                        cur_episode_fraction = float(epoch / n_epochs_per_episodes[episode_idx])
                         if cur_episode_fraction > (1.0 - blend_with_next_episode["time_fraction"]):
                             if blend_with_next_episode["blend_type"] == "linear":
-                                blend_next_proportion = 1.0 / blend_with_prev_episode[
+                                blend_next_proportion = 0.5 / blend_with_prev_episode[
                                     "time_fraction"] * cur_episode_fraction \
-                                                        + 1 - (1.0 / blend_with_prev_episode["time_fraction"])
+                                                        + 0.5 - (0.5 / blend_with_prev_episode["time_fraction"])
                                 n_data_from_next = int(blend_next_proportion * n_images[episode_idx])
                                 ids_to_take_from_next_episode = torch.multinomial(weights[episode_idx + 1],
                                                                                   n_data_from_next, True)
@@ -612,16 +612,16 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                         # check if split condition is met in one node
                         if hasattr(leaf_node, "trigger_split_signal") and leaf_node.trigger_split_signal == True:
                             # before split check if the model is elligible for expansion:
-                            if len(self.split_history) < split_trigger.n_max_splits and epochs_since_split > split_trigger.n_epochs_min_between_splits and epoch < (n_epochs_total-split_trigger.n_epochs_min_between_splits):
+                            if len(self.split_history) < split_trigger.n_max_splits and leaf_node.epochs_since_split > split_trigger.n_epochs_min_between_splits and epoch < (n_epochs_total-split_trigger.n_epochs_min_between_splits):
                                 # Split Node
                                 self.split_node(leaf_node_path, leaf_node.split_z_library, leaf_node.split_z_fitness)
                                 leaf_node.trigger_split_signal = False
                                 del leaf_node.split_z_library
                                 del leaf_node.split_z_fitness
-                                # update counters
-                                epochs_since_split = 0
-                            # uncomment following line for allowing only one split at the time
-                            # break;
+                                leaf_node.epochs_since_split = 0
+                                # uncomment following line for allowing only one split at the time
+                                # break;
+
 
                 # 3) Perform train epoch -> trigger a split if condition met
                 t0 = time.time()
@@ -637,9 +637,6 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                                     self.n_epochs)
                 if self.n_epochs % self.config.checkpoint.save_model_every == 0:
                     self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'curent_weight_model.pth'))
-
-                # update counters
-                epochs_since_split += 1
 
                 # 4) Perform validation epoch
                 if do_validation:
@@ -661,6 +658,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 # 5) Perform evaluation/test epoch
                 if self.n_epochs % self.config.evaluation.save_results_every == 0:
                     self.evaluation_epoch(valid_loader)
+
 
     def train_epoch(self, train_loader, logger=None, split_trigger=None):
         self.train()
@@ -695,7 +693,15 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 else:
                     z_library = torch.cat([z_library, model_outputs["z"].detach()], dim = 0)
 
+
         self.n_epochs += 1
+        # update epoch per leaf
+        for leaf_path in list(set(taken_pathes)):
+            leaf_node = self.network.get_child_node(leaf_path)
+            if hasattr(leaf_node, "epochs_since_split"):
+                leaf_node.epochs_since_split += 1
+            else:
+                leaf_node.epochs_since_split = 1
 
         # Logger save results per leaf
         for leaf_path in list(set(taken_pathes)):
@@ -718,20 +724,22 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                     leaf_node.trigger_split_signal = True
                     leaf_node.split_z_library = z_library[leaf_x_ids, :].cpu().numpy()
                     # v1
-                    #leaf_node.split_z_fitness = leaf_losses
+                    leaf_node.split_z_fitness = leaf_losses
                     # v2
                     #leaf_node.split_z_fitness = (leaf_losses > split_trigger.loss_threshold)
                     # v3
-                    leaf_node.split_z_fitness = None
-                # save poor data buffer
-                if not os.path.exists(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer")):
-                    os.makedirs(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer"))
-                poor_data_buffer = np.empty((n_bad_points, self.network.config.network.parameters.n_channels,
-                                            self.network.config.network.parameters.input_size[0],
-                                            self.network.config.network.parameters.input_size[1]), dtype=np.float)
-                for idx in range(len(bad_points_ids)):
-                    poor_data_buffer[idx] = train_loader.dataset.__getitem__(bad_points_ids[idx])["obs"]
-                np.save(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer", "poor_buffer_when_splitting_{}.npy".format(leaf_path)), poor_data_buffer)
+                    #leaf_node.split_z_fitness = None
+
+                    # save poor data buffer
+                    if not os.path.exists(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer")):
+                        os.makedirs(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer"))
+                    poor_data_buffer = np.empty((n_bad_points, self.network.config.network.parameters.n_channels,
+                                                self.network.config.network.parameters.input_size[0],
+                                                self.network.config.network.parameters.input_size[1]), dtype=np.float)
+                    for idx in range(len(bad_points_ids)):
+                        poor_data_buffer[idx] = train_loader.dataset.__getitem__(bad_points_ids[idx])["obs"]
+                    np.save(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer", "poor_buffer_when_splitting_{}.npy".format(leaf_path)), poor_data_buffer)
+                    np.savez(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer", "z_library_when_splitting_{}.npz".format(leaf_path)), ** {'z_library': leaf_node.split_z_library, 'z_fitness': leaf_node.split_z_fitness})
 
         # Average loss on all tree
         for k, v in losses.items():
@@ -806,6 +814,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 leaf_embeddings = torch.cat([embeddings[i] for i in leaf_x_ids])
                 leaf_labels = torch.cat([labels[i] for i in leaf_x_ids])
                 leaf_images = torch.cat([images[i] for i in leaf_x_ids])
+                leaf_images = tensorboardhelper.resize_embeddings(leaf_images)
                 try:
                     logger.add_embedding(
                         leaf_embeddings,
@@ -921,7 +930,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
             # k-NN classification accuracy
             for idx in cur_node_x_ids:
                 distances_to_point_in_node = np.linalg.norm(test_results["z"][idx, len(cur_node_path)-1] - test_results["z"][cur_node_x_ids, len(cur_node_path)-1], axis=1)
-                closest_point_ids = np.argpartition(distances_to_point_in_node, K[-1])
+                closest_point_ids = np.argpartition(distances_to_point_in_node, min(K[-1], len(distances_to_point_in_node)))
                 for k_idx, k in enumerate(K):
                     voting_labels = test_results["label"][closest_point_ids[:k]]
                     majority_voted_class = -1
@@ -1009,9 +1018,10 @@ class ConnectedEncoder(gr.dnn.networks.encoders.BaseDNNEncoder):
                     self.gf_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
 
         # lf is initialized with parent weights, gf and ef with kaiming, connections with small random weights
-        initialization_net = initialization.get_initialization("kaiming_uniform")
-        self.gf.apply(initialization_net)
-        self.ef.apply(initialization_net)
+        # v1: uncomment the 3 following lines
+        #initialization_net = initialization.get_initialization("kaiming_uniform")
+        #self.gf.apply(initialization_net)
+        #self.ef.apply(initialization_net)
         initialization_c = initialization.get_initialization("uniform")
         if self.connect_lf:
             self.lf_c.apply(initialization_c)
@@ -1121,10 +1131,11 @@ class ConnectedDecoder(gr.dnn.networks.decoders.BaseDNNDecoder):
                 self.recon_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
 
         # lf is initialized with parent weights, gf and ef with kaiming, connections with small random weights
-        initialization_net = initialization.get_initialization("kaiming_uniform")
-        self.efi.apply(initialization_net)
-        self.gfi.apply(initialization_net)
-        self.lfi.apply(initialization_net)
+        # v1: uncomment the 4 following lines
+        #initialization_net = initialization.get_initialization("kaiming_uniform")
+        #self.efi.apply(initialization_net)
+        #self.gfi.apply(initialization_net)
+        #self.lfi.apply(initialization_net)
         initialization_c = initialization.get_initialization("uniform")
         if self.connect_gfi:
             self.gfi_c.apply(initialization_c)

@@ -33,11 +33,11 @@ class BaseDNNDecoder(nn.Module, metaclass=ABCMeta):
         self.output_keys_list = ["z", "gfi", "lfi", "recon_x"]
 
     def forward(self, z):
-        if torch._C._get_tracing_state():
-            return self.forward_for_graph_tracing(z)
-
         if z.dim() == 2 and type(self).__name__ == "DumoulinDecoder":  # B*n_latents -> B*n_latents*1*1
             z = z.unsqueeze(dim=-1).unsqueeze(dim=-1)
+
+        if torch._C._get_tracing_state():
+            return self.forward_for_graph_tracing(z)
 
             # global feature map
         gfi = self.efi(z)
@@ -51,10 +51,7 @@ class BaseDNNDecoder(nn.Module, metaclass=ABCMeta):
         return decoder_outputs
 
     def forward_for_graph_tracing(self, z):
-        if z.dim() == 2:  # B*n_latents -> B*n_latents*1*1
-            z = z.unsqueeze(dim=-1).unsqueeze(dim=-1)
-
-            # global feature map
+        # global feature map
         gfi = self.efi(z)
         # global feature map
         lfi = self.gfi(gfi)

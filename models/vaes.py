@@ -4,7 +4,7 @@ import goalrepresent as gr
 from goalrepresent import dnn
 from goalrepresent.dnn import losses
 from goalrepresent.dnn.networks import decoders, discriminators
-from goalrepresent.helper import mathhelper
+from goalrepresent.helper import mathhelper, tensorboardhelper
 import numpy as np
 import math
 import os
@@ -229,6 +229,7 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
             embedding_samples = torch.cat(embedding_samples)
             embedding_metadata = torch.cat(embedding_metadata)
             embedding_images = torch.cat(embedding_images)
+            embedding_images = tensorboardhelper.resize_embeddings(embedding_images)
             logger.add_embedding(
                 embedding_samples,
                 metadata=embedding_metadata,

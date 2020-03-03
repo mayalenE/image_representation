@@ -1,6 +1,7 @@
 from copy import deepcopy
 import goalrepresent as gr
 from goalrepresent import dnn
+from goalrepresent.helper import tensorboardhelper
 from goalrepresent.dnn.networks import decoders, discriminators
 from itertools import chain
 import numpy as np
@@ -263,6 +264,7 @@ class BiGANModel(dnn.BaseDNN):
             embedding_samples = torch.cat(embedding_samples)
             embedding_metadata = torch.cat(embedding_metadata)
             embedding_images = torch.cat(embedding_images)
+            embedding_images = tensorboardhelper.resize_embeddings(embedding_images)
             logger.add_embedding(
                 embedding_samples,
                 metadata=embedding_metadata,
