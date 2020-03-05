@@ -9,7 +9,7 @@ from torch.nn import functional as F
 
 class BaseLoss(ABC):
     @abstractmethod
-    def __call__(self, loss_inputs, reduction=True, **kwargs):
+    def __call__(self, loss_inputs, reduction="mean", **kwargs):
         pass
 
 
@@ -18,6 +18,33 @@ def get_loss(loss_name):
     loss_name: string such that the loss called is <loss_name>Loss
     """
     return eval("{}Loss".format(loss_name))
+
+class QuadrupletLoss(BaseLoss):
+    def __init__(self, margin=0.0, **kwargs):
+        self.margin = margin
+
+        self.input_keys_list = ['z_pos_a', 'z_pos_b', 'z_neg_a', 'z_neg_b']
+
+    def __call__(self, loss_inputs, reduction="mean", **kwargs):
+        try:
+            z_pos_a = loss_inputs['z_pos_a']
+            z_pos_b = loss_inputs['z_pos_b']
+            z_neg_a = loss_inputs['z_neg_a']
+            z_neg_b = loss_inputs['z_neg_b']
+        except:
+            raise ValueError("DIMLoss needs {} inputs".format(self.input_keys_list))
+
+        distance_pos = (z_pos_a - z_pos_b).pow(2).sum(1)
+        distance_neg = (z_neg_a - z_neg_b).pow(2).sum(1)
+
+        total_loss = F.relu(distance_pos - distance_neg + self.margin)
+
+        if reduction == "none":
+            return {'total': total_loss}
+        elif reduction == "sum":
+            return {'total': total_loss.sum()}
+        elif reduction == "mean":
+            return {'total': total_loss.mean()}
 
 
 class DIMLoss(BaseLoss):
@@ -28,7 +55,7 @@ class DIMLoss(BaseLoss):
 
         self.input_keys_list = ['global_pos', 'global_neg', 'local_pos', 'local_neg', 'prior_pos', 'prior_neg']
 
-    def __call__(self, loss_inputs, reduction=True, **kwargs):
+    def __call__(self, loss_inputs, reduction="mean", **kwargs):
         try:
             global_pos = loss_inputs['global_pos']
             global_neg = loss_inputs['global_neg']
@@ -52,7 +79,7 @@ class BiGANLoss(BaseLoss):
     def __init__(self, **kwargs):
         self.input_keys_list = ['prob_pos', 'prob_neg']
 
-    def __call__(self, loss_inputs, reduction=True, **kwargs):
+    def __call__(self, loss_inputs, reduction="mean", **kwargs):
         try:
             prob_neg = loss_inputs['prob_pos']
             prob_pos = loss_inputs['prob_neg']
@@ -72,7 +99,7 @@ class VAELoss(BaseLoss):
 
         self.input_keys_list = ['x', 'recon_x', 'mu', 'logvar']
 
-    def __call__(self, loss_inputs, reduction=True, **kwargs):
+    def __call__(self, loss_inputs, reduction="mean", **kwargs):
         try:
             recon_x = loss_inputs['recon_x']
             mu = loss_inputs['mu']
@@ -95,7 +122,7 @@ class BetaVAELoss(BaseLoss):
 
         self.input_keys_list = ['x', 'recon_x', 'mu', 'logvar']
 
-    def __call__(self, loss_inputs, reduction=True, **kwargs):
+    def __call__(self, loss_inputs, reduction="mean", **kwargs):
         try:
             recon_x = loss_inputs['recon_x']
             mu = loss_inputs['mu']
@@ -119,7 +146,7 @@ class AnnealedVAELoss(BaseLoss):
 
         self.input_keys_list = ['x', 'recon_x', 'mu', 'logvar']
 
-    def __call__(self, loss_inputs, reduction=True, **kwargs):
+    def __call__(self, loss_inputs, reduction="mean", **kwargs):
         try:
             recon_x = loss_inputs['recon_x']
             mu = loss_inputs['mu']
@@ -147,7 +174,7 @@ class BetaTCVAELoss(BaseLoss):
 
         self.input_keys_list = ['x', 'recon_x', 'mu', 'logvar', 'z']
 
-    def __call__(self, loss_inputs, reduction=True, **kwargs):
+    def __call__(self, loss_inputs, reduction="mean", **kwargs):
         try:
             recon_x = loss_inputs['recon_x']
             mu = loss_inputs['mu']
@@ -213,7 +240,7 @@ class FCClassifierLoss(BaseLoss):
     def __init__(self, **kwargs):
         self.input_keys_list = ['y', 'predicted_y']
 
-    def __call__(self, loss_inputs, reduction=True, **kwargs):
+    def __call__(self, loss_inputs, reduction="mean", **kwargs):
         try:
             predicted_y = loss_inputs['predicted_y']
             y = loss_inputs['y']
@@ -228,7 +255,7 @@ class SVMClassifierLoss(BaseLoss):
     def __init__(self, **kwargs):
         self.input_keys_list = ['y', 'predicted_y']
 
-    def __call__(self, loss_inputs, reduction=True, **kwargs):
+    def __call__(self, loss_inputs, reduction="mean", **kwargs):
         try:
             predicted_y = loss_inputs['predicted_y']
             y = loss_inputs['y']
@@ -245,20 +272,19 @@ LOSS HELPERS
 =========================================="""
 
 
-def _reconstruction_loss(recon_x, x, reconstruction_dist="bernouilli", reduction=True):
+def _reconstruction_loss(recon_x, x, reconstruction_dist="bernouilli", reduction="mean"):
     if reconstruction_dist == "bernouilli":
         loss = _bce_with_digits_loss(recon_x, x, reduction=reduction)
     elif reconstruction_dist == "gaussian":
         loss = _mse_loss(recon_x, x, reduction=reduction)
     else:
         raise ValueError("Unkown decoder distribution: {}".format(reconstruction_dist))
-
     return loss
 
 
-def _kld_loss(mu, logvar, reduction=True):
-    if reduction:
-        """ Returns the KLD loss D(q,p) where q is N(mu,var) and p is N(0,I) """
+def _kld_loss(mu, logvar, reduction="mean"):
+    """ Returns the KLD loss D(q,p) where q is N(mu,var) and p is N(0,I) """
+    if reduction == "mean":
         # 0.5 * (1 + log(sigma^2) - mu^2 - sigma^2)
         KLD_loss_per_latent_dim = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=0) / mu.size(
             0)  # we  average on the batch
@@ -266,75 +292,111 @@ def _kld_loss(mu, logvar, reduction=True):
         KLD_loss = torch.sum(KLD_loss_per_latent_dim)
         # we add a regularisation term so that the KLD loss doesnt "trick" the loss by sacrificing one dimension
         KLD_loss_var = torch.var(KLD_loss_per_latent_dim)
-    else:
+    elif reduction == "sum":
+        # 0.5 * (1 + log(sigma^2) - mu^2 - sigma^2)
+        KLD_loss_per_latent_dim = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=0)
+        # KL-divergence between a diagonal multivariate normal and the standard normal distribution is the sum on each latent dimension
+        KLD_loss = torch.sum(KLD_loss_per_latent_dim)
+        # we add a regularisation term so that the KLD loss doesnt "trick" the loss by sacrificing one dimension
+        KLD_loss_var = torch.var(KLD_loss_per_latent_dim)
+    elif reduction == "none":
         KLD_loss_per_latent_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
         KLD_loss = torch.sum(KLD_loss_per_latent_dim, dim=1)
         KLD_loss_var = torch.var(KLD_loss_per_latent_dim, dim=1)
+    else:
+        raise ValueError('reduction must be either "mean" | "sum" | "none" ')
 
     return KLD_loss, KLD_loss_per_latent_dim, KLD_loss_var
 
 
-def _mse_loss(recon_x, x, reduction=True):
-    if reduction:
-        """ Returns the reconstruction loss (mean squared error) summed on the image dims and averaged on the batch size """
-        return F.mse_loss(recon_x, x, reduction="sum") / x.size(0)
-    else:
+def _mse_loss(recon_x, x, reduction="mean"):
+    """ Returns the reconstruction loss (mean squared error) summed on the image dims and averaged on the batch size """
+    if reduction == "mean":
+        mse_loss =  F.mse_loss(recon_x, x, reduction="sum") / x.size(0)
+    elif reduction == "sum":
+        mse_loss = F.mse_loss(recon_x, x, reduction="sum")
+    elif reduction == "none":
         mse_loss = F.mse_loss(recon_x, x, reduction="none")
         mse_loss = mse_loss.view(mse_loss.size(0), -1).sum(1)
-        return  # sum on the image dims but not on the batch dimension
-
-
-def _bce_loss(recon_x, x, reduction=True):
-    if reduction:
-        """ Returns the reconstruction loss (binary cross entropy) summed on the image dims and averaged on the batch size """
-        return F.binary_cross_entropy(recon_x, x, reduction="sum") / x.size(0)
     else:
+        raise ValueError('reduction must be either "mean" | "sum" | "none" ')
+    return mse_loss
+
+
+def _bce_loss(recon_x, x, reduction="mean"):
+    """ Returns the reconstruction loss (binary cross entropy) summed on the image dims and averaged on the batch size """
+    if reduction == "mean":
+        bce_loss = F.binary_cross_entropy(recon_x, x, reduction="sum") / x.size(0)
+    elif reduction == "sum":
+        bce_loss = F.binary_cross_entropy(recon_x, x, reduction="sum")
+    elif reduction == "none":
         bce_loss = F.binary_cross_entropy(recon_x, x, reduction="none")
         bce_loss = bce_loss.view(bce_loss.size(0), -1).sum(1)
-        return bce_loss
-
-
-def _bce_with_digits_loss(recon_x, x, reduction=True):
-    if reduction:
-        """ Returns the reconstruction loss (sigmoid + binary cross entropy) summed on the image dims and averaged on the batch size """
-        return F.binary_cross_entropy_with_logits(recon_x, x, reduction="sum") / x.size(0)
     else:
+        raise ValueError('reduction must be either "mean" | "sum" | "none" ')
+    return bce_loss
+
+
+def _bce_with_digits_loss(recon_x, x, reduction="mean"):
+    """ Returns the reconstruction loss (sigmoid + binary cross entropy) summed on the image dims and averaged on the batch size """
+    if reduction == "mean":
+        bce_loss = F.binary_cross_entropy_with_logits(recon_x, x, reduction="sum") / x.size(0)
+    elif reduction == "sum":
+        bce_loss = F.binary_cross_entropy_with_logits(recon_x, x, reduction="sum")
+    elif reduction == "none":
         bce_loss = F.binary_cross_entropy_with_logits(recon_x, x, reduction="none")
         bce_loss = bce_loss.view(bce_loss.size(0), -1).sum(1)
-        return bce_loss
-
-
-def _ce_loss(recon_y, y, reduction=True):
-    """ Returns the cross entropy loss (softmax + NLLLoss) averaged on the batch size """
-    if reduction:
-        return F.cross_entropy(recon_y, y, reduction="sum") / y.size(0)
     else:
-        return F.cross_entropy(recon_y, y, reduction="none")
+        raise ValueError('reduction must be either "mean" | "sum" | "none" ')
+    return bce_loss
 
 
-def _nll_loss(recon_y, y, reduction=True):
+def _ce_loss(recon_y, y, reduction="mean"):
     """ Returns the cross entropy loss (softmax + NLLLoss) averaged on the batch size """
-    if reduction:
-        return F.nll_loss(recon_y, y, reduction="sum") / y.size(0)
+    if reduction == "mean":
+        ce_loss =  F.cross_entropy(recon_y, y, reduction="sum") / y.size(0)
+    elif reduction == "sum":
+        ce_loss = F.cross_entropy(recon_y, y, reduction="sum")
+    elif reduction == "none":
+        ce_loss = F.cross_entropy(recon_y, y, reduction="none")
     else:
-        return F.nll_loss(recon_y, y, reduction="none")
+        raise ValueError('reduction must be either "mean" | "sum" | "none" ')
+    return ce_loss
 
 
-def _gan_loss(positive, negative, reduction=True):
+def _nll_loss(recon_y, y, reduction="mean"):
+    """ Returns the cross entropy loss (softmax + NLLLoss) averaged on the batch size """
+    if reduction == "mean":
+        nll_loss = F.nll_loss(recon_y, y, reduction="sum") / y.size(0)
+    elif reduction == "sum":
+        nll_loss = F.nll_loss(recon_y, y, reduction="sum")
+    elif reduction == "none":
+        nll_loss = F.nll_loss(recon_y, y, reduction="none")
+    else:
+        raise ValueError('reduction must be either "mean" | "sum" | "none" ')
+    return nll_loss
+
+
+def _gan_loss(positive, negative, reduction="mean"):
     """ Eq. 4 from the DIM paper is equivalent to binary cross-entropy 
     i.e. minimizing the output of this function is equivalent to maximizing
     the output of jsd_mi(positive, negative)
     """
-    if reduction:
+    if reduction == "mean":
         real = F.binary_cross_entropy_with_logits(positive, torch.ones_like(positive), reduction="sum") / positive.size(
             0)
         fake = F.binary_cross_entropy_with_logits(negative, torch.zeros_like(negative), reduction="sum")
         if len(negative.size()) > 0:
             fake /= negative.size(0)
-        return real + fake
-    else:
+    elif reduction == "sum":
+        real = F.binary_cross_entropy_with_logits(positive, torch.ones_like(positive), reduction="sum")
+        fake = F.binary_cross_entropy_with_logits(negative, torch.zeros_like(negative), reduction="sum")
+    elif reduction == "none":
         real = F.binary_cross_entropy_with_logits(positive, torch.ones_like(positive), reduction="none")
         real = real.view(real.size(0), -1).sum(1)
         fake = F.binary_cross_entropy_with_logits(negative, torch.zeros_like(negative), reduction="none")
         fake = fake.view(fake.size(0), -1).sum(1)
-        return real + fake
+    else:
+        raise ValueError('reduction must be either "mean" | "sum" | "none" ')
+
+    return real + fake

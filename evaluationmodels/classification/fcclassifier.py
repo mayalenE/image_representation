@@ -137,7 +137,7 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
             # forward
             batch_predictions = self.forward(x)
             loss_inputs = {"predicted_y": batch_predictions, "y": y}
-            batch_losses = self.loss_f(loss_inputs, reduction=True)
+            batch_losses = self.loss_f(loss_inputs, reduction="mean")
             # backward
             loss = batch_losses["total"]
             self.optimizer.zero_grad()

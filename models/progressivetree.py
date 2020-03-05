@@ -123,7 +123,9 @@ class Node(nn.Module):
             # center_0 = np.mean(X[y], axis=0)
             # center_1 = np.mean(X[1 - y], axis=0)
             # self.boundary = cluster.KMeans(n_clusters=2, init=np.stack([center_0,center_1])).fit(X)
-            self.boundary = svm.SVC(kernel='linear', C=1.0).fit(X, y)
+            self.boundary = svm.SVC(kernel='linear', C=1.0, class_weight='balanced').fit(X, y)
+
+        #TODO: assert fair partitioning
         return
 
     def depth_first_forward(self, x, tree_path_taken=None, x_ids=None, parent_lf=None, parent_gf=None,
@@ -203,7 +205,7 @@ class Node(nn.Module):
             x_side = self.get_children_node(z)
             x_ids_left = np.where(x_side == 0)[0]
             if len(x_ids_left) > 0:
-                left_leaf_accumulator = self.left.depth_first_forward(x[x_ids_left], [path + "0" for path in
+                left_leaf_accumulator = self.left.depth_first_forward_all_nodes_preorder(x[x_ids_left], [path + "0" for path in
                                                                                       [tree_path_taken[x_idx] for x_idx
                                                                                        in x_ids_left]],
                                                                       [x_ids[x_idx] for x_idx in x_ids_left],
@@ -216,7 +218,7 @@ class Node(nn.Module):
 
             x_ids_right = np.where(x_side == 1)[0]
             if len(x_ids_right) > 0:
-                right_leaf_accumulator = self.right.depth_first_forward(x[x_ids_right], [path + "1" for path in
+                right_leaf_accumulator = self.right.depth_first_forward_all_nodes_preorder(x[x_ids_right], [path + "1" for path in
                                                                                          [tree_path_taken[x_idx] for
                                                                                           x_idx in x_ids_right]],
                                                                         [x_ids[x_idx] for x_idx in x_ids_right],
@@ -393,7 +395,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
         if node_path is None:
             warnings.warn("WARNING: computing the embedding in root node of progressive tree as no path specified")
             node_path = "0"
-        n_latents = self.network.config.network.parameters.n_latents
+        n_latents = self.config.network.parameters.n_latents
         z = torch.Tensor().new_full((len(x), n_latents), float("nan"))
         x = self.push_variable_to_device(x)
         self.eval()
@@ -510,7 +512,8 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
             split_trigger.n_max_splits = 1e8 # maximum splits
         if split_trigger["active"] and ("n_epochs_min_between_splits" not in split_trigger):
             split_trigger.n_epochs_min_between_splits = 10 # a node should at least be trained X epoch before being splitted again
-        epochs_since_split = 0
+        if split_trigger["active"] and ("min_init_n_epochs" not in split_trigger):
+            split_trigger.min_init_n_epochs = 10 # the initial node should at least be trained X epoch before being splitted again
         n_epochs_total = np.asarray(n_epochs_per_episodes).sum()
 
         # prepare datasets per episodes
@@ -605,30 +608,17 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
 
                     train_loader.dataset.update(n_images[episode_idx], cur_epoch_images, cur_epoch_labels)
 
-                # 2) If poor data buffer is filled, trigger a split
-                if split_trigger["active"]:
-                    for leaf_node_path in self.network.get_leaf_pathes():
-                        leaf_node = self.network.get_child_node(leaf_node_path)
-                        # check if split condition is met in one node
-                        if hasattr(leaf_node, "trigger_split_signal") and leaf_node.trigger_split_signal == True:
-                            # before split check if the model is elligible for expansion:
-                            if len(self.split_history) < split_trigger.n_max_splits and leaf_node.epochs_since_split > split_trigger.n_epochs_min_between_splits and epoch < (n_epochs_total-split_trigger.n_epochs_min_between_splits):
-                                # Split Node
-                                self.split_node(leaf_node_path, leaf_node.split_z_library, leaf_node.split_z_fitness)
-                                leaf_node.trigger_split_signal = False
-                                del leaf_node.split_z_library
-                                del leaf_node.split_z_fitness
-                                leaf_node.epochs_since_split = 0
-                                # uncomment following line for allowing only one split at the time
-                                # break;
+                # 2) check if poor data buffer is filled and split if needed
+                if split_trigger is not None and split_trigger["active"]:
+                    self.trigger_split(train_loader, split_trigger)
+                # Stop splitting when close to the end
+                if epoch >= (n_epochs_total - split_trigger.n_epochs_min_between_splits):
+                    split_trigger["active"] = False
 
 
-                # 3) Perform train epoch -> trigger a split if condition met
+                # 3) Perform train epoch
                 t0 = time.time()
-                if split_trigger["active"]:
-                    train_losses = self.train_epoch(train_loader, logger=logger, split_trigger = split_trigger)
-                else:
-                    train_losses = self.train_epoch(train_loader, logger=logger)
+                train_losses = self.train_epoch(train_loader, logger=logger)
                 t1 = time.time()
                 if logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
                     for k, v in train_losses.items():
@@ -659,13 +649,96 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 if self.n_epochs % self.config.evaluation.save_results_every == 0:
                     self.evaluation_epoch(valid_loader)
 
-
-    def train_epoch(self, train_loader, logger=None, split_trigger=None):
-        self.train()
-        losses = {}
+    def trigger_split(self, train_loader, split_trigger):
+        self.eval()
+        train_nll = None
         taken_pathes = []
-        if split_trigger is not None and split_trigger["active"]:
-            z_library = None
+        z_library = None
+        x_ids = []
+
+        with torch.no_grad():
+            for data in train_loader:
+                x = data["obs"]
+                x = self.push_variable_to_device(x)
+                x_ids.append(data["index"])
+                # forward
+                model_outputs = self.forward(x)
+                loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
+                batch_losses = self.loss_f(loss_inputs, reduction="none")
+                cur_train_nll = batch_losses["total"]
+                # save losses
+                if train_nll is None:
+                    train_nll = np.expand_dims(cur_train_nll.detach().cpu().numpy(), axis=-1)
+                else:
+                    train_nll = np.vstack(
+                        [train_nll, np.expand_dims(cur_train_nll.detach().cpu().numpy(), axis=-1)])
+                # save taken pathes
+                taken_pathes += model_outputs["path_taken"]
+                # save z library
+                if z_library is None:
+                    z_library = model_outputs["z"].detach()
+                else:
+                    z_library = torch.cat([z_library, model_outputs["z"].detach()], dim=0)
+
+        x_ids = torch.cat(x_ids).tolist()
+
+        for leaf_path in list(set(taken_pathes)):
+            leaf_x_ids = np.where(np.array(taken_pathes, copy=False) == leaf_path)[0]
+            leaf_losses = train_nll[leaf_x_ids, :]
+            bad_points_ids = np.where(leaf_losses > split_trigger.loss_threshold)[0]
+            n_bad_points = len(bad_points_ids)
+            # if poor data buffer filled, check if elligible for split
+            if n_bad_points > split_trigger.n_max_bad_points:
+
+                leaf_node = self.network.get_child_node(leaf_path)
+
+                # if elligible for split, trigger a split
+                if (len(self.split_history) < split_trigger.n_max_splits) and (
+                        self.n_epochs > split_trigger.min_init_n_epochs) and (
+                        leaf_node.epochs_since_split > split_trigger.n_epochs_min_between_splits):
+
+                    # dump poor data buffer and z_library for logging
+                    if not os.path.exists(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer")):
+                        os.makedirs(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer"))
+
+                    # save z_library
+                    split_z_library = z_library[leaf_x_ids, :].cpu().numpy()
+                    # split_z_fitness = leaf_losses # v1
+                    # split_z_fitness = None # v2
+                    split_z_fitness = (leaf_losses > split_trigger.loss_threshold) # v3
+                    np.savez(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer",
+                                          "z_library_when_splitting_{}.npz".format(leaf_path)),
+                             **{'z_library': split_z_library, 'z_fitness': split_z_fitness})
+
+                    # save poor data buffer
+                    poor_data_buffer = np.empty(
+                        (n_bad_points, self.network.config.network.parameters.n_channels,
+                         self.network.config.network.parameters.input_size[0],
+                         self.network.config.network.parameters.input_size[1]), dtype=np.float)
+                    for idx in range(len(bad_points_ids)):
+                        poor_data_buffer[idx] = \
+                            train_loader.dataset.__getitem__(x_ids[leaf_x_ids[bad_points_ids[idx]]])["obs"]
+                    np.save(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer",
+                                         "poor_buffer_when_splitting_{}.npy".format(leaf_path)), poor_data_buffer)
+
+
+                    # Split Node
+                    self.split_node(leaf_path, split_z_library, split_z_fitness)
+
+                    # update counters
+                    leaf_node.epochs_since_split = 0
+                    # uncomment following line for allowing only one split at the time
+                    # break;
+
+        return
+
+
+    def train_epoch(self, train_loader, logger=None):
+        self.train()
+
+        taken_pathes = []
+        losses = {}
+
         for data in train_loader:
             x = data['obs']
             x = self.push_variable_to_device(x)
@@ -674,7 +747,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
             # g = make_dot(model_outputs, params=dict(self.network.named_parameters()))
             # g.view()
             loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
-            batch_losses = self.loss_f(loss_inputs, reduction=False)
+            batch_losses = self.loss_f(loss_inputs, reduction="none")
             # backward
             loss = batch_losses['total'].mean()
             self.optimizer.zero_grad()
@@ -686,22 +759,18 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                     losses[k] = np.expand_dims(v.detach().cpu().numpy(), axis=-1)
                 else:
                     losses[k] = np.vstack([losses[k], np.expand_dims(v.detach().cpu().numpy(), axis=-1)])
+            # save taken path
             taken_pathes += model_outputs["path_taken"]
-            if split_trigger is not None and split_trigger["active"]:
-                if z_library is None:
-                    z_library = model_outputs["z"].detach()
-                else:
-                    z_library = torch.cat([z_library, model_outputs["z"].detach()], dim = 0)
 
 
-        self.n_epochs += 1
-        # update epoch per leaf
+        # update epoch
         for leaf_path in list(set(taken_pathes)):
             leaf_node = self.network.get_child_node(leaf_path)
             if hasattr(leaf_node, "epochs_since_split"):
                 leaf_node.epochs_since_split += 1
             else:
                 leaf_node.epochs_since_split = 1
+        self.n_epochs += 1
 
         # Logger save results per leaf
         for leaf_path in list(set(taken_pathes)):
@@ -711,35 +780,6 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                     leaf_v = v[leaf_x_ids, :]
                     logger.add_scalars('loss/{}'.format(k), {'train-{}'.format(leaf_path): np.mean(leaf_v)},
                                        self.n_epochs)
-
-        # If split_trigger, check if leaf nodes are elligible for split:
-        if split_trigger is not None and split_trigger["active"]:
-            for leaf_path in list(set(taken_pathes)):
-                leaf_x_ids = np.where(np.array(taken_pathes, copy=False) == leaf_path)[0]
-                leaf_losses = losses["total"][leaf_x_ids, :]
-                bad_points_ids = np.where(leaf_losses > split_trigger.loss_threshold)[0]
-                n_bad_points = len(bad_points_ids)
-                if n_bad_points > split_trigger.n_max_bad_points:
-                    leaf_node = self.network.get_child_node(leaf_path)
-                    leaf_node.trigger_split_signal = True
-                    leaf_node.split_z_library = z_library[leaf_x_ids, :].cpu().numpy()
-                    # v1
-                    leaf_node.split_z_fitness = leaf_losses
-                    # v2
-                    #leaf_node.split_z_fitness = (leaf_losses > split_trigger.loss_threshold)
-                    # v3
-                    #leaf_node.split_z_fitness = None
-
-                    # save poor data buffer
-                    if not os.path.exists(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer")):
-                        os.makedirs(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer"))
-                    poor_data_buffer = np.empty((n_bad_points, self.network.config.network.parameters.n_channels,
-                                                self.network.config.network.parameters.input_size[0],
-                                                self.network.config.network.parameters.input_size[1]), dtype=np.float)
-                    for idx in range(len(bad_points_ids)):
-                        poor_data_buffer[idx] = train_loader.dataset.__getitem__(bad_points_ids[idx])["obs"]
-                    np.save(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer", "poor_buffer_when_splitting_{}.npy".format(leaf_path)), poor_data_buffer)
-                    np.savez(os.path.join(self.config.evaluation.folder, "poor_train_data_buffer", "z_library_when_splitting_{}.npz".format(leaf_path)), ** {'z_library': leaf_node.split_z_library, 'z_fitness': leaf_node.split_z_fitness})
 
         # Average loss on all tree
         for k, v in losses.items():
@@ -782,7 +822,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 # forward
                 model_outputs = self.forward(x)
                 loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
-                batch_losses = self.loss_f(loss_inputs, reduction=False)
+                batch_losses = self.loss_f(loss_inputs, reduction="none")
                 # save losses
                 for k, v in batch_losses.items():
                     if k not in losses:
@@ -860,35 +900,46 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 tree_depth = (split["depth"]+2)
 
         test_results = {}
-        test_results["path_taken"] = [None] * n_images
-        test_results["label"] = np.empty(n_images, dtype=np.int)
-        test_results["z"] = -1 * np.ones((n_images, tree_depth, self.network.config.network.parameters.n_latents),
-                                     dtype=np.float)
-        test_results["recon_x"] = -1 * np.ones((n_images, tree_depth, self.network.config.network.parameters.n_channels,
-                                            self.network.config.network.parameters.input_size[0],
-                                            self.network.config.network.parameters.input_size[1]), dtype=np.float)
-        test_results["loss_kld"] = -1 * np.ones((n_images, tree_depth), dtype=np.float)
-        test_results["loss_recon"] = -1 * np.ones((n_images, tree_depth), dtype=np.float)
-        test_results["loss_total"] = -1 * np.ones((n_images, tree_depth), dtype=np.float)
+        test_results["taken_pathes"] = [None] * n_images
+        test_results["labels"] = np.empty(n_images, dtype=np.int)
+        test_results["nll"] = np.empty(n_images, dtype=np.float)
+        test_results["recon_loss"] = np.empty(n_images, dtype=np.float)
+        test_results["cluster_classification_pred"] = np.empty(n_images, dtype=np.int)
+        test_results["cluster_classification_acc"] = np.empty(n_images, dtype=np.bool)
+        test_results["5NN_classification_pred"] = np.empty(n_images, dtype=np.int)
+        test_results["5NN_classification_err"] = np.empty(n_images, dtype=np.bool)
+        test_results["10NN_classification_pred"] = np.empty(n_images, dtype=np.int)
+        test_results["10NN_classification_err"] = np.empty(n_images, dtype=np.bool)
+        test_results["20NN_classification_pred"] = np.empty(n_images, dtype=np.int)
+        test_results["20NN_classification_err"] = np.empty(n_images, dtype=np.bool)
+        #TODO: "spread" kNN
 
-        test_results["cluster_classification"] = -1 * np.ones((n_images, tree_depth), dtype = np.int)
-        test_results["cluster_classification_acc"] = np.empty((n_images, tree_depth), dtype=np.bool)
-        K = [5, 10, 20] # try with 5_NN, 10-NN and 20-NN nearest neighbor classifier
-        test_results["kNN_classification"] = -1 * np.ones((n_images, tree_depth, len(K)), dtype=np.int)
-        test_results["kNN_classification_acc"] = np.empty((n_images, tree_depth, len(K)), dtype=np.bool)
-        # TODO: "spread" kNN
-        test_results["kNN_spread_classification"] = -1 * np.ones((n_images, tree_depth, len(K)), dtype=np.int)
-        test_results["kNN_spread_classification_acc"] = np.empty((n_images, tree_depth, len(K)), dtype=np.bool)
+        test_results_per_node = {}
+        for node_path in self.network.get_node_pathes():
+            test_results_per_node[node_path] = dict()
+            test_results_per_node[node_path]["x_ids"] = []
+            test_results_per_node[node_path]["z"] = []
+            test_results_per_node[node_path]["recon_x"] = []
+            test_results_per_node[node_path]["nll"] = []
+            test_results_per_node[node_path]["recon_loss"] = []
+            test_results_per_node[node_path]["cluster_classification_pred"] = []
+            test_results_per_node[node_path]["cluster_classification_acc"] = []
+            test_results_per_node[node_path]["5NN_classification_pred"] = []
+            test_results_per_node[node_path]["5NN_classification_err"] = []
+            test_results_per_node[node_path]["10NN_classification_pred"] = []
+            test_results_per_node[node_path]["10NN_classification_err"] = []
+            test_results_per_node[node_path]["20NN_classification_pred"] = []
+            test_results_per_node[node_path]["20NN_classification_err"] = []
 
-        labels_per_node = dict.fromkeys(self.network.get_node_pathes(), [])
         with torch.no_grad():
             # Compute results per image
             idx_offset = 0
             for data in test_loader:
                 x = data['obs']
                 x = self.push_variable_to_device(x)
+                cur_x_ids = np.asarray(data["index"], dtype=np.int)
                 y = data['label'].squeeze()
-                test_results["label"][idx_offset:idx_offset + len(x)] = y.detach().cpu().numpy()
+                test_results["labels"][cur_x_ids] = y.detach().cpu().numpy()
 
                 # forward
                 all_nodes_outputs = self.network.depth_first_forward_all_nodes_preorder(x)
@@ -897,22 +948,32 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                     cur_node_x_ids = np.asarray(all_nodes_outputs[node_idx][1], dtype=np.int)
                     cur_node_outputs = all_nodes_outputs[node_idx][2]
                     loss_inputs = {key: cur_node_outputs[key] for key in self.loss_f.input_keys_list}
-                    cur_losses = self.loss_f(loss_inputs, reduction=False)
-                    for x_idx in cur_node_x_ids:
-                        test_results["path_taken"][idx_offset + x_idx] = cur_node_path  # preorder so inner path are overwritten by leaf pathes
-                    test_results["z"][idx_offset + cur_node_x_ids, len(cur_node_path) - 1] = cur_node_outputs["z"].detach().cpu().numpy()
-                    test_results["recon_x"][idx_offset + cur_node_x_ids, len(cur_node_path) - 1] = cur_node_outputs["x"].detach().cpu().numpy()
-                    test_results["loss_kld"][idx_offset + cur_node_x_ids, len(cur_node_path) - 1] = cur_losses["KLD"].detach().cpu().numpy()
-                    test_results["loss_recon"][idx_offset + cur_node_x_ids, len(cur_node_path) - 1] = cur_losses["recon"].detach().cpu().numpy()
-                    test_results["loss_total"][idx_offset + cur_node_x_ids, len(cur_node_path) - 1] = cur_losses["total"].detach().cpu().numpy()
-                    labels_per_node[cur_node_path].append(y[cur_node_x_ids].detach().cpu().numpy())
-                idx_offset += len(x)
+                    cur_losses = self.loss_f(loss_inputs, reduction="none")
+                    test_results_per_node[cur_node_path]["x_ids"] += cur_x_ids[cur_node_x_ids].tolist()
+                    test_results_per_node[cur_node_path]["z"] += cur_node_outputs["z"].detach().cpu().numpy().tolist()
+                    test_results_per_node[cur_node_path]["recon_x"] += cur_node_outputs["recon_x"].detach().cpu().numpy().tolist()
+                    test_results_per_node[cur_node_path]["nll"] += cur_losses["total"].detach().cpu().numpy().tolist()
+                    test_results_per_node[cur_node_path]["recon_loss"] += cur_losses["recon"].detach().cpu().numpy().tolist()
+
+                    cur_node = self.network.get_child_node(cur_node_path)
+                    if cur_node.leaf:
+                        for x_idx in cur_node_x_ids:
+                            test_results["taken_pathes"][cur_x_ids[x_idx]] = cur_node_path
+                        test_results["nll"][cur_x_ids[cur_node_x_ids]] = cur_losses["total"].detach().cpu().numpy()
+                        test_results["recon_loss"][cur_x_ids[cur_node_x_ids]] = cur_losses["recon"].detach().cpu().numpy()
 
         # compute results for classification
         for node_path in self.network.get_node_pathes():
+            # update lists to numpy
+            test_results_per_node[node_path]["x_ids"] = np.asarray(test_results_per_node[node_path]["x_ids"], dtype = np.int)
+            test_results_per_node[node_path]["z"] = np.asarray(test_results_per_node[node_path]["z"], dtype = np.float)
+
             # cluster classification accuracy
-            labels_per_node[node_path] = np.concatenate(labels_per_node[node_path])
-            labels_in_node = labels_per_node[node_path]
+            if len(test_results_per_node[node_path]["x_ids"]) > 0:
+                labels_in_node = test_results["labels"][test_results_per_node[node_path]["x_ids"]]
+            else:
+                print("break")
+                continue
             majority_voted_class = -1
             max_n_votes = 0
             for label in list(set(labels_in_node)):
@@ -920,19 +981,16 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 if label_count > max_n_votes:
                     max_n_votes = label_count
                     majority_voted_class = label
-            cur_depth_path_taken = np.array(test_results["path_taken"])
-            for x_idx in range(cur_depth_path_taken.shape[0]):
-                cur_depth_path_taken[x_idx] = cur_depth_path_taken[x_idx][:len(node_path)]
-            cur_node_x_ids = np.where( cur_depth_path_taken == node_path) [0] # this time cur_node_x_ids are absolute, no need of idx_offset
-            test_results["cluster_classification"][cur_node_x_ids, len(node_path) - 1] = majority_voted_class
-            test_results["cluster_classification_acc"][cur_node_x_ids, len(node_path) - 1] = (majority_voted_class == test_results["label"][cur_node_x_ids])
+            cur_node_x_ids = test_results_per_node[node_path]["x_ids"]
+            test_results_per_node[node_path]["cluster_classification_pred"] = [majority_voted_class] * len(cur_node_x_ids)
+            test_results_per_node[node_path]["cluster_classification_acc"] = (test_results["labels"][cur_node_x_ids] == majority_voted_class)
 
             # k-NN classification accuracy
-            for idx in cur_node_x_ids:
-                distances_to_point_in_node = np.linalg.norm(test_results["z"][idx, len(cur_node_path)-1] - test_results["z"][cur_node_x_ids, len(cur_node_path)-1], axis=1)
-                closest_point_ids = np.argpartition(distances_to_point_in_node, min(K[-1], len(distances_to_point_in_node)))
-                for k_idx, k in enumerate(K):
-                    voting_labels = test_results["label"][closest_point_ids[:k]]
+            for x_idx in range(len(cur_node_x_ids)):
+                distances_to_point_in_node = np.linalg.norm(test_results_per_node[node_path]["z"][x_idx] - test_results_per_node[node_path]["z"], axis=1)
+                closest_point_ids = np.argpartition(distances_to_point_in_node, min(20, len(distances_to_point_in_node)))
+                for k_idx, k in enumerate([5,10,20]):
+                    voting_labels = test_results["labels"][closest_point_ids[:k]]
                     majority_voted_class = -1
                     max_n_votes = 0
                     for label in list(set(voting_labels)):
@@ -940,10 +998,20 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                         if label_count > max_n_votes:
                             max_n_votes = label_count
                             majority_voted_class = label
-                    test_results["kNN_classification"][idx, len(cur_node_path) - 1][k_idx] = majority_voted_class
-                    test_results["kNN_classification_acc"][idx, len(cur_node_path) - 1][k_idx] = (majority_voted_class == test_results["label"][idx])
+                    test_results_per_node[node_path]["{}NN_classification_pred".format(k)].append(majority_voted_class)
+                    test_results_per_node[node_path]["{}NN_classification_err".format(k)].append(test_results["labels"][x_idx] != majority_voted_class)
 
-                    # k-NN "spread" classification accuracy: recurse over descendency
+            node = self.network.get_child_node(node_path)
+            if node.leaf:
+                test_results["cluster_classification_pred"][cur_node_x_ids] = test_results_per_node[node_path]["cluster_classification_pred"]
+                test_results["cluster_classification_acc"][cur_node_x_ids] = test_results_per_node[node_path]["cluster_classification_acc"]
+                test_results["5NN_classification_pred"][cur_node_x_ids] = test_results_per_node[node_path]["5NN_classification_pred"]
+                test_results["5NN_classification_err"][cur_node_x_ids] = test_results_per_node[node_path]["5NN_classification_err"]
+                test_results["10NN_classification_pred"][cur_node_x_ids] = test_results_per_node[node_path]["10NN_classification_pred"]
+                test_results["10NN_classification_err"][cur_node_x_ids] = test_results_per_node[node_path]["10NN_classification_err"]
+                test_results["20NN_classification_pred"][cur_node_x_ids] = test_results_per_node[node_path]["20NN_classification_pred"]
+                test_results["20NN_classification_err"][cur_node_x_ids] = test_results_per_node[node_path]["20NN_classification_err"]
+
 
 
         # Save results
@@ -1000,7 +1068,7 @@ class ConnectedEncoder(gr.dnn.networks.encoders.BaseDNNEncoder):
             if self.lf.out_connection_type[0] == "conv":
                 connection_channels = self.lf.out_connection_type[1]
                 for ancestor_depth in range(self.depth):
-                    self.lf_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1), nn.ReLU())
+                    self.lf_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
             elif self.lf.out_connection_type[0] == "lin":
                 connection_dim = self.lf.out_connection_type[1]
                 for ancestor_depth in range(self.depth):
@@ -1011,18 +1079,19 @@ class ConnectedEncoder(gr.dnn.networks.encoders.BaseDNNEncoder):
             if self.gf.out_connection_type[0] == "conv":
                 connection_channels = self.gf.out_connection_type[1]
                 for ancestor_depth in range(self.depth):
-                    self.gf_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1), nn.ReLU())
+                    self.gf_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
             elif self.gf.out_connection_type[0] == "lin":
                 connection_dim = self.gf.out_connection_type[1]
                 for ancestor_depth in range(self.depth):
                     self.gf_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
 
         # lf is initialized with parent weights, gf and ef with kaiming, connections with small random weights
-        # v1: uncomment the 3 following lines
-        #initialization_net = initialization.get_initialization("kaiming_uniform")
+        # v1: uncomment the 4 following lines
+        #initialization_net = initialization.get_initialization("null")
         #self.gf.apply(initialization_net)
         #self.ef.apply(initialization_net)
-        initialization_c = initialization.get_initialization("uniform")
+        #initialization_c = initialization.get_initialization("connections_identity")
+        initialization_c = initialization.get_initialization("null")
         if self.connect_lf:
             self.lf_c.apply(initialization_c)
         if self.connect_gf:
@@ -1106,7 +1175,7 @@ class ConnectedDecoder(gr.dnn.networks.decoders.BaseDNNDecoder):
             if self.efi.out_connection_type[0] == "conv":
                 connection_channels = self.efi.out_connection_type[1]
                 for ancestor_depth in range(self.depth):
-                    self.gfi_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1), nn.ReLU())
+                    self.gfi_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
             elif self.efi.out_connection_type[0] == "lin":
                 connection_dim = self.efi.out_connection_type[1]
                 for ancestor_depth in range(self.depth):
@@ -1115,7 +1184,7 @@ class ConnectedDecoder(gr.dnn.networks.decoders.BaseDNNDecoder):
         if self.connect_lfi:
             if self.gfi.out_connection_type[0] == "conv":
                 connection_channels = self.gfi.out_connection_type[1]
-                self.lfi_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1), nn.ReLU())
+                self.lfi_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
             elif self.gfi.out_connection_type[0] == "lin":
                 connection_dim = self.gfi.out_connection_type[1]
                 self.lfi_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
@@ -1125,18 +1194,19 @@ class ConnectedDecoder(gr.dnn.networks.decoders.BaseDNNDecoder):
             if self.lfi.out_connection_type[0] == "conv":
                 connection_channels = self.lfi.out_connection_type[1]
                 for ancestor_depth in range(self.depth):
-                    self.recon_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1), nn.ReLU())
+                    self.recon_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False))
             elif self.lfi.out_connection_type[0] == "lin":
                 connection_dim = self.lfi.out_connection_type[1]
                 self.recon_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
 
         # lf is initialized with parent weights, gf and ef with kaiming, connections with small random weights
-        # v1: uncomment the 4 following lines
-        #initialization_net = initialization.get_initialization("kaiming_uniform")
+        # v1: uncomment the 5 following lines
+        #initialization_net = initialization.get_initialization("null")
         #self.efi.apply(initialization_net)
         #self.gfi.apply(initialization_net)
         #self.lfi.apply(initialization_net)
-        initialization_c = initialization.get_initialization("uniform")
+        #initialization_c = initialization.get_initialization("connections_identity")
+        initialization_c = initialization.get_initialization("null")
         if self.connect_gfi:
             self.gfi_c.apply(initialization_c)
         if self.connect_lfi:

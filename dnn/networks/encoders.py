@@ -379,3 +379,37 @@ class DumoulinEncoder(BaseDNNEncoder):
         else:
             encoder_outputs = super().forward(x)
         return encoder_outputs
+
+
+class MNISTEncoder(BaseDNNEncoder):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        # need square image input
+        assert self.input_size[0] == self.input_size[1], "BurgessEncoder needs a square image input size"
+
+        # network architecture
+        if self.hidden_dim is None:
+            self.hidden_dim = 400
+
+        # local feature
+        self.local_feature_shape = (self.hidden_dim)
+
+        self.lf = nn.Sequential()
+        self.lf.add_module("flatten", Flatten())
+        self.lf.add_module("lin_0", nn.Sequential(nn.Linear(self.n_channels*self.input_size[0]*self.input_size[1], self.hidden_dim), nn.ReLU()))
+        self.lf.out_connection_type = ("lin", self.hidden_dim)
+
+        # global feature
+        self.gf = nn.Sequential()
+        self.gf.add_module("lin_1", nn.Sequential(nn.Linear(self.hidden_dim, self.hidden_dim), nn.ReLU()))
+        self.gf.out_connection_type = ("lin", self.hidden_dim)
+
+        # encoding feature
+        if self.conditional_type == "gaussian":
+            self.add_module("ef", nn.Linear(self.hidden_dim, 2 * self.n_latents))
+        elif self.conditional_type == "deterministic":
+            self.add_module("ef", nn.Linear(self.hidden_dim, self.n_latents))
+        else:
+            raise ValueError("The conditional type must be either gaussian or deterministic")

@@ -14,9 +14,9 @@ to_tensor = ToTensor()
 to_PIL_image = ToPILImage()
 
 
-# ================
-# Generic Datasets
-# ================
+# ===========================
+# HOLMES Datasets
+# ===========================
 
 class HOLMESDataset(Dataset):
 
@@ -83,7 +83,7 @@ class HOLMESDataset(Dataset):
         if self.target_transform is not None:
             label = self.target_transform(label)
 
-        return {'obs': img_tensor, 'label': label}
+        return {'obs': img_tensor, 'label': label, 'index': idx}
 
     def save(self, output_npz_filepath):
         np.savez(output_npz_filepath, n_images=self.n_images, images=np.stack(self.images),
@@ -237,6 +237,10 @@ class CIFAR100Dataset(torchvision.datasets.CIFAR100):
        return {'obs': self.images[index], 'label': self.labels[index]}
 
 
+
+# ===========================
+# Lenia Dataset
+# ===========================
 
 class DatasetLenia(Dataset):
     """ Dataset to train auto-encoders representations during exploration"""
@@ -513,3 +517,83 @@ class DatasetHDF5(Dataset):
 
         return {'obs': img_tensor, 'label': label}
 
+
+# ===========================
+# Triplet/Quadruplet Dataset
+# ===========================
+class ImageQuadrupletDatasetFromHuman(Dataset):
+    def __init__(self,  dataset_filepath, anno_filepath, split='train', use_pass=False, distance='euclidean', preprocess=None, data_augmentation=False):
+
+        assert split == 'train' or split == 'test'
+        self.distance = distance
+        self.filepath = filepath
+        self.use_pass = use_pass
+        self.preprocess = preprocess
+        self.data_augmentation = data_augmentation
+
+
+        datapoints = np.loadtxt(self.filepath + '/{}.txt'.format(split)).astype(np.int)
+
+        # construct triplets from data
+        positive_pairs = []
+        negative_pairs = []
+        for d in datapoints:
+            if self.use_pass:
+                # if pass, add 6 triplets (positive pair being AA, negative pairs AB, AC, AD)
+                if d[-1] == 1:
+                    for i in range(4):
+                        for j in range(i + 1, 4):
+                            positive_pairs.append([d[i], d[i]])
+                            negative_pairs.append([d[i], d[j]])
+            # if not pass, add two triplets
+            if d[-1] == 0:
+                for i in range(4):
+                    for j in range(i + 1, 4):
+                        if (i, j) != (0, 1):
+                            positive_pairs.append([d[0], d[1]])
+                            negative_pairs.append([d[i], d[j]])
+
+        quadruplets = np.concatenate([positive_pairs, negative_pairs], axis=1)
+
+        inds = np.arange(quadruplets.shape[0])
+
+        np.random.shuffle(inds)
+        with h5py.File(self.filepath + 'dataset.h5', 'r') as file:
+            self.images = torch.Tensor(file[self.split]['observations']).float()
+            self.img_size = (self.images.shape[2], self.images.shape[3])
+            self.labels = torch.Tensor(file[self.split]['labels']).float()
+
+
+        self.quadruplets = quadruplets[inds].copy()
+
+        self.data_size = quadruplets.shape[0]
+
+    def __getitem__(self, index):
+        img_pos_a = self.images[self.quadruplets[index][0]]
+        img_pos_b = self.images[self.quadruplets[index][1]]
+        img_neg_a = self.images[self.quadruplets[index][2]]
+        img_neg_b = self.images[self.quadruplets[index][3]]
+
+        if self.data_augmentation:
+            pass
+
+        if self.preprocess is not None:
+            img_pos_a = self.preprocess(img_pos_a).float()
+            img_pos_b = self.preprocess(img_pos_b).float()
+            img_neg_a = self.preprocess(img_neg_a).float()
+            img_neg_b = self.preprocess(img_neg_b).float()
+
+        label_pos_a = self.images[self.quadruplets[index][0]]
+        label_pos_b = self.images[self.quadruplets[index][1]]
+        label_neg_a = self.images[self.quadruplets[index][2]]
+        label_neg_b = self.images[self.quadruplets[index][3]]
+
+        data_pos_a = {"obs": img_pos_a, "label": label_pos_a}
+        data_pos_b = {"obs": img_pos_b, "label": label_pos_b}
+        data_neg_a = {"obs": img_neg_a, "label": label_neg_a}
+        data_neg_b = {"obs": img_neg_b, "label": label_neg_b}
+
+        return (data_pos_a, data_pos_b, data_neg_a, data_neg_b)
+
+    def __len__(self):
+        return self.data_size

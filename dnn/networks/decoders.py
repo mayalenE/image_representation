@@ -299,3 +299,30 @@ class DumoulinDecoder(BaseDNNDecoder):
             nn.Sigmoid()
         ))
         self.lfi.out_connection_type = ("conv", self.n_channels)
+
+
+
+class MNISTDecoder(BaseDNNDecoder):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        # network architecture
+        if self.hidden_dim is None:
+            self.hidden_dim = 400
+
+        # encoder feature inverse
+        self.efi = nn.Sequential(nn.Linear(self.n_latents, self.hidden_dim), nn.ReLU())
+        self.efi.out_connection_type = ("lin", self.hidden_dim)
+
+        # global feature inverse
+        ## linear layers
+        self.gfi = nn.Sequential()
+        self.gfi.add_module("lin_1_i", nn.Sequential(nn.Linear( self.hidden_dim,  self.hidden_dim), nn.ReLU()))
+        self.gfi.out_connection_type = ("lin",  self.hidden_dim)
+
+        # local feature inverse
+        self.lfi = nn.Sequential()
+        self.lfi.add_module("lin_0_i", nn.Linear(self.hidden_dim, self.n_channels*self.input_size[0]*self.input_size[1]))
+        self.lfi.add_module("channelize", Channelize(self.n_channels, self.input_size[0], self.input_size[1]))
+        self.lfi.out_connection_type = ("conv", self.n_channels)
