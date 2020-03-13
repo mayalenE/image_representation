@@ -274,8 +274,8 @@ class Node(nn.Module):
 
 class VAENode(Node, models.VAEModel):
     def __init__(self, depth, parent_network=None, config=None, **kwargs):
-        super(Node, self).__init__(config=config, **kwargs)
-        super().__init__(depth, **kwargs)
+        models.VAEModel.__init__(self, config=config, **kwargs)
+        Node.__init__(self, depth, **kwargs)
 
         # connect encoder and decoder
         if self.depth > 0:
@@ -295,6 +295,45 @@ class VAENode(Node, models.VAEModel):
         model_outputs = encoder_outputs
         model_outputs.update(decoder_outputs)
         return model_outputs
+
+
+class BetaVAENode(VAENode):
+    def __init__(self, depth, parent_network=None, config=None, **kwargs):
+        models.BetaVAEModel.__init__(self, config=config, **kwargs)
+        Node.__init__(self, depth, **kwargs)
+
+        # connect encoder and decoder
+        if self.depth > 0:
+            self.network.encoder = ConnectedEncoder(parent_network.encoder, depth, connect_lf=True, connect_gf=False)
+            self.network.decoder = ConnectedDecoder(parent_network.decoder, depth, connect_gfi=True, connect_lfi=True,
+                                                    connect_recon=True)
+        self.set_device(self.config.device.use_gpu)
+
+
+class AnnealedVAENode(VAENode):
+    def __init__(self, depth, parent_network=None, config=None, **kwargs):
+        models.AnnealedVAEModelVAEModel.__init__(self, config=config, **kwargs)
+        Node.__init__(self, depth, **kwargs)
+
+        # connect encoder and decoder
+        if self.depth > 0:
+            self.network.encoder = ConnectedEncoder(parent_network.encoder, depth, connect_lf=True, connect_gf=False)
+            self.network.decoder = ConnectedDecoder(parent_network.decoder, depth, connect_gfi=True, connect_lfi=True,
+                                                    connect_recon=True)
+        self.set_device(self.config.device.use_gpu)
+
+
+class BetaTCVAENode(VAENode):
+    def __init__(self, depth, parent_network=None, config=None, **kwargs):
+        models.BetaTCVAEModel.__init__(self, config=config, **kwargs)
+        Node.__init__(self, depth, **kwargs)
+
+        # connect encoder and decoder
+        if self.depth > 0:
+            self.network.encoder = ConnectedEncoder(parent_network.encoder, depth, connect_lf=True, connect_gf=False)
+            self.network.decoder = ConnectedDecoder(parent_network.decoder, depth, connect_gfi=True, connect_lfi=True,
+                                                    connect_recon=True)
+        self.set_device(self.config.device.use_gpu)
 
 
 class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
@@ -328,7 +367,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
         self.NodeClass = eval("{}Node".format(config.node_classname))
         self.split_history = {}  # dictionary with node path keys and boundary values
 
-        super().__init__(config=config, **kwargs)
+        dnn.BaseDNN.__init__(self, config=config, **kwargs)
 
     def set_network(self, network_name, network_parameters):
         depth = 0
@@ -870,7 +909,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 sampled_ids = np.random.choice(len(leaf_x_ids), n_images, replace=False)
                 input_images = torch.cat([images[i] for i in leaf_x_ids[sampled_ids]]).cpu()
                 output_images = torch.cat([recon_images[i] for i in leaf_x_ids[sampled_ids]]).cpu()
-                if self.config.loss.parameters.reconstruction_dist == "bernouilli":
+                if self.config.loss.parameters.reconstruction_dist == "bernoulli":
                     output_images = torch.sigmoid(output_images)
                 vizu_tensor_list = [None] * (2 * n_images)
                 vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]
@@ -1047,11 +1086,14 @@ CONNECTED MODULES
 
 class ConnectedEncoder(gr.dnn.networks.encoders.BaseDNNEncoder):
     def __init__(self, encoder_instance, depth, connect_lf=False, connect_gf=False, **kwargs):
-        super().__init__(n_channels=encoder_instance.n_channels, input_size=encoder_instance.input_size,
-                         n_conv_layers=encoder_instance.n_conv_layers, n_latents=encoder_instance.n_latents,
-                         encoder_conditional_type=encoder_instance.conditional_type,
-                         feature_layer=encoder_instance.feature_layer,
-                         hidden_channels=encoder_instance.hidden_channels, hidden_dim=encoder_instance.hidden_dim)
+        gr.dnn.networks.encoders.BaseDNNEncoder.__init__(self, n_channels=encoder_instance.n_channels,
+                                                         input_size=encoder_instance.input_size,
+                                                         n_conv_layers=encoder_instance.n_conv_layers,
+                                                         n_latents=encoder_instance.n_latents,
+                                                         encoder_conditional_type=encoder_instance.conditional_type,
+                                                         feature_layer=encoder_instance.feature_layer,
+                                                         hidden_channels=encoder_instance.hidden_channels,
+                                                         hidden_dim=encoder_instance.hidden_dim)
         # connections and depth in the tree (number of connections)
         self.connect_lf = connect_lf
         self.connect_gf = connect_gf
@@ -1153,10 +1195,13 @@ class ConnectedEncoder(gr.dnn.networks.encoders.BaseDNNEncoder):
 
 class ConnectedDecoder(gr.dnn.networks.decoders.BaseDNNDecoder):
     def __init__(self, decoder_instance, depth, connect_gfi=False, connect_lfi=False, connect_recon=False, **kwargs):
-        super().__init__(n_channels=decoder_instance.n_channels, input_size=decoder_instance.input_size,
-                         n_conv_layers=decoder_instance.n_conv_layers, n_latents=decoder_instance.n_latents,
-                         feature_layer=decoder_instance.feature_layer, hidden_channels=decoder_instance.hidden_channels,
-                         hidden_dim=decoder_instance.hidden_dim)
+        gr.dnn.networks.decoders.BaseDNNDecoder.__init__(self, n_channels=decoder_instance.n_channels,
+                                                         input_size=decoder_instance.input_size,
+                                                         n_conv_layers=decoder_instance.n_conv_layers,
+                                                         n_latents=decoder_instance.n_latents,
+                                                         feature_layer=decoder_instance.feature_layer,
+                                                         hidden_channels=decoder_instance.hidden_channels,
+                                                         hidden_dim=decoder_instance.hidden_dim)
 
         # connections and depth in the tree (number of connections)
         self.connect_gfi = connect_gfi

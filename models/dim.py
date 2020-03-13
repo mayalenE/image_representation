@@ -28,7 +28,7 @@ class GlobalDiscriminator(nn.Module):
         return default_config
 
     def __init__(self, n_latents=64, local_feature_shape=(256, 4, 4), config=None, **kwargs):
-        super().__init__()
+        nn.Module.__init__(self)
         self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
 
         in_features = n_latents + np.product(local_feature_shape)
@@ -50,7 +50,7 @@ class GlobalDiscriminator(nn.Module):
 
 class BlockLayerNorm(nn.Module):
     def __init__(self, num_features):
-        super().__init__()
+        nn.Module.__init__(self)
         self.num_features = num_features
 
         self.layer_norm = nn.LayerNorm(num_features)
@@ -72,7 +72,7 @@ class LocalEncodeAndDotDiscriminator(nn.Module):
         return default_config
 
     def __init__(self, n_latents=64, local_feature_shape=(256, 4, 4), config=None, **kwargs):
-        super().__init__()
+        nn.Module.__init__(self)
         self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
 
         hidden_dim = 2048
@@ -121,7 +121,7 @@ class LocalEncodeAndDotDiscriminator(nn.Module):
 
 class PriorDiscriminator(nn.Module):
     def __init__(self, n_latents):
-        super().__init__()
+        nn.Module.__init__(self)
         hidden_dim_1 = 1000
         hidden_dim_2 = 200
         self.network = nn.Sequential(
@@ -189,14 +189,14 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        super().__init__(config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
+        dnn.BaseDNN.__init__(self, config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
 
         self.output_keys_list = self.network.encoder.output_keys_list + ["global_pos", "global_neg", "local_pos",
                                                                          "local_neg", "prior_pos", "prior_neg"]
 
     def set_network(self, network_name, network_parameters):
         # defines the encoder
-        super().set_network(network_name, network_parameters)
+        dnn.BaseDNN.set_network(self, network_name, network_parameters)
         n_latents = self.config.network.parameters.n_latents
         local_feature_shape = self.network.encoder.local_feature_shape
         # add a global discriminator

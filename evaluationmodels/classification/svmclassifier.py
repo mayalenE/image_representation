@@ -33,7 +33,7 @@ class SVMClassifierModel(evaluationmodels.BaseClassifierModel):
         return default_config
 
     def __init__(self, representation_model, config=None, **kwargs):
-        super().__init__(representation_model, config=config, **kwargs)
+        evaluationmodels.BaseClassifierModel.__init__(self, representation_model, config=config, **kwargs)
 
         self.set_algorithm(self.config.algorithm.name, self.config.algorithm.hyperparameters)
 

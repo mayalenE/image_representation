@@ -19,6 +19,34 @@ def get_loss(loss_name):
     """
     return eval("{}Loss".format(loss_name))
 
+
+class TripletLoss(BaseLoss):
+    def __init__(self, margin=0.0, **kwargs):
+        self.margin = margin
+
+        self.input_keys_list = ['z_ref', 'z_a', 'z_b']
+
+    def __call__(self, loss_inputs, reduction="mean", **kwargs):
+        try:
+            z_ref = loss_inputs['z_ref']
+            z_a = loss_inputs['z_a']
+            z_b = loss_inputs['z_b']
+        except:
+            raise ValueError("DIMLoss needs {} inputs".format(self.input_keys_list))
+
+        distance_a = (z_ref - z_a).pow(2).sum(1)
+        distance_b = (z_ref - z_b).pow(2).sum(1)
+
+        total_loss = F.relu(distance_a - distance_b + self.margin)
+
+        if reduction == "none":
+            return {'total': total_loss}
+        elif reduction == "sum":
+            return {'total': total_loss.sum()}
+        elif reduction == "mean":
+            return {'total': total_loss.mean()}
+
+
 class QuadrupletLoss(BaseLoss):
     def __init__(self, margin=0.0, **kwargs):
         self.margin = margin
@@ -93,8 +121,36 @@ class BiGANLoss(BaseLoss):
         return {'discriminator': discriminator_loss, 'generator': generator_loss, 'total': total_loss}
 
 
+class VAEGANLoss(BaseLoss):
+    def __init__(self, reconstruction_dist="bernoulli", **kwargs):
+        self.reconstruction_dist = reconstruction_dist
+        self.input_keys_list = ['x', 'recon_x', 'mu', 'logvar', 'prob_pos', 'prob_neg']
+
+    def __call__(self, loss_inputs, reduction="mean", **kwargs):
+        try:
+            recon_x = loss_inputs['recon_x']
+            mu = loss_inputs['mu']
+            logvar = loss_inputs['logvar']
+            x = loss_inputs['x']
+            prob_pos = loss_inputs['prob_pos']
+            prob_neg = loss_inputs['prob_neg']
+        except:
+            raise ValueError("VAELoss needs {} inputs".format(self.input_keys_list))
+        recon_loss = _reconstruction_loss(recon_x, x, self.reconstruction_dist, reduction=reduction)
+        KLD_loss, KLD_per_latent_dim, KLD_var = _kld_loss(mu, logvar, reduction=reduction)
+        vae_loss = recon_loss + KLD_loss
+
+        discriminator_loss = _gan_loss(prob_pos, prob_neg)
+        generator_loss = _gan_loss(prob_neg, prob_pos)
+
+        total_loss = vae_loss + discriminator_loss + generator_loss
+
+        return {'total': total_loss, 'vae': vae_loss, 'recon': recon_loss, 'KLD': KLD_loss,
+                'discriminator': discriminator_loss, 'generator': generator_loss}
+
+
 class VAELoss(BaseLoss):
-    def __init__(self, reconstruction_dist="bernouilli", **kwargs):
+    def __init__(self, reconstruction_dist="bernoulli", **kwargs):
         self.reconstruction_dist = reconstruction_dist
 
         self.input_keys_list = ['x', 'recon_x', 'mu', 'logvar']
@@ -115,8 +171,7 @@ class VAELoss(BaseLoss):
 
 
 class BetaVAELoss(BaseLoss):
-    def __init__(self, beta=5.0, reconstruction_dist="bernouilli", **kwargs):
-        super().__init(**kwargs)
+    def __init__(self, beta=5.0, reconstruction_dist="bernoulli", **kwargs):
         self.reconstruction_dist = reconstruction_dist
         self.beta = beta
 
@@ -138,8 +193,7 @@ class BetaVAELoss(BaseLoss):
 
 
 class AnnealedVAELoss(BaseLoss):
-    def __init__(self, gamma=1000.0, capacity=0.0, reconstruction_dist="bernouilli", **kwargs):
-        super().__init(**kwargs)
+    def __init__(self, gamma=1000.0, capacity=0.0, reconstruction_dist="bernoulli", **kwargs):
         self.reconstruction_dist = reconstruction_dist
         self.gamma = gamma
         self.capacity = capacity
@@ -163,13 +217,12 @@ class AnnealedVAELoss(BaseLoss):
 
 class BetaTCVAELoss(BaseLoss):
     def __init__(self, alpha=1.0, beta=10.0, gamma=1.0, tc_approximate='mss', dataset_size=0,
-                 reconstruction_dist="bernouilli", **kwargs):
-        super().__init(**kwargs)
+                 reconstruction_dist="bernoulli", **kwargs):
         self.reconstruction_dist = reconstruction_dist
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
-        self.tc_approximate == tc_approximate
+        self.tc_approximate = tc_approximate
         self.dataset_size = dataset_size
 
         self.input_keys_list = ['x', 'recon_x', 'mu', 'logvar', 'z']
@@ -272,8 +325,8 @@ LOSS HELPERS
 =========================================="""
 
 
-def _reconstruction_loss(recon_x, x, reconstruction_dist="bernouilli", reduction="mean"):
-    if reconstruction_dist == "bernouilli":
+def _reconstruction_loss(recon_x, x, reconstruction_dist="bernoulli", reduction="mean"):
+    if reconstruction_dist == "bernoulli":
         loss = _bce_with_digits_loss(recon_x, x, reduction=reduction)
     elif reconstruction_dist == "gaussian":
         loss = _mse_loss(recon_x, x, reduction=reduction)

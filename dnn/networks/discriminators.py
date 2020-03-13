@@ -12,18 +12,17 @@ class BaseDNNDiscriminator(nn.Module, metaclass=ABCMeta):
     Base Discriminator class
     '''
 
-    def __init__(self, n_channels=1, input_size=(64, 64), n_conv_layers=4, n_latents=10, **kwargs):
-        super().__init__()
+    def __init__(self, n_channels=1, input_size=(64, 64), n_conv_layers=4, n_latents=10,
+                 hidden_channels=None, hidden_dim=None, **kwargs):
+        nn.Module.__init__(self)
 
         # network parameters
         self.n_channels = n_channels
         self.input_size = input_size
         self.n_conv_layers = n_conv_layers
         self.n_latents = n_latents
-
-    @abstractmethod
-    def forward(self, x):
-        pass
+        self.hidden_channels = hidden_channels
+        self.hidden_dim = hidden_dim
 
 
 def get_discriminator(model_architecture):
@@ -43,7 +42,7 @@ class BurgessDiscriminator(BaseDNNDiscriminator):
 
     def __init__(self, **kwargs):
         encoder = encoders.BurgessEncoder(**kwargs)
-        super().__init__(**kwargs)
+        BaseDNNDiscriminator.__init__(self, **kwargs)
 
         # inference x
         self.infer_x = nn.Sequential()
@@ -70,7 +69,7 @@ class HjelmDiscriminator(BaseDNNDiscriminator):
 
     def __init__(self, **kwargs):
         encoder = encoders.HjelmEncoder(**kwargs)
-        super().__init__(**kwargs)
+        BaseDNNDiscriminator.__init__(self, **kwargs)
 
         # inference x
         self.infer_x = nn.Sequential()
@@ -103,7 +102,7 @@ class DumoulinDiscriminator(BaseDNNDiscriminator):
 
     def __init__(self, with_dropout=True, **kwargs):
         encoder = encoders.DumoulinEncoder(**kwargs)
-        super().__init__(**kwargs)
+        BaseDNNDiscriminator.__init__(self, **kwargs)
 
         # inference x
         self.infer_x = nn.Sequential()

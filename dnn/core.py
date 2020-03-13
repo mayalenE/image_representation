@@ -68,7 +68,7 @@ class BaseDNN(nn.Module):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        super().__init__()
+        nn.Module.__init__(self)
         self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
 
         # define the device to use (gpu or cpu)
@@ -202,7 +202,7 @@ class BaseDNN(nn.Module):
 
             model.network.load_state_dict(saved_model['network_state_dict'])
 
-            if model_type == "BiGANModel":
+            if model_type == "BiGANModel" or model_type == "VAEGANModel":
                 model.optimizer_discriminator.load_state_dict(saved_model['optimizer_discriminator_state_dict'])
                 model.optimizer_generator.load_state_dict(saved_model['optimizer_generator_state_dict'])
             else:

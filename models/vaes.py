@@ -18,8 +18,6 @@ from torchvision.utils import make_grid
 """ ========================================================================================================================
 Base VAE architecture
 ========================================================================================================================="""
-
-
 class VAEModel(dnn.BaseDNN, gr.BaseModel):
     '''
     Base VAE Class
@@ -49,7 +47,7 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         default_config.loss = gr.Config()
         default_config.loss.name = "VAE"
         default_config.loss.parameters = gr.Config()
-        default_config.loss.parameters.reconstruction_dist = "bernouilli"
+        default_config.loss.parameters.reconstruction_dist = "bernoulli"
 
         # optimizer parameters
         default_config.optimizer = gr.Config()
@@ -60,12 +58,12 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        super().__init__(config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
+        dnn.BaseDNN.__init__(self, config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
 
         self.output_keys_list = self.network.encoder.output_keys_list + ["recon_x"]
 
     def set_network(self, network_name, network_parameters):
-        super().set_network(network_name, network_parameters)
+        dnn.BaseDNN.set_network(self, network_name, network_parameters)
         # add a decoder to the network for the VAE
         decoder_class = decoders.get_decoder(network_name)
         self.network.decoder = decoder_class(**network_parameters)
@@ -179,17 +177,20 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         self.eval()
         losses = {}
 
+        # Prepare logging
         record_valid_images = False
         record_embeddings = False
         if logger is not None:
             if self.n_epochs % self.config.logging.record_valid_images_every == 0:
                 record_valid_images = True
+                images = []
+                recon_images = []
             if self.n_epochs % self.config.logging.record_embeddings_every == 0:
                 record_embeddings = True
-                embedding_samples = []
-                embedding_metadata = []
-                embedding_images = []
-
+                embeddings = []
+                labels = []
+                if images is None:
+                    images = []
         with torch.no_grad():
             for data in valid_loader:
                 x = Variable(data['obs'])
@@ -201,40 +202,55 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
                 # save losses
                 for k, v in batch_losses.items():
                     if k not in losses:
-                        losses[k] = [v.data.item()]
+                        losses[k] = np.expand_dims(v.detach().cpu().numpy(), axis=-1)
                     else:
-                        losses[k].append(v.data.item())
-                # record embeddings
-                if record_embeddings:
-                    embedding_samples.append(model_outputs["z"])
-                    embedding_metadata.append(data['label'])
-                    embedding_images.append(x)
+                        losses[k] = np.vstack([losses[k], np.expand_dims(v.detach().cpu().numpy(), axis=-1)])
 
-        for k, v in losses.items():
-            losses[k] = np.mean(v)
+                if record_valid_images:
+                    recon_x = model_outputs["recon_x"]
+                    images.append(x)
+                    recon_images.append(recon_x)
+
+                if record_embeddings:
+                    embeddings.append(model_outputs["z"])
+                    labels.append(data["label"])
+                    if not record_valid_images:
+                        images.append(x)
 
         if record_valid_images:
-            input_images = x.cpu().data
-            output_images = model_outputs['recon_x'].cpu().data
-            if self.config.loss.parameters.reconstruction_dist == "bernouilli":
-                output_images = torch.sigmoid(model_outputs['recon_x']).cpu().data
-            n_images = data['obs'].size()[0]
+            recon_images = torch.cat(recon_images)
+            images = torch.cat(images)
+        if record_embeddings:
+            embeddings = torch.cat(embeddings)
+            labels = torch.cat(labels)
+            if not record_valid_images:
+                images = torch.cat(images)
+
+        # log results
+        if record_valid_images:
+            n_images = min(len(images), 40)
+            sampled_ids = np.random.choice(len(images), n_images, replace=False)
+            input_images = images[sampled_ids].detach().cpu()
+            output_images = recon_images[sampled_ids].detach().cpu()
+            if self.config.loss.parameters.reconstruction_dist == "bernoulli":
+                output_images = torch.sigmoid(output_images)
             vizu_tensor_list = [None] * (2 * n_images)
             vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]
             vizu_tensor_list[1::2] = [output_images[n] for n in range(n_images)]
             img = make_grid(vizu_tensor_list, nrow=2, padding=0)
-            logger.add_image('reconstructions', img, self.n_epochs)
+            logger.add_image("reconstructions", img, self.n_epochs)
 
         if record_embeddings:
-            embedding_samples = torch.cat(embedding_samples)
-            embedding_metadata = torch.cat(embedding_metadata)
-            embedding_images = torch.cat(embedding_images)
-            embedding_images = tensorboardhelper.resize_embeddings(embedding_images)
+            images = tensorboardhelper.resize_embeddings(images)
             logger.add_embedding(
-                embedding_samples,
-                metadata=embedding_metadata,
-                label_img=embedding_images,
+                embeddings,
+                metadata=labels,
+                label_img=images,
                 global_step=self.n_epochs)
+
+        # average loss and return
+        for k, v in losses.items():
+            losses[k] = np.mean(v)
 
         return losses
 
@@ -257,41 +273,17 @@ class BetaVAEModel(VAEModel):
 
     @staticmethod
     def default_config():
-        default_config = super().default_config()
+        default_config = VAEModel.default_config()
 
-        # hyperparameters
-        default_config.hyperparameters.beta = 5.0
+        # loss parameters
+        default_config.loss.name = "BetaVAE"
+        default_config.loss.parameters.reconstruction_dist = "bernoulli"
+        default_config.loss.parameters.beta = 5.0
 
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        super(BetaVAEModel, self).__init__(config, **kwargs)
-
-    def train_loss(self, outputs, inputs):
-        x = inputs['image']
-        recon_x = outputs['recon_x']
-        mu = outputs['mu']
-        logvar = outputs['logvar']
-
-        if self.use_gpu and not x.is_cuda:
-            x = x.cuda()
-
-        if self.use_gpu and not recon_x.is_cuda:
-            recon_x = recon_x.cuda()
-
-        if self.use_gpu and not mu.is_cuda:
-            mu = mu.cuda()
-
-        if self.use_gpu and not logvar.is_cuda:
-            logvar = logvar.cuda()
-
-        recon_loss = self.recon_loss(recon_x, x)
-        KLD_loss, KLD_per_latent_dim, KLD_var = losses.KLD_loss(mu, logvar)
-        total_loss = recon_loss + self.config.hyperparameters.beta * KLD_loss
-        return {'total': total_loss, 'recon': recon_loss, 'KLD': KLD_loss}
-
-    def valid_losses(self, outputs, inputs):
-        return self.train_loss(outputs, inputs)
+        VAEModel.__init__(self, config, **kwargs)
 
 
 class AnnealedVAEModel(VAEModel):
@@ -301,66 +293,41 @@ class AnnealedVAEModel(VAEModel):
 
     @staticmethod
     def default_config():
-        default_config = super().default_config()
+        default_config = VAEModel.default_config()
 
-        # hyperparameters
-        default_config.hyperparameters.gamma = 1000.0
-        default_config.hyperparameters.c_min = 0.0
-        default_config.hyperparameters.c_max = 5.0
-        default_config.hyperparameters.c_change_duration = 100000
+        # loss parameters
+        default_config.loss.name = "AnnealedVAE"
+        default_config.loss.parameters.reconstruction_dist = "bernoulli"
+        default_config.loss.parameters.gamma = 1000.0
+        default_config.loss.parameters.c_min = 0.0
+        default_config.loss.parameters.c_max = 5.0
+        default_config.loss.parameters.c_change_duration = 100000
 
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        super(AnnealedVAEModel, self).__init__(config, **kwargs)
-
+        VAEModel.__init__(self, config, **kwargs)
+        # add n_iter counter to update the capacity
         self.n_iters = 0
 
-    def train_loss(self, outputs, inputs):
-        x = inputs['image']
-        recon_x = outputs['recon_x']
-        mu = outputs['mu']
-        logvar = outputs['logvar']
-
-        if self.use_gpu and not x.is_cuda:
-            x = x.cuda()
-
-        if self.use_gpu and not recon_x.is_cuda:
-            recon_x = recon_x.cuda()
-
-        if self.use_gpu and not mu.is_cuda:
-            mu = mu.cuda()
-
-        if self.use_gpu and not logvar.is_cuda:
-            logvar = logvar.cuda()
-
-        recon_loss = self.recon_loss(recon_x, x)
-        KLD_loss, KLD_per_latent_dim, KLD_var = losses.KLD_loss(mu, logvar)
-        total_loss = recon_loss + self.config.hyperparameters.gamma * (KLD_loss - self.C).abs()
-        return {'total': total_loss, 'recon': recon_loss, 'KLD': KLD_loss}
-
-    def valid_losses(self, outputs, inputs):
-        return self.train_loss(outputs, inputs)
-
     def update_encoding_capacity(self):
-        if self.n_iters > self.config.hyperparameters.c_change_duration:
-            self.C = self.config.hyperparameters.c_max
+        if self.n_iters > self.config.loss.parameters.c_change_duration:
+            self.C = self.config.loss.parameters.c_max
         else:
-            self.C = min(self.config.hyperparameters.c_min + (
-                    self.config.hyperparameters.c_max - self.config.hyperparameters.c_min) * self.n_iters / self.config.hyperparameters.c_change_duration,
-                         self.config.hyperparameters.c_max)
+            self.C = min(self.config.loss.parameters.c_min + (
+                    self.config.loss.parameters.c_max - self.config.loss.parameters.c_min) * self.n_iters / self.config.loss.parameters.c_change_duration,
+                         self.config.loss.parameters.c_max)
 
-    def train_epoch(self, train_loader):
+    def train_epoch(self, train_loader, logger=None):
         self.train()
         losses = {}
         for data in train_loader:
-            input_img = Variable(data['image'])
-            # update capacity
-            self.n_iters += 1
-            self.update_encoding_capacity()
+            x = Variable(data['obs'])
+            x = self.push_variable_to_device(x)
             # forward
-            outputs = self.forward(input_img)
-            batch_losses = self.train_loss(outputs, data)
+            model_outputs = self.forward(x)
+            loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
+            batch_losses = self.loss_f(loss_inputs)
             # backward
             loss = batch_losses['total']
             self.optimizer.zero_grad()
@@ -372,121 +339,55 @@ class AnnealedVAEModel(VAEModel):
                     losses[k] = [v.data.item()]
                 else:
                     losses[k].append(v.data.item())
+            # update capacity after each batch pass
+            self.n_iters += 1
+            self.update_encoding_capacity()
 
         for k, v in losses.items():
             losses[k] = np.mean(v)
 
         self.n_epochs += 1
+
         return losses
 
 
 class BetaTCVAEModel(VAEModel):
     '''
-    $\beta$-TCVAE Class
+    BetaTCVAE Class
     '''
 
     @staticmethod
     def default_config():
-        default_config = super().default_config()
+        default_config = VAEModel.default_config()
 
-        # hyperparameters
-        default_config.hyperparameters.alpha = 1.0
-        default_config.hyperparameters.beta = 10.0
-        default_config.hyperparameters.gamma = 1.0
-        default_config.hyperparameters.tc_approximate = 'mss'
+        # loss parameters
+        default_config.loss.name = "BetaTCVAE"
+        default_config.loss.parameters.reconstruction_dist = "bernoulli"
+        default_config.loss.parameters.alpha = 1.0
+        default_config.loss.parameters.beta = 10.0
+        default_config.loss.parameters.gamma = 1.0
+        default_config.loss.parameters.tc_approximate = 'mss'
+        default_config.loss.parameters.dataset_size = 0
 
         return default_config
 
-    def __init__(self, dataset_size=0, config=None, **kwargs):
-        super(BetaTCVAEModel, self).__init__(config, **kwargs)
+    def __init__(self, config=None, **kwargs):
+        VAEModel.__init__(self, config, **kwargs)
 
-        self.dataset_size = dataset_size
-
-    def train_loss(self, outputs, inputs):
-        x = inputs['image']
-        recon_x = outputs['recon_x']
-        mu = outputs['mu']
-        logvar = outputs['logvar']
-        sampled_z = outputs['sampled_z']
-
-        if self.use_gpu and not x.is_cuda:
-            x = x.cuda()
-
-        if self.use_gpu and not recon_x.is_cuda:
-            recon_x = recon_x.cuda()
-
-        if self.use_gpu and not mu.is_cuda:
-            mu = mu.cuda()
-
-        if self.use_gpu and not logvar.is_cuda:
-            logvar = logvar.cuda()
-
-        if self.use_gpu and not sampled_z.is_cuda:
-            sampled_z = sampled_z.cuda()
-
-        # RECON LOSS
-        recon_loss = self.recon_loss(recon_x, x)
-
-        # KL LOSS MODIFIED
-        ## calculate log q(z|x) (log density of gaussian(mu,sigma2))
-        log_q_zCx = (-0.5 * (math.log(2.0 * np.pi) + logvar) - (sampled_z - mu).pow(2) / (2 * logvar.exp())).sum(
-            1)  # sum on the latent dimensions (factorized distribution so log of prod is sum of logs)
-
-        ## calculate log p(z) (log density of gaussian(0,1))
-        log_pz = (-0.5 * math.log(2.0 * np.pi) - sampled_z.pow(2) / 2).sum(1)
-
-        ## calculate log_qz ~= log 1/(NM) sum_m=1^M q(z|x_m) = - log(MN) + logsumexp_m(q(z|x_m)) and log_prod_qzi
-        batch_size = sampled_z.size(0)
-        _logqz = -0.5 * (math.log(2.0 * np.pi) + logvar.view(1, batch_size, self.n_latents)) - (
-                sampled_z.view(batch_size, 1, self.n_latents) - mu.view(1, batch_size, self.n_latents)).pow(2) / (
-                         2 * logvar.view(1, batch_size, self.n_latents).exp())
-        if self.tc_approximate == 'mws':
-            # minibatch weighted sampling
-            log_prod_qzi = (mathhelper.logsumexp(_logqz, dim=1, keepdim=False) - math.log(
-                batch_size * self.dataset_size)).sum(1)
-            log_qz = (mathhelper.logsumexp(_logqz.sum(2), dim=1, keepdim=False) - math.log(
-                batch_size * self.dataset_size))
-        elif self.tc_approximate == 'mss':
-            # minibatch stratified sampling
-            N = self.dataset_size
-            M = batch_size - 1
-            strat_weight = (N - M) / (N * M)
-            W = torch.Tensor(batch_size, batch_size).fill_(1 / M)
-            W.view(-1)[::M + 1] = 1 / N
-            W.view(-1)[1::M + 1] = strat_weight
-            W[M - 1, 0] = strat_weight
-            logiw_matrix = Variable(W.log().type_as(_logqz.data))
-            log_qz = mathhelper.logsumexp(logiw_matrix + _logqz.sum(2), dim=1, keepdim=False)
-            log_prod_qzi = mathhelper.logsumexp(logiw_matrix.view(batch_size, batch_size, 1) + _logqz, dim=1,
-                                                keepdim=False).sum(1)
-        else:
-            raise ValueError(
-                'The minibatch approximation of the total correlation "{}" is not defined'.format(self.tc_approximate))
-
-        ## I[z;x] = KL[q(z,x)||q(x)q(z)] = E_x[KL[q(z|x)||q(z)]]
-        mi_loss = (log_q_zCx - log_qz).mean()
-        ## TC[z] = KL[q(z)||\prod_i z_i]
-        tc_loss = (log_qz - log_prod_qzi).mean()
-        ## dw_kl_loss is KL[q(z)||p(z)] (dimension-wise KL term)
-        dw_kl_loss = (log_prod_qzi - log_pz).mean()
-
-        # TOTAL LOSS
-        total_loss = recon_loss + self.config.hyperparameters.alpha * mi_loss + self.config.hyperparameters.beta * tc_loss + self.config.hyperparameters.gamma * dw_kl_loss
-        return {'total': total_loss, 'recon': recon_loss, 'mi': mi_loss, 'tc': tc_loss, 'dw_kl': dw_kl_loss}
-
-    def valid_losses(self, outputs, inputs):
-        return self.train_loss(outputs, inputs)
-
-    def train_epoch(self, train_loader):
+    def train_epoch(self, train_loader, logger=None):
         self.train()
         losses = {}
-        self.dataset_size = len(train_loader.dataset)
+
+        # update dataset size
+        self.loss_f.dataset_size = len(train_loader.dataset)
 
         for data in train_loader:
-            input_img = Variable(data['image'])
+            x = Variable(data['obs'])
+            x = self.push_variable_to_device(x)
             # forward
-            outputs = self.forward(input_img)
-            batch_losses = self.train_loss(outputs, data)
+            model_outputs = self.forward(x)
+            loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
+            batch_losses = self.loss_f(loss_inputs)
             # backward
             loss = batch_losses['total']
             self.optimizer.zero_grad()
@@ -498,110 +399,10 @@ class BetaTCVAEModel(VAEModel):
                     losses[k] = [v.data.item()]
                 else:
                     losses[k].append(v.data.item())
-            # break
 
         for k, v in losses.items():
             losses[k] = np.mean(v)
 
         self.n_epochs += 1
-        return losses
 
-
-class VAEGANModel(VAEModel):
-    # https://github.com/seangal/dcgan_vae_pytorch/blob/master/main.py
-    '''
-    def adjust_learning_rate(optimizer, decay):
-    for param_group in optimizer.param_groups:
-        param_group['lr'] *= decay
-    '''
-    '''
-    VAEGAN Class
-    '''
-
-    def __init__(self, model_architecture="Radford", **kwargs):
-        super(VAEGANModel, self).__init__(model_architecture=model_architecture, **kwargs)
-        discriminator = discriminators.get_discriminator(model_architecture)
-        self.discriminator = discriminator(self.n_channels, self.input_size, self.n_conv_layers, output_size=1)
-
-    def discriminate(self, x):
-        if self.use_gpu and not x.is_cuda:
-            x = x.cuda()
-        return self.discriminator(x)
-
-    def set_optimizer(self, optimizer_name, optimizer_hyperparameters):
-        optimizer = eval("torch.optim.{}".format(optimizer_name))
-        self.optimizer_generator = optimizer(
-            chain(self.network.encoder.parameters(), self.network.decoder.parameters()), **optimizer_hyperparameters)
-        self.optimizer_discriminator = optimizer(self.discriminator.parameters(), **optimizer_hyperparameters)
-        self.criterion = nn.BCEWithLogitsLoss()
-
-    def valid_losses(self, outputs, inputs):
-        return self.train_loss(outputs, inputs)
-
-    def train_epoch(self, train_loader):
-        self.train()
-        losses = {}
-        for data in train_loader:
-            x_real = Variable(data['image'], requires_grad=True)
-            outputs_real = self.forward(x_real)
-
-            z_fake = Variable(torch.randn(x_real.size(0), self.n_latents))
-            x_fake = self.decode(z_fake)
-
-            real_label = Variable(torch.ones(x_real.size(0)))
-            fake_label = Variable(torch.zeros(x_real.size(0)))
-
-            # (1) Train the discriminator
-            output_prob_real = self.discriminate(x_real)
-            output_prob_fake = self.discriminate(x_fake.detach())
-
-            if self.use_gpu:
-                output_prob_real = output_prob_real.cuda()
-                output_prob_fake = output_prob_fake.cuda()
-                real_label = real_label.cuda()
-                fake_label = fake_label.cuda()
-
-            loss_discriminator = (self.criterion(output_prob_real, real_label) + self.criterion(output_prob_fake,
-                                                                                                fake_label)) / 2.0
-            self.optimizer_discriminator.zero_grad()
-            loss_discriminator.backward()
-            self.optimizer_discriminator.step()
-
-            # (2) Train the generator
-            self.optimizer_generator.zero_grad()
-            ## (2.A) With VAE loss
-            vae_losses = self.train_loss(outputs_real, data)
-            loss_vae = vae_losses['total']
-            loss_vae.backward()
-            self.optimizer_generator.step()
-
-            ## (2.A) With Discriminator loss
-            outputs_real = self.forward(x_real)  # redo with trained generator as it has been freed from memory
-            recon_x = outputs_real['recon_x']
-            output_prob_fake = self.discriminate(recon_x)
-            if self.use_gpu:
-                output_prob_fake = output_prob_fake.cuda()
-            loss_generator = self.criterion(output_prob_fake, real_label)
-            self.optimizer_generator.zero_grad()
-            loss_generator.backward()
-            self.optimizer_generator.step()
-            #            for name, param in self.network.decoder.named_parameters():
-            #                if param.requires_grad:
-            #                    print(name, '{:0.2f}'.format(param.data.sum().item()))
-
-            # save losses
-            final_losses = {'discriminator': loss_discriminator, 'vae': loss_vae, 'generator': loss_generator,
-                            'total': loss_discriminator + loss_vae + loss_generator}
-            for k, v in final_losses.items():
-                if k not in losses:
-                    losses[k] = [v.data.item()]
-                else:
-                    losses[k].append(v.data.item())
-            # debug only on first batch:        
-            # break
-
-        for k, v in losses.items():
-            losses[k] = np.mean(v)
-
-        self.n_epochs += 1
         return losses

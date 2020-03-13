@@ -11,26 +11,23 @@ from torch import nn
 from torchvision.utils import make_grid
 
 
-class QuadrupletNet(nn.Module):
+class TripletNet(nn.Module):
 
-    def forward(self, x_pos_a, x_pos_b, x_neg_a, x_neg_b):
+    def forward(self, x_ref, x_a, x_b):
         if torch._C._get_tracing_state():
-            return self.forward_for_graph_tracing(x_pos_a, x_pos_b, x_neg_a, x_neg_b)
-        z_pos_a = self.calc_embedding(x_pos_a)
-        z_pos_b = self.calc_embedding(x_pos_b)
-        z_neg_a = self.calc_embedding(x_neg_a)
-        z_neg_b = self.calc_embedding(x_neg_b)
-
-        model_outputs = {"z_pos_a": z_pos_a, "z_pos_b": z_pos_b, "z_neg_a": z_neg_a, "z_neg_b": z_neg_b}
+            return self.forward_for_graph_tracing(x_ref, x_a, x_b)
+        z_ref = self.calc_embedding(x_ref)
+        z_a = self.calc_embedding(x_a)
+        z_b = self.calc_embedding(x_b)
+        model_outputs = {"z_ref": z_ref, "z_a": z_a, "z_b": z_b}
         return model_outputs
 
-    def forward_for_graph_tracing(self, x_pos_a, x_pos_b, x_neg_a, x_neg_b):
-        z_pos_a = self.calc_embedding(x_pos_a)
-        z_pos_b = self.calc_embedding(x_pos_b)
-        z_neg_a = self.calc_embedding(x_neg_a)
-        z_neg_b = self.calc_embedding(x_neg_b)
+    def forward_for_graph_tracing(self, x_ref, x_a, x_b):
+        z_ref = self.calc_embedding(x_ref)
+        z_a = self.calc_embedding(x_a)
+        z_b = self.calc_embedding(x_b)
 
-        return z_pos_a, z_pos_b, z_neg_a,
+        return z_ref, z_a, z_b
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
         """
@@ -96,13 +93,12 @@ class QuadrupletNet(nn.Module):
         self.train()
         losses = {}
         for data in train_loader:
-            data_pos_a, data_pos_b, data_neg_a, data_neg_b = data
-            x_pos_a = self.push_variable_to_device(data_pos_a["obs"])
-            x_pos_b = self.push_variable_to_device(data_pos_b["obs"])
-            x_neg_a = self.push_variable_to_device(data_neg_a["obs"])
-            x_neg_b = self.push_variable_to_device(data_neg_b["obs"])
+            data_ref, data_a, data_b = data
+            x_ref = self.push_variable_to_device(data_ref["obs"])
+            x_a = self.push_variable_to_device(data_a["obs"])
+            x_b = self.push_variable_to_device(data_b["obs"])
             # forward
-            model_outputs = self.forward(x_pos_a, x_pos_b, x_neg_a, x_neg_b)
+            model_outputs = self.forward(x_ref, x_a, x_b)
             loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
             batch_losses = self.loss_f(loss_inputs)
             # backward
@@ -145,13 +141,12 @@ class QuadrupletNet(nn.Module):
 
         with torch.no_grad():
             for data in valid_loader:
-                data_pos_a, data_pos_b, data_neg_a, data_neg_b = data
-                x_pos_a = self.push_variable_to_device(data_pos_a["obs"])
-                x_pos_b = self.push_variable_to_device(data_pos_b["obs"])
-                x_neg_a = self.push_variable_to_device(data_neg_a["obs"])
-                x_neg_b = self.push_variable_to_device(data_neg_b["obs"])
+                data_ref, data_a, data_b = data
+                x_ref = self.push_variable_to_device(data_ref["obs"])
+                x_a = self.push_variable_to_device(data_a["obs"])
+                x_b = self.push_variable_to_device(data_b["obs"])
                 # forward
-                model_outputs = self.forward(x_pos_a, x_pos_b, x_neg_a, x_neg_b)
+                model_outputs = self.forward(x_ref, x_a, x_b)
                 loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
                 batch_losses = self.loss_f(loss_inputs, reduction="none")
                 # save losses
@@ -162,19 +157,17 @@ class QuadrupletNet(nn.Module):
                         losses[k] = np.vstack([losses[k], np.expand_dims(v.detach().cpu().numpy(), axis=-1)])
 
                 if record_valid_images:
-                    recon_x_pos_a = self.forward(x_pos_a)["recon_x"]
-                    recon_x_pos_b = self.forward(x_pos_b)["recon_x"]
-                    recon_x_neg_a = self.forward(x_neg_a)["recon_x"]
-                    recon_x_neg_b = self.forward(x_neg_b)["recon_x"]
-                    images += [x_pos_a, x_pos_b, x_neg_a, x_neg_b]
-                    recon_images += [recon_x_pos_a, recon_x_pos_b, recon_x_neg_a, recon_x_neg_b]
+                    recon_x_ref = self.forward(x_ref)["recon_x"]
+                    recon_x_a = self.forward(x_a)["recon_x"]
+                    recon_x_b = self.forward(x_b)["recon_x"]
+                    images += [x_ref, x_a, x_b]
+                    recon_images += [recon_x_ref, recon_x_a, recon_x_b]
 
                 if record_embeddings:
-                    embeddings += [model_outputs["z_pos_a"], model_outputs["z_pos_b"], model_outputs["z_neg_a"],
-                                   model_outputs["z_neg_b"]]
-                    labels += [data_pos_a["label"], data_pos_b["label"], data_neg_a["label"], data_neg_b["label"]]
+                    embeddings += [model_outputs["z_ref"], model_outputs["z_a"], model_outputs["z_b"]]
+                    labels += [data_ref["label"], data_a["label"], data_b["label"]]
                     if not record_valid_images:
-                        images += [x_pos_a, x_pos_b, x_neg_a, x_neg_b]
+                        images += [x_ref, x_a, x_b]
 
         if record_valid_images:
             recon_images = torch.cat(recon_images)
@@ -269,13 +262,13 @@ class QuadrupletNet(nn.Module):
         return train_acc, test_acc
 
 
-class VAEQuadrupletModel(models.VAEModel, QuadrupletNet):
+class VAETripletModel(models.VAEModel, TripletNet):
     @staticmethod
     def default_config():
         default_config = models.VAEModel.default_config()
 
         # loss parameters
-        default_config.loss.name = "Quadruplet"
+        default_config.loss.name = "Triplet"
         default_config.loss.parameters.margin = 1.0
 
         # load pretrained model
@@ -289,30 +282,33 @@ class VAEQuadrupletModel(models.VAEModel, QuadrupletNet):
             assert "pretrained_model_filepath" in config
             # load the model
             vae_model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
-            # fuse the quadruplet config with the one of the vae model
+            # fuse the triplet config with the one of the vae model
             if hasattr(vae_model, "config"):
                 config = gr.config.update_config(kwargs, config, vae_model.config)
 
-        # call initializer with corresponding parameters (including Quadruplet loss)
+        # call initializer with corresponding parameters (including Triplet loss)
         models.VAEModel.__init__(self, config=config, loss_margin=0, **kwargs)
 
         # load the pretrained state dict
         if config.load_pretrained_model == True:
             self.network.load_state_dict(vae_model.network.state_dict())
+            # if hasattr(vae_model, "optimizer"):
+            #     self.optimizer.load_state_dict(vae_model.optimizer.state_dict())
+            # if hasattr(vae_model, "n_epochs");
+            #     self.n_epochs = vae_model.n_epochs
 
     def forward(self, *args):
         if len(args) == 1:
             x = args[0]
             return models.VAEModel.forward(self, x)
-        elif len(args) == 4:
-            x_pos_a = args[0]
-            x_pos_b = args[1]
-            x_neg_a = args[2]
-            x_neg_b = args[3]
-            return QuadrupletNet.forward(self, x_pos_a, x_pos_b, x_neg_a, x_neg_b)
+        elif len(args) == 3:
+            x_ref = args[0]
+            x_a = args[1]
+            x_b = args[2]
+            return TripletNet.forward(self, x_ref, x_a, x_b)
         else:
             raise ValueError(
-                "VAEQuadrupletModel can take either one input image (VAE) or four input images (Quadruplet), not {}".format(
+                "VAETripletModel can take either one input image (VAE) or three input images (Triplet), not {}".format(
                     len(args)))
 
     def set_optimizer(self, optimizer_name, optimizer_parameters):
@@ -321,7 +317,7 @@ class VAEQuadrupletModel(models.VAEModel, QuadrupletNet):
         self.optimizer = optimizer_class(self.network.parameters(),
                                          **optimizer_parameters)
 
-        # triplet optimizer on the encoder
+        # quadruplet optimizer on the encoder
         self.optimizer_encoder = optimizer_class(self.network.encoder.parameters(),
                                                  **optimizer_parameters)
 
@@ -331,22 +327,22 @@ class VAEQuadrupletModel(models.VAEModel, QuadrupletNet):
                                                                    self.config.optimizer.parameters)
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
-        return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader, logger=logger)
+        return TripletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader, logger=logger)
 
     def train_epoch(self, train_loader, logger=None):
-        return QuadrupletNet.train_epoch(self, train_loader, logger=logger)
+        return TripletNet.train_epoch(self, train_loader, logger=logger)
 
     def valid_epoch(self, valid_loader, logger=None):
-        return QuadrupletNet.valid_epoch(self, valid_loader, logger=logger)
+        return TripletNet.valid_epoch(self, valid_loader, logger=logger)
 
 
-class BetaVAEQuadrupletModel(models.BetaVAEModel, QuadrupletNet):
+class BetaVAETripletModel(models.BetaVAEModel, TripletNet):
     @staticmethod
     def default_config():
         default_config = models.BetaVAEModel.default_config()
 
         # loss parameters
-        default_config.loss.name = "Quadruplet"
+        default_config.loss.name = "Triplet"
         default_config.loss.parameters.margin = 1.0
 
         # load pretrained model
@@ -360,11 +356,11 @@ class BetaVAEQuadrupletModel(models.BetaVAEModel, QuadrupletNet):
             assert "pretrained_model_filepath" in config
             # load the model
             betavae_model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
-            # fuse the quadruplet config with the one of the vae model
+            # fuse the triplet config with the one of the vae model
             if hasattr(betavae_model, "config"):
                 config = gr.config.update_config(kwargs, config, betavae_model.config)
 
-        # call initializer with corresponding parameters (including Quadruplet loss)
+        # call initializer with corresponding parameters (including Triplet loss)
         models.BetaVAEModel.__init__(self, config=config, loss_margin=0, **kwargs)
 
         # load the pretrained state dict
@@ -375,15 +371,14 @@ class BetaVAEQuadrupletModel(models.BetaVAEModel, QuadrupletNet):
         if len(args) == 1:
             x = args[0]
             return models.BetaVAEModel.forward(self, x)
-        elif len(args) == 4:
-            x_pos_a = args[0]
-            x_pos_b = args[1]
-            x_neg_a = args[2]
-            x_neg_b = args[3]
-            return QuadrupletNet.forward(self, x_pos_a, x_pos_b, x_neg_a, x_neg_b)
+        elif len(args) == 3:
+            x_ref = args[0]
+            x_a = args[1]
+            x_b = args[2]
+            return TripletNet.forward(self, x_ref, x_a, x_b)
         else:
             raise ValueError(
-                "BetaVAEQuadrupletModel can take either one input image (BetaVAE) or four input images (Quadruplet), not {}".format(
+                "BetaVAETripletModel can take either one input image (BetaVAE) or three input images (Triplet), not {}".format(
                     len(args)))
 
     def set_optimizer(self, optimizer_name, optimizer_parameters):
@@ -402,23 +397,22 @@ class BetaVAEQuadrupletModel(models.BetaVAEModel, QuadrupletNet):
                                                                    self.config.optimizer.parameters)
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
-        return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader,
-                                          logger=logger)
+        return TripletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader, logger=logger)
 
     def train_epoch(self, train_loader, logger=None):
-        return QuadrupletNet.train_epoch(self, train_loader, logger=logger)
+        return TripletNet.train_epoch(self, train_loader, logger=logger)
 
     def valid_epoch(self, valid_loader, logger=None):
-        return QuadrupletNet.valid_epoch(self, valid_loader, logger=logger)
+        return TripletNet.valid_epoch(self, valid_loader, logger=logger)
 
 
-class AnnealedVAEQuadrupletModel(models.AnnealedVAEModel, QuadrupletNet):
+class AnnealedVAETripletModel(models.AnnealedVAEModel, TripletNet):
     @staticmethod
     def default_config():
         default_config = models.AnnealedVAEModel.default_config()
 
         # loss parameters
-        default_config.loss.name = "Quadruplet"
+        default_config.loss.name = "Triplet"
         default_config.loss.parameters.margin = 1.0
 
         # load pretrained model
@@ -432,11 +426,11 @@ class AnnealedVAEQuadrupletModel(models.AnnealedVAEModel, QuadrupletNet):
             assert "pretrained_model_filepath" in config
             # load the model
             annealedvae_model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
-            # fuse the quadruplet config with the one of the vae model
+            # fuse the triplet config with the one of the vae model
             if hasattr(annealedvae_model, "config"):
                 config = gr.config.update_config(kwargs, config, annealedvae_model.config)
 
-        # call initializer with corresponding parameters (including Quadruplet loss)
+        # call initializer with corresponding parameters (including Triplet loss)
         models.AnnealedVAEModel.__init__(self, config=config, loss_margin=0, **kwargs)
 
         # load the pretrained state dict
@@ -447,15 +441,14 @@ class AnnealedVAEQuadrupletModel(models.AnnealedVAEModel, QuadrupletNet):
         if len(args) == 1:
             x = args[0]
             return models.AnnealedVAEModel.forward(self, x)
-        elif len(args) == 4:
-            x_pos_a = args[0]
-            x_pos_b = args[1]
-            x_neg_a = args[2]
-            x_neg_b = args[3]
-            return QuadrupletNet.forward(self, x_pos_a, x_pos_b, x_neg_a, x_neg_b)
+        elif len(args) == 3:
+            x_ref = args[0]
+            x_a = args[1]
+            x_b = args[2]
+            return TripletNet.forward(self, x_ref, x_a, x_b)
         else:
             raise ValueError(
-                "AnnealedVAEQuadrupletModel can take either one input image (AnnealedVAE) or four input images (Quadruplet), not {}".format(
+                "AnnealedVAETripletModel can take either one input image (AnnealedVAE) or three input images (Triplet), not {}".format(
                     len(args)))
 
     def set_optimizer(self, optimizer_name, optimizer_parameters):
@@ -474,23 +467,22 @@ class AnnealedVAEQuadrupletModel(models.AnnealedVAEModel, QuadrupletNet):
                                                                    self.config.optimizer.parameters)
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
-        return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader,
-                                          logger=logger)
+        return TripletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader, logger=logger)
 
     def train_epoch(self, train_loader, logger=None):
-        return QuadrupletNet.train_epoch(self, train_loader, logger=logger)
+        return TripletNet.train_epoch(self, train_loader, logger=logger)
 
     def valid_epoch(self, valid_loader, logger=None):
-        return QuadrupletNet.valid_epoch(self, valid_loader, logger=logger)
+        return TripletNet.valid_epoch(self, valid_loader, logger=logger)
 
 
-class BetaTCVAEQuadrupletModel(models.BetaTCVAEModel, QuadrupletNet):
+class BetaTCVAETripletModel(models.BetaTCVAEModel, TripletNet):
     @staticmethod
     def default_config():
         default_config = models.BetaTCVAEModel.default_config()
 
         # loss parameters
-        default_config.loss.name = "Quadruplet"
+        default_config.loss.name = "Triplet"
         default_config.loss.parameters.margin = 1.0
 
         # load pretrained model
@@ -504,11 +496,11 @@ class BetaTCVAEQuadrupletModel(models.BetaTCVAEModel, QuadrupletNet):
             assert "pretrained_model_filepath" in config
             # load the model
             betatcvae_model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
-            # fuse the quadruplet config with the one of the vae model
+            # fuse the triplet config with the one of the vae model
             if hasattr(betatcvae_model, "config"):
                 config = gr.config.update_config(kwargs, config, betatcvae_model.config)
 
-        # call initializer with corresponding parameters (including Quadruplet loss)
+        # call initializer with corresponding parameters (including Triplet loss)
         models.BetaTCVAEModel.__init__(self, config=config, loss_margin=0, **kwargs)
 
         # load the pretrained state dict
@@ -519,15 +511,14 @@ class BetaTCVAEQuadrupletModel(models.BetaTCVAEModel, QuadrupletNet):
         if len(args) == 1:
             x = args[0]
             return models.BetaTCVAEModel.forward(self, x)
-        elif len(args) == 4:
-            x_pos_a = args[0]
-            x_pos_b = args[1]
-            x_neg_a = args[2]
-            x_neg_b = args[3]
-            return QuadrupletNet.forward(self, x_pos_a, x_pos_b, x_neg_a, x_neg_b)
+        elif len(args) == 3:
+            x_ref = args[0]
+            x_a = args[1]
+            x_b = args[2]
+            return TripletNet.forward(self, x_ref, x_a, x_b)
         else:
             raise ValueError(
-                "BetaTCVAEQuadrupletModel can take either one input image (BetaTCVAE) or four input images (Quadruplet), not {}".format(
+                "BetaTCVAETripletModel can take either one input image (BetaTCVAE) or three input images (Triplet), not {}".format(
                     len(args)))
 
     def set_optimizer(self, optimizer_name, optimizer_parameters):
@@ -546,23 +537,22 @@ class BetaTCVAEQuadrupletModel(models.BetaTCVAEModel, QuadrupletNet):
                                                                    self.config.optimizer.parameters)
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
-        return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader,
-                                          logger=logger)
+        return TripletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader, logger=logger)
 
     def train_epoch(self, train_loader, logger=None):
-        return QuadrupletNet.train_epoch(self, train_loader, logger=logger)
+        return TripletNet.train_epoch(self, train_loader, logger=logger)
 
     def valid_epoch(self, valid_loader, logger=None):
-        return QuadrupletNet.valid_epoch(self, valid_loader, logger=logger)
+        return TripletNet.valid_epoch(self, valid_loader, logger=logger)
 
 
-class BiGANQuadrupletModel(models.BiGANModel, QuadrupletNet):
+class BiGANTripletModel(models.BiGANModel, TripletNet):
     @staticmethod
     def default_config():
         default_config = models.BiGANModel.default_config()
 
         # loss parameters
-        default_config.loss.name = "Quadruplet"
+        default_config.loss.name = "Triplet"
         default_config.loss.parameters.margin = 1.0
 
         # load pretrained model
@@ -576,11 +566,11 @@ class BiGANQuadrupletModel(models.BiGANModel, QuadrupletNet):
             assert "pretrained_model_filepath" in config
             # load the model
             bigan_model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
-            # fuse the quadruplet config with the one of the vae model
+            # fuse the triplet config with the one of the vae model
             if hasattr(bigan_model, "config"):
                 config = gr.config.update_config(kwargs, config, bigan_model.config)
 
-        # call initializer with corresponding parameters (including Quadruplet loss)
+        # call initializer with corresponding parameters (including Triplet loss)
         models.BiGANModel.__init__(self, config=config, loss_margin=0, **kwargs)
 
         # load the pretrained state dict
@@ -591,15 +581,14 @@ class BiGANQuadrupletModel(models.BiGANModel, QuadrupletNet):
         if len(args) == 1:
             x = args[0]
             return models.BiGANModel.forward(self, x)
-        elif len(args) == 4:
-            x_pos_a = args[0]
-            x_pos_b = args[1]
-            x_neg_a = args[2]
-            x_neg_b = args[3]
-            return QuadrupletNet.forward(self, x_pos_a, x_pos_b, x_neg_a, x_neg_b)
+        elif len(args) == 3:
+            x_ref = args[0]
+            x_a = args[1]
+            x_b = args[2]
+            return TripletNet.forward(self, x_ref, x_a, x_b)
         else:
             raise ValueError(
-                "BiGANQuadrupletModel can take either one input image (BiGAN) or four input images (Quadruplet), not {}".format(
+                "BiGANTripletModel can take either one input image (BiGAN) or three input images (Triplet), not {}".format(
                     len(args)))
 
     def set_optimizer(self, optimizer_name, optimizer_parameters):
@@ -618,23 +607,22 @@ class BiGANQuadrupletModel(models.BiGANModel, QuadrupletNet):
                                                                    self.config.optimizer.parameters)
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
-        return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader,
-                                          logger=logger)
+        return TripletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader, logger=logger)
 
     def train_epoch(self, train_loader, logger=None):
-        return QuadrupletNet.train_epoch(self, train_loader, logger=logger)
+        return TripletNet.train_epoch(self, train_loader, logger=logger)
 
     def valid_epoch(self, valid_loader, logger=None):
-        return QuadrupletNet.valid_epoch(self, valid_loader, logger=logger)
+        return TripletNet.valid_epoch(self, valid_loader, logger=logger)
 
 
-class VAEGANQuadrupletModel(models.VAEGANModel, QuadrupletNet):
+class VAEGANTripletModel(models.VAEGANModel, TripletNet):
     @staticmethod
     def default_config():
         default_config = models.VAEGANModel.default_config()
 
         # loss parameters
-        default_config.loss.name = "Quadruplet"
+        default_config.loss.name = "Triplet"
         default_config.loss.parameters.margin = 1.0
 
         # load pretrained model
@@ -648,11 +636,11 @@ class VAEGANQuadrupletModel(models.VAEGANModel, QuadrupletNet):
             assert "pretrained_model_filepath" in config
             # load the model
             vaegan_model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
-            # fuse the quadruplet config with the one of the vae model
+            # fuse the triplet config with the one of the vae model
             if hasattr(vaegan_model, "config"):
                 config = gr.config.update_config(kwargs, config, vaegan_model.config)
 
-        # call initializer with corresponding parameters (including Quadruplet loss)
+        # call initializer with corresponding parameters (including Triplet loss)
         models.VAEGANModel.__init__(self, config=config, loss_margin=0, **kwargs)
 
         # load the pretrained state dict
@@ -663,15 +651,14 @@ class VAEGANQuadrupletModel(models.VAEGANModel, QuadrupletNet):
         if len(args) == 1:
             x = args[0]
             return models.VAEGANModel.forward(self, x)
-        elif len(args) == 4:
-            x_pos_a = args[0]
-            x_pos_b = args[1]
-            x_neg_a = args[2]
-            x_neg_b = args[3]
-            return QuadrupletNet.forward(self, x_pos_a, x_pos_b, x_neg_a, x_neg_b)
+        elif len(args) == 3:
+            x_ref = args[0]
+            x_a = args[1]
+            x_b = args[2]
+            return TripletNet.forward(self, x_ref, x_a, x_b)
         else:
             raise ValueError(
-                "VAEGANQuadrupletModel can take either one input image (VAEGAN) or four input images (Quadruplet), not {}".format(
+                "VAEGANTripletModel can take either one input image (VAEGAN) or three input images (Triplet), not {}".format(
                     len(args)))
 
     def set_optimizer(self, optimizer_name, optimizer_parameters):
@@ -690,11 +677,10 @@ class VAEGANQuadrupletModel(models.VAEGANModel, QuadrupletNet):
                                                                    self.config.optimizer.parameters)
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
-        return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader,
-                                          logger=logger)
+        return TripletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader, logger=logger)
 
     def train_epoch(self, train_loader, logger=None):
-        return QuadrupletNet.train_epoch(self, train_loader, logger=logger)
+        return TripletNet.train_epoch(self, train_loader, logger=logger)
 
     def valid_epoch(self, valid_loader, logger=None):
-        return QuadrupletNet.valid_epoch(self, valid_loader, logger=logger)
+        return TripletNet.valid_epoch(self, valid_loader, logger=logger)

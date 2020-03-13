@@ -11,7 +11,7 @@ class TSNEModel(gr.BaseModel):
 
     @staticmethod
     def default_config():
-        default_config = super().default_config()
+        default_config = gr.BaseModel.default_config()
 
         # hyperparameters
         default_config.hyperparameters = gr.Config()
@@ -22,7 +22,7 @@ class TSNEModel(gr.BaseModel):
         return default_config
 
     def __init__(self, n_features=28 * 28, n_latents=10, config=None, **kwargs):
-        super().__init__(config=config, **kwargs)
+        gr.BaseModel.__init__(self, config=config, **kwargs)
 
         # store the initial parameters used to create the model
         self.init_params = locals()
@@ -66,7 +66,7 @@ class UMAPModel(gr.BaseModel):
 
     @staticmethod
     def default_config():
-        default_config = super().default_config()
+        default_config = gr.BaseModel.default_config()
 
         # hyperparameters
         default_config.hyperparameters = gr.Config()
@@ -79,7 +79,7 @@ class UMAPModel(gr.BaseModel):
         return default_config
 
     def __init__(self, n_features=28 * 28, n_latents=10, config=None, **kwargs):
-        super().__init__(config=config, **kwargs)
+        gr.BaseModel.__init__(self, config=config, **kwargs)
 
         # store the initial parameters used to create the model
         self.init_params = locals()
@@ -112,7 +112,7 @@ class UMAPModel(gr.BaseModel):
         return x
 
     def update_hyperparameters(self, hyperparameters):
-        super().update_hyperparameters(hyperparameters)
+        gr.BaseModel.update_hyperparameters(self, hyperparameters)
         self.set_algorithm_parameters()
 
     def update_algorithm_parameters(self):

@@ -4,7 +4,7 @@ import h5py
 import numpy as np
 import os
 import torch
-from torch.utils.data import Dataset, Subset, ConcatDataset
+from torch.utils.data import Dataset
 import torchvision
 from torchvision.transforms import CenterCrop, ToTensor, ToPILImage, RandomHorizontalFlip, RandomResizedCrop, \
     RandomVerticalFlip, RandomRotation
@@ -521,18 +521,103 @@ class DatasetHDF5(Dataset):
 # ===========================
 # Triplet/Quadruplet Dataset
 # ===========================
-class ImageQuadrupletDatasetFromHuman(Dataset):
-    def __init__(self,  dataset_filepath, anno_filepath, split='train', use_pass=False, distance='euclidean', preprocess=None, data_augmentation=False):
+class ImageTripletDatasetFromHuman(Dataset):
+    def __init__(self, dataset_filepath, anno_filepath, split='train', use_pass=False, distance='euclidean',
+                 preprocess=None, data_augmentation=False):
 
         assert split == 'train' or split == 'test'
+        self.split = split
         self.distance = distance
-        self.filepath = filepath
         self.use_pass = use_pass
         self.preprocess = preprocess
         self.data_augmentation = data_augmentation
 
+        datapoints = np.load(anno_filepath)[self.split]
 
-        datapoints = np.loadtxt(self.filepath + '/{}.txt'.format(split)).astype(np.int)
+        # construct triplets from data
+        refs = []
+        positives = []
+        negatives = []
+        for d in datapoints:
+            if self.use_pass:
+                # if pass, add 6 triplets (positive pair being AA, negative pairs AB, AC, AD)
+                if d[-1] == 1:
+                    for i in range(4):
+                        for j in range(i + 1, 4):
+                            refs.append(d[i])
+                            positives.append(d[i])
+                            negatives.append(d[j])
+            # if not pass, add two triplets
+            if d[-1] == 0:
+                refs.append(d[0])
+                positives.append(d[1])
+                negatives.append(d[2])
+                refs.append(d[0])
+                positives.append(d[1])
+                negatives.append(d[3])
+        refs = np.array(refs).reshape(-1, 1)
+        positives = np.array(positives).reshape(-1, 1)
+        negatives = np.array(negatives).reshape(-1, 1)
+        triplets = np.concatenate([refs, positives, negatives], axis=1)
+
+        inds = np.arange(triplets.shape[0])
+
+        np.random.shuffle(inds)
+        with h5py.File(dataset_filepath, 'r') as file:
+            self.images = torch.Tensor(file[self.split]['observations']).float()
+            self.img_size = (self.images.shape[2], self.images.shape[3])
+            self.labels = torch.Tensor(file[self.split]['labels']).float()
+
+        self.triplets = triplets[inds].copy()
+
+        self.data_size = triplets.shape[0]
+
+        # save annotated quadruplets for evaluation
+        self.annotated_quadruplets = []
+        for d in datapoints:
+            # if not pass, add two triplets
+            if d[-1] == 0:
+                self.annotated_quadruplets.append([d[0], d[1], d[2], d[3]])
+
+    def __getitem__(self, index):
+        img_ref = self.images[self.triplets[index][0]]
+        img_a = self.images[self.triplets[index][1]]
+        img_b = self.images[self.triplets[index][2]]
+
+        if self.data_augmentation:
+            pass
+
+        if self.preprocess is not None:
+            img_ref = self.preprocess(img_ref).float()
+            img_a = self.preprocess(img_a).float()
+            img_b = self.preprocess(img_b).float()
+
+        label_ref = self.labels[self.triplets[index][0]]
+        label_a = self.labels[self.triplets[index][1]]
+        label_b = self.labels[self.triplets[index][2]]
+
+        data_ref = {"obs": img_ref, "label": label_ref}
+        data_a = {"obs": img_a, "label": label_a}
+        data_b = {"obs": img_b, "label": label_b}
+
+        return (data_ref, data_a, data_b)
+
+    def __len__(self):
+        return self.data_size
+
+
+class ImageQuadrupletDatasetFromHuman(Dataset):
+    def __init__(self, dataset_filepath, anno_filepath, split='train', use_pass=False, distance='euclidean',
+                 preprocess=None, data_augmentation=False):
+
+        assert split == 'train' or split == 'test'
+        self.split = split
+        self.distance = distance
+        self.use_pass = use_pass
+        self.preprocess = preprocess
+        self.data_augmentation = data_augmentation
+
+        datapoints = np.load(anno_filepath)[self.split]
 
         # construct triplets from data
         positive_pairs = []
@@ -558,15 +643,21 @@ class ImageQuadrupletDatasetFromHuman(Dataset):
         inds = np.arange(quadruplets.shape[0])
 
         np.random.shuffle(inds)
-        with h5py.File(self.filepath + 'dataset.h5', 'r') as file:
+        with h5py.File(dataset_filepath, 'r') as file:
             self.images = torch.Tensor(file[self.split]['observations']).float()
             self.img_size = (self.images.shape[2], self.images.shape[3])
             self.labels = torch.Tensor(file[self.split]['labels']).float()
 
-
         self.quadruplets = quadruplets[inds].copy()
 
         self.data_size = quadruplets.shape[0]
+
+        # save annotated quadruplets for evaluation
+        self.annotated_quadruplets = []
+        for d in datapoints:
+            # if not pass, add two triplets
+            if d[-1] == 0:
+                self.annotated_quadruplets.append([d[0], d[1], d[2], d[3]])
 
     def __getitem__(self, index):
         img_pos_a = self.images[self.quadruplets[index][0]]
@@ -583,10 +674,10 @@ class ImageQuadrupletDatasetFromHuman(Dataset):
             img_neg_a = self.preprocess(img_neg_a).float()
             img_neg_b = self.preprocess(img_neg_b).float()
 
-        label_pos_a = self.images[self.quadruplets[index][0]]
-        label_pos_b = self.images[self.quadruplets[index][1]]
-        label_neg_a = self.images[self.quadruplets[index][2]]
-        label_neg_b = self.images[self.quadruplets[index][3]]
+        label_pos_a = self.labels[self.quadruplets[index][0]]
+        label_pos_b = self.labels[self.quadruplets[index][1]]
+        label_neg_a = self.labels[self.quadruplets[index][2]]
+        label_neg_b = self.labels[self.quadruplets[index][3]]
 
         data_pos_a = {"obs": img_pos_a, "label": label_pos_a}
         data_pos_b = {"obs": img_pos_b, "label": label_pos_b}

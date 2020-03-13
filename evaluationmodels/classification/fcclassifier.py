@@ -59,9 +59,9 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
         return default_config
 
     def __init__(self, representation_model, config=None, **kwargs):
-        super(dnn.BaseDNN, self).__init__()  # calls nn.Module constructor
-        super(nn.Module, self).__init__(representation_model, config=config,
-                                        **kwargs)  # calls evaluationmodels.BaseClassifierModel constructor
+        nn.Module.__init__(self)
+        evaluationmodels.BaseClassifierModel.__init__(self, representation_model, config=config,
+                                                      **kwargs)
 
         # define the device to use (gpu or cpu)
         if self.config.device.use_gpu and not torch.cuda.is_available():

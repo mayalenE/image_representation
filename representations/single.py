@@ -29,7 +29,7 @@ class SingleModelRepresentation(gr.BaseRepresentation):
     
     
     def __init__(self, config=None, **kwargs):
-        super().__init__(config=config, **kwargs)
+        gr.BaseRepresentation.__init__(self, config=config, **kwargs)
         
          # model
         self.set_model(self.config.model.name, self.config.model.config)

@@ -33,7 +33,7 @@ class Channelize(nn.Module):
     """Channelize a flatten input to the given (C,H,W) output """
 
     def __init__(self, n_channels, height, width):
-        super(Channelize, self).__init__()
+        nn.Module.__init__(self)
         self.n_channels = n_channels
         self.height = height
         self.width = width
@@ -46,7 +46,7 @@ class SphericPad(nn.Module):
     """Pads spherically the input on all sides with the given padding size."""
 
     def __init__(self, padding_size):
-        super(SphericPad, self).__init__()
+        nn.Module.__init__(self)
         if isinstance(padding_size, int):
             self.pad_left = self.pad_right = self.pad_top = self.pad_bottom = padding_size
         elif isinstance(padding_size, tuple) and len(padding_size) == 2:
@@ -74,7 +74,7 @@ class Roll(nn.Module):
     """Rolls spherically the input with the given padding shit on the given dimension."""
 
     def __init__(self, shift, dim):
-        super(Roll, self).__init__()
+        nn.Module.__init__(self)
         self.shift = shift
         self.dim = dim
 

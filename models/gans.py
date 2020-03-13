@@ -15,11 +15,8 @@ from torchvision.utils import make_grid
 """ ========================================================================================================================
 Base BiGAN architecture
 ========================================================================================================================="""
-
-
 # TODO: implement FID and early stopped on it
-
-class BiGANModel(dnn.BaseDNN):
+class BiGANModel(dnn.BaseDNN, gr.BaseModel):
     '''
     BiGAN Class
     '''
@@ -58,12 +55,12 @@ class BiGANModel(dnn.BaseDNN):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        super().__init__(config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
+        dnn.BaseDNN.__init__(self, config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
 
         self.output_keys_list = self.network.encoder.output_keys_list + ["prob_pos", "prob_neg"]
 
     def set_network(self, network_name, network_parameters):
-        super().set_network(network_name, network_parameters)
+        dnn.BaseDNN.set_network(self, network_name, network_parameters)
         # add a decoder to the network for the BiGAN
         decoder_class = decoders.get_decoder(network_name)
         self.network.decoder = decoder_class(**network_parameters)
@@ -71,11 +68,16 @@ class BiGANModel(dnn.BaseDNN):
         discriminator_class = discriminators.get_discriminator(network_name)
         self.network.discriminator = discriminator_class(**network_parameters)
 
-    def set_optimizer(self, optimizer_name, optimizer_hyperparameters):
-        optimizer = eval("torch.optim.{}".format(optimizer_name))
-        self.optimizer_generator = optimizer(
-            chain(self.network.encoder.parameters(), self.network.decoder.parameters()), **optimizer_hyperparameters)
-        self.optimizer_discriminator = optimizer(self.network.discriminator.parameters(), **optimizer_hyperparameters)
+    def set_optimizer(self, optimizer_name, optimizer_parameters):
+        optimizer_class = eval("torch.optim.{}".format(optimizer_name))
+        self.optimizer_generator = optimizer_class(
+            chain(self.network.encoder.parameters(), self.network.decoder.parameters()), **optimizer_parameters)
+        self.optimizer_discriminator = optimizer_class(self.network.discriminator.parameters(), **optimizer_parameters)
+
+        # update config
+        self.config.optimizer.name = optimizer_name
+        self.config.optimizer.parameters = gr.config.update_config(optimizer_parameters,
+                                                                   self.config.optimizer.parameters)
 
     def forward_from_encoder(self, encoder_outputs):
         x_real = encoder_outputs["x"]
@@ -83,7 +85,7 @@ class BiGANModel(dnn.BaseDNN):
         model_outputs = encoder_outputs
 
         z_fake = Variable(torch.randn_like(z_real))
-        x_fake = self.network.decoder(z_fake)
+        x_fake = self.network.decoder(z_fake)["recon_x"]
 
         if self.training:
             noise1 = Variable(torch.zeros_like(x_real.detach()).normal_(0, 0.1 * (1000 - self.n_epochs) / 1000))
@@ -100,7 +102,7 @@ class BiGANModel(dnn.BaseDNN):
         # we reconstruct images during validation for visual evaluations
         if not self.training:
             with torch.no_grad():
-                model_outputs["recon_x"] = self.network.decoder(z_real)
+                model_outputs["recon_x"] = self.network.decoder(z_real)["recon_x"]
 
         return model_outputs
 
@@ -176,6 +178,7 @@ class BiGANModel(dnn.BaseDNN):
                     best_valid_loss = valid_loss
                     self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
 
+
     def train_epoch(self, train_loader, logger=None):
         self.train()
         losses = {}
@@ -212,21 +215,25 @@ class BiGANModel(dnn.BaseDNN):
 
         return losses
 
+
     def valid_epoch(self, valid_loader, logger=None):
         self.eval()
         losses = {}
 
+        # Prepare logging
         record_valid_images = False
         record_embeddings = False
         if logger is not None:
             if self.n_epochs % self.config.logging.record_valid_images_every == 0:
                 record_valid_images = True
+                images = []
+                recon_images = []
             if self.n_epochs % self.config.logging.record_embeddings_every == 0:
                 record_embeddings = True
-                embedding_samples = []
-                embedding_metadata = []
-                embedding_images = []
-
+                embeddings = []
+                labels = []
+                if images is None:
+                    images = []
         with torch.no_grad():
             for data in valid_loader:
                 x = Variable(data['obs'])
@@ -238,38 +245,55 @@ class BiGANModel(dnn.BaseDNN):
                 # save losses
                 for k, v in batch_losses.items():
                     if k not in losses:
-                        losses[k] = [v.data.item()]
+                        losses[k] = np.expand_dims(v.detach().cpu().numpy(), axis=-1)
                     else:
-                        losses[k].append(v.data.item())
-                # record embeddings
-                if record_embeddings:
-                    embedding_samples.append(model_outputs["z"])
-                    embedding_metadata.append(data['label'])
-                    embedding_images.append(x)
+                        losses[k] = np.vstack([losses[k], np.expand_dims(v.detach().cpu().numpy(), axis=-1)])
 
-        for k, v in losses.items():
-            losses[k] = np.mean(v)
+                if record_valid_images:
+                    recon_x = model_outputs["recon_x"]
+                    images.append(x)
+                    recon_images.append(recon_x)
+
+                if record_embeddings:
+                    embeddings.append(model_outputs["z"])
+                    labels.append(data["label"])
+                    if not record_valid_images:
+                        images.append(x)
 
         if record_valid_images:
-            input_images = x.cpu().data
-            output_images = model_outputs['recon_x'].cpu().data
-            n_images = data['obs'].size()[0]
+            recon_images = torch.cat(recon_images)
+            images = torch.cat(images)
+        if record_embeddings:
+            embeddings = torch.cat(embeddings)
+            labels = torch.cat(labels)
+            if not record_valid_images:
+                images = torch.cat(images)
+
+        # log results
+        if record_valid_images:
+            n_images = min(len(images), 40)
+            sampled_ids = np.random.choice(len(images), n_images, replace=False)
+            input_images = images[sampled_ids].detach().cpu()
+            output_images = recon_images[sampled_ids].detach().cpu()
+            if self.config.loss.parameters.reconstruction_dist == "bernoulli":
+                output_images = torch.sigmoid(output_images)
             vizu_tensor_list = [None] * (2 * n_images)
             vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]
             vizu_tensor_list[1::2] = [output_images[n] for n in range(n_images)]
             img = make_grid(vizu_tensor_list, nrow=2, padding=0)
-            logger.add_image('reconstructions', img, self.n_epochs)
+            logger.add_image("reconstructions", img, self.n_epochs)
 
         if record_embeddings:
-            embedding_samples = torch.cat(embedding_samples)
-            embedding_metadata = torch.cat(embedding_metadata)
-            embedding_images = torch.cat(embedding_images)
-            embedding_images = tensorboardhelper.resize_embeddings(embedding_images)
+            images = tensorboardhelper.resize_embeddings(images)
             logger.add_embedding(
-                embedding_samples,
-                metadata=embedding_metadata,
-                label_img=embedding_images,
+                embeddings,
+                metadata=labels,
+                label_img=images,
                 global_step=self.n_epochs)
+
+        # average loss and return
+        for k, v in losses.items():
+            losses[k] = np.mean(v)
 
         return losses
 
@@ -291,3 +315,112 @@ class BiGANModel(dnn.BaseDNN):
         }
 
         torch.save(network, checkpoint_filepath)
+
+
+""" ========================================================================================================================
+Modified versions of BiGAN architecture
+========================================================================================================================="""
+
+
+class VAEGANModel(BiGANModel):
+    '''
+    VAEGAN Class, see https://github.com/seangal/dcgan_vae_pytorch/blob/master/main.py
+    '''
+
+    @staticmethod
+    def default_config():
+        default_config = BiGANModel.default_config()
+
+        # loss parameters
+        default_config.loss.name = "VAEGAN"
+        default_config.loss.parameters.reconstruction_dist = "bernoulli"
+        default_config.loss.parameters.beta = 5.0
+
+        return default_config
+
+    def __init__(self, config=None, **kwargs):
+        BiGANModel.__init__(self, config, **kwargs)
+
+    def forward_from_encoder(self, encoder_outputs):
+        x_real = encoder_outputs["x"]
+        z_real = encoder_outputs["z"]
+        model_outputs = encoder_outputs
+
+        # decoder/generator reconstruction
+        decoder_outputs_real = self.network.decoder(z_real)
+        model_outputs.update(decoder_outputs_real)
+
+        # discriminator probabilities
+
+        z_fake = Variable(torch.randn_like(z_real))
+        x_fake = self.network.decoder(z_fake)["recon_x"]
+
+        if self.training:
+            noise1 = Variable(torch.zeros_like(x_real.detach()).normal_(0, 0.1 * (1000 - self.n_epochs) / 1000))
+            noise2 = Variable(torch.zeros_like(x_fake.detach()).normal_(0, 0.1 * (1000 - self.n_epochs) / 1000))
+            x_real = x_real + noise1
+            x_fake = x_fake + noise2
+
+        prob_pos = self.network.discriminator(x_real, z_real)
+        prob_neg = self.network.discriminator(x_fake, z_fake)
+
+        model_outputs["prob_pos"] = prob_pos
+        model_outputs["prob_neg"] = prob_neg
+
+        return model_outputs
+
+    def train_epoch(self, train_loader, logger=None):
+        self.train()
+        losses = {}
+        for data in train_loader:
+            x = Variable(data['obs'])
+            x = self.push_variable_to_device(x)
+            ## forward
+            model_outputs = self.forward(x)
+            loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
+            batch_losses = self.loss_f(loss_inputs)
+
+            # (1) Train the discriminator
+            loss_d = batch_losses['discriminator']
+            self.optimizer_discriminator.zero_grad()
+            loss_d.backward(retain_graph=True)
+            self.optimizer_discriminator.step()
+
+            # (2) Train the generator
+            ## (2) (a) with reconstruction loss
+            loss_vae = batch_losses['vae']
+            self.optimizer_generator.zero_grad()
+            loss_vae.backward()
+            self.optimizer_generator.step()
+
+            ## (2) (b) with generator loss
+            ### redo forward as graph has been freed
+            model_outputs = self.forward(x)
+            loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
+            batch_losses = self.loss_f(loss_inputs)
+            ### backward
+            loss_g = batch_losses['generator']
+            self.optimizer_generator.zero_grad()
+            loss_g.backward()
+            self.optimizer_generator.step()
+
+            # save losses
+            for k, v in batch_losses.items():
+                if k not in losses:
+                    losses[k] = [v.data.item()]
+                else:
+                    losses[k].append(v.data.item())
+
+        for k, v in losses.items():
+            losses[k] = np.mean(v)
+
+        self.n_epochs += 1
+
+        return losses
+
+
+'''
+def adjust_learning_rate(optimizer, decay):
+for param_group in optimizer.param_groups:
+    param_group['lr'] *= decay
+'''

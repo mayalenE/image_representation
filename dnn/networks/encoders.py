@@ -21,7 +21,7 @@ class BaseDNNEncoder(nn.Module, gr.BaseEncoder, metaclass=ABCMeta):
 
     def __init__(self, n_channels=1, input_size=(64, 64), n_conv_layers=4, n_latents=10,
                  encoder_conditional_type="gaussian", feature_layer=2, hidden_channels=None, hidden_dim=None, **kwargs):
-        super().__init__()
+        nn.Module.__init__(self)
 
         # network parameters
         self.n_channels = n_channels
@@ -114,7 +114,7 @@ class BurgessEncoder(BaseDNNEncoder):
     """
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        BaseDNNEncoder.__init__(self, **kwargs)
 
         # need square image input
         assert self.input_size[0] == self.input_size[1], "BurgessEncoder needs a square image input size"
@@ -187,7 +187,7 @@ class HjelmEncoder(BaseDNNEncoder):
     """
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        BaseDNNEncoder.__init__(self, **kwargs)
 
         # need square image input
         assert self.input_size[0] == self.input_size[1], "HjlemEncoder needs a square image input size"
@@ -254,10 +254,10 @@ class HjelmEncoder(BaseDNNEncoder):
         # batch norm cannot deal with batch_size 1 in train mode
         if self.training and x.size(0) == 1:
             self.eval()
-            encoder_outputs = super().forward(x)
+            encoder_outputs = BaseDNNEncoder.forward(self, x)
             self.train()
         else:
-            encoder_outputs = super().forward(x)
+            encoder_outputs = BaseDNNEncoder.forward(self, x)
         return encoder_outputs
 
 
@@ -282,7 +282,7 @@ class DumoulinEncoder(BaseDNNEncoder):
     """
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        BaseDNNEncoder.__init__(self, **kwargs)
 
         # need square and power of 2 image size input
         power = math.log(self.input_size[0], 2)
@@ -374,20 +374,20 @@ class DumoulinEncoder(BaseDNNEncoder):
         # batch norm cannot deal with batch_size 1 in train mode
         if self.training and x.size(0) == 1:
             self.eval()
-            encoder_outputs = super().forward(x)
+            encoder_outputs = BaseDNNEncoder.forward(x)
             self.train()
         else:
-            encoder_outputs = super().forward(x)
+            encoder_outputs = BaseDNNEncoder.forward(x)
         return encoder_outputs
 
 
 class MNISTEncoder(BaseDNNEncoder):
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        BaseDNNEncoder.__init__(self, **kwargs)
 
         # need square image input
-        assert self.input_size[0] == self.input_size[1], "BurgessEncoder needs a square image input size"
+        assert self.input_size[0] == self.input_size[1], "MNISTEncoder needs a square image input size"
 
         # network architecture
         if self.hidden_dim is None:
@@ -411,5 +411,71 @@ class MNISTEncoder(BaseDNNEncoder):
             self.add_module("ef", nn.Linear(self.hidden_dim, 2 * self.n_latents))
         elif self.conditional_type == "deterministic":
             self.add_module("ef", nn.Linear(self.hidden_dim, self.n_latents))
+        else:
+            raise ValueError("The conditional type must be either gaussian or deterministic")
+
+
+class CedricEncoder(BaseDNNEncoder):
+
+    def __init__(self, **kwargs):
+        BaseDNNEncoder.__init__(self, **kwargs)
+
+        # need square image input
+        assert self.input_size[0] == self.input_size[1], "CedricEncoder needs a square image input size"
+
+        # network architecture
+        if self.hidden_channels is None:
+            self.hidden_channels = 32
+        hidden_channels = self.hidden_channels
+        if self.hidden_dim is None:
+            self.hidden_dim = 64
+        hidden_dim = self.hidden_dim
+        kernels_size = [5] * self.n_conv_layers
+        strides = [2] * self.n_conv_layers
+        pads = [0] * self.n_conv_layers
+        dils = [1] * self.n_conv_layers
+
+        # feature map size
+        feature_map_sizes = conv2d_output_sizes(self.input_size, self.n_conv_layers, kernels_size, strides, pads, dils)
+
+        # local feature
+        self.local_feature_shape = (
+            hidden_channels, feature_map_sizes[self.feature_layer][0], feature_map_sizes[self.feature_layer][1])
+        self.lf = nn.Sequential()
+        for conv_layer_id in range(self.feature_layer + 1):
+            if conv_layer_id == 0:
+                self.lf.add_module("conv_{}".format(0), nn.Sequential(
+                    nn.Conv2d(self.n_channels, hidden_channels, kernels_size[0]),
+                    nn.PReLU(),
+                    nn.MaxPool2d(2, stride=strides[0])))
+            else:
+                self.lf.add_module("conv_{}".format(conv_layer_id), nn.Sequential(
+                    nn.Conv2d(hidden_channels // 2, hidden_channels, kernels_size[conv_layer_id]),
+                    nn.PReLU(),
+                    nn.MaxPool2d(2, stride=strides[conv_layer_id])))
+            hidden_channels *= 2
+        self.lf.out_connection_type = ("conv", hidden_channels)
+
+        # global feature
+        self.gf = nn.Sequential()
+        ## convolutional layers
+        for conv_layer_id in range(self.feature_layer + 1, self.n_conv_layers):
+            self.gf.add_module("conv_{}".format(conv_layer_id), nn.Sequential(
+                nn.Conv2d(hidden_channels // 2, hidden_channels, kernels_size[conv_layer_id]),
+                nn.PReLU(),
+                nn.MaxPool2d(2, stride=strides[conv_layer_id])))
+            hidden_channels *= 2
+        self.gf.add_module("flatten", Flatten())
+        ## linear layers
+        h_after_convs, w_after_convs = feature_map_sizes[-1]
+        self.gf.add_module("lin_0",
+                           nn.Sequential(nn.Linear(hidden_channels // 2 * h_after_convs * w_after_convs, hidden_dim),
+                                         nn.PReLU()))
+
+        # encoding feature
+        if self.conditional_type == "gaussian":
+            self.add_module("ef", nn.Linear(hidden_dim, 2 * self.n_latents))
+        elif self.conditional_type == "deterministic":
+            self.add_module("ef", nn.Linear(hidden_dim, self.n_latents))
         else:
             raise ValueError("The conditional type must be either gaussian or deterministic")

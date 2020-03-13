@@ -20,7 +20,7 @@ class BaseDNNDecoder(nn.Module, metaclass=ABCMeta):
 
     def __init__(self, n_channels=1, input_size=(64, 64), n_conv_layers=4, n_latents=10, feature_layer=2,
                  hidden_channels=None, hidden_dim=None, **kwargs):
-        super().__init__()
+        nn.Module.__init__(self)
 
         # network parameters
         self.n_channels = n_channels
@@ -80,7 +80,7 @@ Decoder Modules
 class BurgessDecoder(BaseDNNDecoder):
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        BaseDNNDecoder.__init__(self, **kwargs)
 
         # network architecture
         # WARNING: incrementation order follow the encoder top-down order
@@ -141,7 +141,7 @@ class BurgessDecoder(BaseDNNDecoder):
 class HjelmDecoder(BaseDNNDecoder):
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        BaseDNNDecoder.__init__(self, **kwargs)
 
         # network architecture
         # WARNING: incrementation order follow the encoder top-down order
@@ -206,7 +206,7 @@ class HjelmDecoder(BaseDNNDecoder):
 class DumoulinDecoder(BaseDNNDecoder):
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        BaseDNNDecoder.__init__(self, **kwargs)
 
         # need square and power of 2 image size input
         power = math.log(self.input_size[0], 2)
@@ -305,7 +305,7 @@ class DumoulinDecoder(BaseDNNDecoder):
 class MNISTDecoder(BaseDNNDecoder):
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        BaseDNNDecoder.__init__(self, **kwargs)
 
         # network architecture
         if self.hidden_dim is None:
@@ -318,11 +318,79 @@ class MNISTDecoder(BaseDNNDecoder):
         # global feature inverse
         ## linear layers
         self.gfi = nn.Sequential()
-        self.gfi.add_module("lin_1_i", nn.Sequential(nn.Linear( self.hidden_dim,  self.hidden_dim), nn.ReLU()))
-        self.gfi.out_connection_type = ("lin",  self.hidden_dim)
+        self.gfi.add_module("lin_1_i", nn.Sequential(nn.Linear(self.hidden_dim, self.hidden_dim), nn.ReLU()))
+        self.gfi.out_connection_type = ("lin", self.hidden_dim)
 
         # local feature inverse
         self.lfi = nn.Sequential()
-        self.lfi.add_module("lin_0_i", nn.Linear(self.hidden_dim, self.n_channels*self.input_size[0]*self.input_size[1]))
+        self.lfi.add_module("lin_0_i",
+                            nn.Linear(self.hidden_dim, self.n_channels * self.input_size[0] * self.input_size[1]))
         self.lfi.add_module("channelize", Channelize(self.n_channels, self.input_size[0], self.input_size[1]))
+        self.lfi.out_connection_type = ("conv", self.n_channels)
+
+
+class CedricDecoder(BaseDNNDecoder):
+
+    def __init__(self, **kwargs):
+        BaseDNNDecoder.__init__(self, **kwargs)
+
+        # network architecture
+        # WARNING: incrementation order follow the encoder top-down order
+        if self.hidden_channels is None:
+            self.hidden_channels = 32
+        hidden_channels = self.hidden_channels
+        if self.hidden_dim is None:
+            self.hidden_dim = 256
+        hidden_dim = self.hidden_dim
+        kernels_size = [5] * self.n_conv_layers
+        strides = [2] * self.n_conv_layers
+        pads = [0] * self.n_conv_layers
+        dils = [1] * self.n_conv_layers
+        feature_map_sizes = conv2d_output_sizes(self.input_size, self.n_conv_layers, kernels_size, strides, pads, dils)
+        h_after_convs, w_after_convs = feature_map_sizes[-1]
+        output_pads = [None] * self.n_conv_layers
+        output_pads[0] = convtranspose2d_get_output_padding(feature_map_sizes[0], self.input_size, kernels_size[0],
+                                                            strides[0], pads[0])
+        for conv_layer_id in range(1, self.n_conv_layers):
+            output_pads[conv_layer_id] = convtranspose2d_get_output_padding(feature_map_sizes[conv_layer_id],
+                                                                            feature_map_sizes[conv_layer_id - 1],
+                                                                            kernels_size[conv_layer_id],
+                                                                            strides[conv_layer_id], pads[conv_layer_id])
+
+        hidden_channels = int(hidden_channels * math.pow(2, self.n_conv_layers - 1))
+
+        # encoder feature inverse
+        self.efi = nn.Sequential(nn.Linear(self.n_latents, hidden_dim), nn.PReLU())
+        self.efi.out_connection_type = ("lin", hidden_dim)
+
+        # global feature inverse
+        ## linear layers
+        self.gfi = nn.Sequential()
+        self.gfi.add_module("lin_0_i",
+                            nn.Sequential(nn.Linear(hidden_dim, hidden_channels * h_after_convs * w_after_convs),
+                                          nn.PReLU()))
+        self.gfi.add_module("channelize", Channelize(hidden_channels, h_after_convs, w_after_convs))
+        ## convolutional layers
+        for conv_layer_id in range(self.n_conv_layers - 1, self.feature_layer + 1 - 1, -1):
+            self.gfi.add_module("conv_{}_i".format(conv_layer_id), nn.Sequential(
+                nn.ConvTranspose2d(hidden_channels, hidden_channels // 2, kernels_size[conv_layer_id],
+                                   strides[conv_layer_id], pads[conv_layer_id],
+                                   output_padding=output_pads[conv_layer_id]),
+                nn.PReLU()))
+            hidden_channels = hidden_channels // 2
+        self.gfi.out_connection_type = ("conv", hidden_channels)
+
+        # local feature inverse
+        self.lfi = nn.Sequential()
+        for conv_layer_id in range(self.feature_layer + 1 - 1, 0, -1):
+            self.lfi.add_module("conv_{}_i".format(conv_layer_id), nn.Sequential(
+                nn.ConvTranspose2d(hidden_channels, hidden_channels // 2, kernels_size[conv_layer_id],
+                                   strides[conv_layer_id], pads[conv_layer_id],
+                                   output_padding=output_pads[conv_layer_id]),
+                nn.PReLU()))
+            hidden_channels = hidden_channels // 2
+
+        self.lfi.add_module("conv_0_i", nn.Sequential(
+            nn.ConvTranspose2d(hidden_channels, self.n_channels, kernels_size[0], strides[0], pads[0],
+                               output_padding=output_pads[0])))
         self.lfi.out_connection_type = ("conv", self.n_channels)

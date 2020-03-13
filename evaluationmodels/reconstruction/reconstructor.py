@@ -72,9 +72,9 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
         return default_config
 
     def __init__(self, representation_model, config=None, **kwargs):
-        super(dnn.BaseDNN, self).__init__()  # calls nn.Module constructor
-        super(nn.Module, self).__init__(representation_model, config=config,
-                                        **kwargs)  # calls gr.BaseEvaluationModel constructor
+        nn.Module.__init__(self)
+        gr.BaseEvaluationModel.__init__(self, representation_model, config=config,
+                                        **kwargs)
 
         # store the initial parameters used to create the model
         self.init_params = locals()
@@ -207,7 +207,7 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
 
                 # save results
                 recon_x = model_outputs["recon_x"]
-                if self.config.loss.parameters.reconstruction_dist == "bernouilli":
+                if self.config.loss.parameters.reconstruction_dist == "bernoulli":
                     recon_x = torch.sigmoid(recon_x)
                 if 'recon_x' in predictions:
                     predictions['recon_x'] = np.vstack([predictions['recon_x'], recon_x.detach().cpu().numpy()])
