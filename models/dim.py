@@ -165,7 +165,7 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
         default_config.network.parameters.n_latents = 10
         default_config.network.parameters.n_conv_layers = 4
         default_config.network.parameters.feature_layer = 2
-        default_config.network.parameters.conditional_type = "deterministic"
+        default_config.network.parameters.encoder_conditional_type = "deterministic"
 
         # initialization parameters
         default_config.network.initialization = gr.Config()

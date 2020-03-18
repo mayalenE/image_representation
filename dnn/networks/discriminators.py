@@ -1,6 +1,6 @@
+from abc import ABCMeta
+import goalrepresent as gr
 from goalrepresent.dnn.networks import encoders
-from abc import ABCMeta, abstractmethod
-from goalrepresent.helper import nnmodulehelper
 import torch
 from torch import nn
 
@@ -12,17 +12,17 @@ class BaseDNNDiscriminator(nn.Module, metaclass=ABCMeta):
     Base Discriminator class
     '''
 
-    def __init__(self, n_channels=1, input_size=(64, 64), n_conv_layers=4, n_latents=10,
-                 hidden_channels=None, hidden_dim=None, **kwargs):
-        nn.Module.__init__(self)
+    @staticmethod
+    def default_config():
+        default_config = gr.Config()
 
-        # network parameters
-        self.n_channels = n_channels
-        self.input_size = input_size
-        self.n_conv_layers = n_conv_layers
-        self.n_latents = n_latents
-        self.hidden_channels = hidden_channels
-        self.hidden_dim = hidden_dim
+        default_config.n_latents = 10
+
+        return default_config
+
+    def __init__(self, config=None, **kwargs):
+        nn.Module.__init__(self)
+        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
 
 
 def get_discriminator(model_architecture):
@@ -40,9 +40,9 @@ Discriminator Modules
 
 class BurgessDiscriminator(BaseDNNDiscriminator):
 
-    def __init__(self, **kwargs):
-        encoder = encoders.BurgessEncoder(**kwargs)
-        BaseDNNDiscriminator.__init__(self, **kwargs)
+    def __init__(self, config=None, **kwargs):
+        encoder = encoders.BurgessEncoder(config=config, **kwargs)
+        BaseDNNDiscriminator.__init__(self, config=config, **kwargs)
 
         # inference x
         self.infer_x = nn.Sequential()
@@ -52,7 +52,7 @@ class BurgessDiscriminator(BaseDNNDiscriminator):
         hidden_dim_x = 256
         hidden_dim_joint = 512
         self.infer_joint = nn.Sequential(
-            nn.Linear(hidden_dim_x + self.n_latents, hidden_dim_joint),
+            nn.Linear(hidden_dim_x + self.config.n_latents, hidden_dim_joint),
             nn.ReLU(),
             nn.Linear(hidden_dim_joint, hidden_dim_joint),
             nn.ReLU(),
@@ -67,9 +67,9 @@ class BurgessDiscriminator(BaseDNNDiscriminator):
 
 class HjelmDiscriminator(BaseDNNDiscriminator):
 
-    def __init__(self, **kwargs):
-        encoder = encoders.HjelmEncoder(**kwargs)
-        BaseDNNDiscriminator.__init__(self, **kwargs)
+    def __init__(self, config=None, **kwargs):
+        encoder = encoders.HjelmEncoder(config=config, **kwargs)
+        BaseDNNDiscriminator.__init__(self, config=config, **kwargs)
 
         # inference x
         self.infer_x = nn.Sequential()
@@ -79,7 +79,7 @@ class HjelmDiscriminator(BaseDNNDiscriminator):
         hidden_dim_x = 1024
         hidden_dim_joint = 2048
         self.infer_joint = nn.Sequential(
-            nn.Linear(hidden_dim_x + self.n_latents, hidden_dim_joint),
+            nn.Linear(hidden_dim_x + self.config.n_latents, hidden_dim_joint),
             nn.ReLU(),
             nn.Linear(hidden_dim_joint, hidden_dim_joint),
             nn.ReLU(),
@@ -100,9 +100,9 @@ class HjelmDiscriminator(BaseDNNDiscriminator):
 
 class DumoulinDiscriminator(BaseDNNDiscriminator):
 
-    def __init__(self, with_dropout=True, **kwargs):
-        encoder = encoders.DumoulinEncoder(**kwargs)
-        BaseDNNDiscriminator.__init__(self, **kwargs)
+    def __init__(self, config=None, with_dropout=True, **kwargs):
+        encoder = encoders.DumoulinEncoder(config=config, **kwargs)
+        BaseDNNDiscriminator.__init__(self, config=config, **kwargs)
 
         # inference x
         self.infer_x = nn.Sequential()
@@ -114,7 +114,7 @@ class DumoulinDiscriminator(BaseDNNDiscriminator):
         hidden_dim_joint = 2048
 
         self.infer_z = nn.Sequential(
-            nn.Conv2d(self.n_latents, hidden_dim_z, kernel_size=1, stride=1),
+            nn.Conv2d(self.config.n_latents, hidden_dim_z, kernel_size=1, stride=1),
             nn.LeakyReLU(inplace=True),
             nn.Conv2d(hidden_dim_z, hidden_dim_z, kernel_size=1, stride=1),
             nn.LeakyReLU(inplace=True),

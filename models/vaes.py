@@ -66,7 +66,7 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         dnn.BaseDNN.set_network(self, network_name, network_parameters)
         # add a decoder to the network for the VAE
         decoder_class = decoders.get_decoder(network_name)
-        self.network.decoder = decoder_class(**network_parameters)
+        self.network.decoder = decoder_class(config=network_parameters)
 
     def forward_from_encoder(self, encoder_outputs):
         decoder_outputs = self.network.decoder(encoder_outputs["z"])

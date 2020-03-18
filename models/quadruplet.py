@@ -231,7 +231,7 @@ class QuadrupletNet(nn.Module):
                 z_b = self.calc_embedding(x_b)
                 dist = (z_a - z_b).pow(2).sum(1).item()
                 dist_per_pair.append(dist)
-            if np.isnan(dist_per_pair).all:
+            if np.isnan(dist_per_pair).all():
                 continue
             else:
                 closest_pair = np.nanargmin(dist_per_pair)
@@ -257,7 +257,7 @@ class QuadrupletNet(nn.Module):
                 z_b = self.calc_embedding(x_b)
                 dist = (z_a - z_b).pow(2).sum(1).item()
                 dist_per_pair.append(dist)
-            if np.isnan(dist_per_pair).all:
+            if np.isnan(dist_per_pair).all():
                 continue
             else:
                 closest_pair = np.nanargmin(dist_per_pair)

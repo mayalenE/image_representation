@@ -96,7 +96,7 @@ class BaseDNN(nn.Module):
         """
         self.network = nn.Module()
         encoder_class = encoders.get_encoder(network_name)
-        self.network.encoder = encoder_class(**network_parameters)
+        self.network.encoder = encoder_class(config=network_parameters)
 
         # update config
         self.config.network.name = network_name

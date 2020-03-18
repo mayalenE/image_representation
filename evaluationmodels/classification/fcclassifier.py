@@ -166,8 +166,9 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
 
         # Save the graph in the logger
         if logger is not None:
-            dummy_input = torch.FloatTensor(1, self.network.encoder.n_channels, self.network.encoder.input_size[0],
-                                            self.network.encoder.input_size[1]).uniform_(0, 1)
+            dummy_input = torch.FloatTensor(1, self.network.encoder.config.n_channels,
+                                            self.network.encoder.config.input_size[0],
+                                            self.network.encoder.config.input_size[1]).uniform_(0, 1)
             dummy_input = self.push_variable_to_device(dummy_input)
             # logger.add_graph(nn.Sequential(representation.model.encoder, self), dummy_input)
 

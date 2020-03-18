@@ -34,7 +34,7 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
         default_config.network.parameters.n_latents = 10
         default_config.network.parameters.n_conv_layers = 4
         default_config.network.parameters.feature_layer = 2
-        default_config.network.parameters.conditional_type = "gaussian"
+        default_config.network.parameters.encoder_conditional_type = "gaussian"
 
         # initialization parameters
         default_config.network.initialization = gr.Config()
@@ -63,10 +63,10 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
         dnn.BaseDNN.set_network(self, network_name, network_parameters)
         # add a decoder to the network for the BiGAN
         decoder_class = decoders.get_decoder(network_name)
-        self.network.decoder = decoder_class(**network_parameters)
+        self.network.decoder = decoder_class(config=network_parameters)
         # add a discriminator to the network for the BiGAN
         discriminator_class = discriminators.get_discriminator(network_name)
-        self.network.discriminator = discriminator_class(**network_parameters)
+        self.network.discriminator = discriminator_class(config=network_parameters)
 
     def set_optimizer(self, optimizer_name, optimizer_parameters):
         optimizer_class = eval("torch.optim.{}".format(optimizer_name))

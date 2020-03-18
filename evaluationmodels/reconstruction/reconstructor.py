@@ -109,7 +109,7 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
         if self.network.decoder is None:
             decoder_class = decoders.get_decoder(network_name)
             network_parameters.n_latents = self.network.encoder.n_latents
-            self.network.decoder = decoder_class(**network_parameters)
+            self.network.decoder = decoder_class(config=network_parameters)
             self.init_network(self.config.network.initialization.name, self.config.network.initialization.parameters)
         # update config
         self.config.network.name = network_name
@@ -276,8 +276,9 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
 
             # Save the graph in the logger
             if logger is not None:
-                dummy_input = torch.FloatTensor(1, self.network.encoder.n_channels, self.network.encoder.input_size[0],
-                                                self.network.encoder.input_size[1]).uniform_(0, 1)
+                dummy_input = torch.FloatTensor(1, self.network.encoder.config.n_channels,
+                                                self.network.encoder.config.input_size[0],
+                                                self.network.encoder.config.input_size[1]).uniform_(0, 1)
                 dummy_input = self.push_variable_to_device(dummy_input)
                 # logger.add_graph(nn.Sequential(representation.model.encoder, self), dummy_input)
 

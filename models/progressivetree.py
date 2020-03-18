@@ -78,7 +78,7 @@ class Node(nn.Module):
 
         return leaf_accumulator
 
-    def split_node(self, z_library=None, z_fitness=None):
+    def split_node(self, z_library=None, z_fitness=None, boundary_config=None):
         """
         z_library: n_samples * n_latents
         z_fitness: n_samples * 1 (eg: reconstruction loss)
@@ -91,7 +91,7 @@ class Node(nn.Module):
 
         # create boundary based on database history
         if z_library is not None:
-            self.create_boundary(z_library, z_fitness)
+            self.create_boundary(z_library, z_fitness, boundary_config=boundary_config)
 
         # freeze parameters
         for param in self.network.parameters():
@@ -102,7 +102,7 @@ class Node(nn.Module):
 
         return
 
-    def create_boundary(self, z_library, z_fitness=None):
+    def create_boundary(self, z_library, z_fitness=None, boundary_config=None):
         # normalize z points
         self.feature_range = (z_library.min(axis=0), z_library.max(axis=0))
         X = z_library - self.feature_range[0]
@@ -113,17 +113,36 @@ class Node(nn.Module):
 
         if z_fitness is None:
             # fit cluster boundary
-            self.boundary = cluster.KMeans(n_clusters=2).fit(X)
+            boundary_kwargs = gr.Config()
+            boundary_kwargs.n_clusters = 2
+            if boundary_config is not None and 'kwargs' in boundary_config:
+                boundary_kwargs = gr.config.update_config(boundary_config.kwargs, boundary_kwargs)
+            self.boundary = cluster.KMeans(**boundary_kwargs).fit(X)
         else:
             # fit the linear boundary
             if z_fitness.dtype == np.bool:
                 y = z_fitness
             else:
                 y = z_fitness > np.median(z_fitness)
-            # center_0 = np.mean(X[y], axis=0)
-            # center_1 = np.mean(X[1 - y], axis=0)
-            # self.boundary = cluster.KMeans(n_clusters=2, init=np.stack([center_0,center_1])).fit(X)
-            self.boundary = svm.SVC(kernel='linear', C=1.0, class_weight='balanced').fit(X, y)
+
+            default_boundary_config = gr.Config()
+            default_boundary_config.algo = 'svm.SVC'
+            default_boundary_config.kwargs = gr.Config()
+            default_boundary_config.kwargs.kernel = 'linear'
+            default_boundary_config.kwargs.C = 1.0
+            default_boundary_config.kwargs.class_weight = 'balanced'
+            if boundary_config is not None:
+                boundary_config = gr.config.update_config(boundary_config, default_boundary_config)
+
+            if boundary_config.algo == 'cluster.KMeans':
+                center_0 = np.mean(X[y], axis=0)
+                center_1 = np.mean(X[1 - y], axis=0)
+                boundary_config.kwargs.n_clusters = 2
+                boundary_config.kwargs.init = np.stack([center_0, center_1])
+                self.boundary = cluster.KMeans(**boundary_config.kwargs).fit(X)
+            else:
+                boundary_algo = eval(boundary_config.algo)
+                self.boundary = boundary_algo(**boundary_config.kwargs).fit(X, y)
 
         #TODO: assert fair partitioning
         return
@@ -297,7 +316,7 @@ class VAENode(Node, models.VAEModel):
         return model_outputs
 
 
-class BetaVAENode(VAENode):
+class BetaVAENode(Node, models.BetaVAEModel):
     def __init__(self, depth, parent_network=None, config=None, **kwargs):
         models.BetaVAEModel.__init__(self, config=config, **kwargs)
         Node.__init__(self, depth, **kwargs)
@@ -309,8 +328,19 @@ class BetaVAENode(VAENode):
                                                     connect_recon=True)
         self.set_device(self.config.device.use_gpu)
 
+    def node_forward_from_encoder(self, encoder_outputs, parent_gfi=None, parent_lfi=None,
+                                  parent_recon_x=None):
+        if self.depth == 0:
+            decoder_outputs = self.network.decoder(encoder_outputs["z"])
+        else:
+            decoder_outputs = self.network.decoder(encoder_outputs["z"], parent_gfi, parent_lfi,
+                                                   parent_recon_x)
+        model_outputs = encoder_outputs
+        model_outputs.update(decoder_outputs)
+        return model_outputs
 
-class AnnealedVAENode(VAENode):
+
+class AnnealedVAENode(Node, models.AnnealedVAEModel):
     def __init__(self, depth, parent_network=None, config=None, **kwargs):
         models.AnnealedVAEModelVAEModel.__init__(self, config=config, **kwargs)
         Node.__init__(self, depth, **kwargs)
@@ -322,8 +352,19 @@ class AnnealedVAENode(VAENode):
                                                     connect_recon=True)
         self.set_device(self.config.device.use_gpu)
 
+    def node_forward_from_encoder(self, encoder_outputs, parent_gfi=None, parent_lfi=None,
+                                  parent_recon_x=None):
+        if self.depth == 0:
+            decoder_outputs = self.network.decoder(encoder_outputs["z"])
+        else:
+            decoder_outputs = self.network.decoder(encoder_outputs["z"], parent_gfi, parent_lfi,
+                                                   parent_recon_x)
+        model_outputs = encoder_outputs
+        model_outputs.update(decoder_outputs)
+        return model_outputs
 
-class BetaTCVAENode(VAENode):
+
+class BetaTCVAENode(Node, models.BetaTCVAEModel):
     def __init__(self, depth, parent_network=None, config=None, **kwargs):
         models.BetaTCVAEModel.__init__(self, config=config, **kwargs)
         Node.__init__(self, depth, **kwargs)
@@ -334,6 +375,17 @@ class BetaTCVAENode(VAENode):
             self.network.decoder = ConnectedDecoder(parent_network.decoder, depth, connect_gfi=True, connect_lfi=True,
                                                     connect_recon=True)
         self.set_device(self.config.device.use_gpu)
+
+    def node_forward_from_encoder(self, encoder_outputs, parent_gfi=None, parent_lfi=None,
+                                  parent_recon_x=None):
+        if self.depth == 0:
+            decoder_outputs = self.network.decoder(encoder_outputs["z"])
+        else:
+            decoder_outputs = self.network.decoder(encoder_outputs["z"], parent_gfi, parent_lfi,
+                                                   parent_recon_x)
+        model_outputs = encoder_outputs
+        model_outputs.update(decoder_outputs)
+        return model_outputs
 
 
 class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
@@ -452,10 +504,10 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                     break;
         return z
 
-    def split_node(self, node_path, z_library=None, z_fitness=None):
+    def split_node(self, node_path, z_library=None, z_fitness=None, boundary_config=None):
         self.eval()
         node = self.network.get_child_node(node_path)
-        node.split_node(z_library=z_library, z_fitness=z_fitness)
+        node.split_node(z_library=z_library, z_fitness=z_fitness, boundary_config=boundary_config)
         self.split_history[node_path] = {"depth": node.depth, "leaf": node.leaf, "boundary": node.boundary,
                                          "feature_range": node.feature_range}
 
@@ -548,11 +600,13 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
             training_config.split_trigger = {"active": False}
         split_trigger = training_config.split_trigger
         if split_trigger["active"] and ("n_max_splits" not in split_trigger or split_trigger.n_max_splits > 1e8):
-            split_trigger.n_max_splits = 1e8 # maximum splits
+            split_trigger.n_max_splits = 1e8  # maximum splits
         if split_trigger["active"] and ("n_epochs_min_between_splits" not in split_trigger):
-            split_trigger.n_epochs_min_between_splits = 10 # a node should at least be trained X epoch before being splitted again
+            split_trigger.n_epochs_min_between_splits = 10  # a node should at least be trained X epoch before being splitted again
         if split_trigger["active"] and ("min_init_n_epochs" not in split_trigger):
-            split_trigger.min_init_n_epochs = 10 # the initial node should at least be trained X epoch before being splitted again
+            split_trigger.min_init_n_epochs = 10  # the initial node should at least be trained X epoch before being splitted again
+        if split_trigger["active"] and ("boundary_config" not in split_trigger):
+            split_trigger.boundary_config = None  # will be set to default boundary svm.SVC linear C=1
         n_epochs_total = np.asarray(n_epochs_per_episodes).sum()
 
         # prepare datasets per episodes
@@ -762,7 +816,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
 
 
                     # Split Node
-                    self.split_node(leaf_path, split_z_library, split_z_fitness)
+                    self.split_node(leaf_path, split_z_library, split_z_fitness, split_trigger.boundary_config)
 
                     # update counters
                     leaf_node.epochs_since_split = 0
@@ -1056,7 +1110,10 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
         # Save results
         if not os.path.exists(os.path.join(self.config.evaluation.folder, "test_results")):
             os.makedirs(os.path.join(self.config.evaluation.folder, "test_results"))
-        np.savez(os.path.join(self.config.evaluation.folder, "test_results", "test_results_epoch_{}.npz".format((self.n_epochs))), **test_results)
+        np.savez(os.path.join(self.config.evaluation.folder, "test_results",
+                              "test_results_epoch_{}.npz".format((self.n_epochs))), **test_results)
+        np.savez(os.path.join(self.config.evaluation.folder, "test_results",
+                              "test_results_per_node_epoch_{}.npz".format((self.n_epochs))), **test_results_per_node)
         return
 
     def get_encoder(self):
@@ -1086,14 +1143,7 @@ CONNECTED MODULES
 
 class ConnectedEncoder(gr.dnn.networks.encoders.BaseDNNEncoder):
     def __init__(self, encoder_instance, depth, connect_lf=False, connect_gf=False, **kwargs):
-        gr.dnn.networks.encoders.BaseDNNEncoder.__init__(self, n_channels=encoder_instance.n_channels,
-                                                         input_size=encoder_instance.input_size,
-                                                         n_conv_layers=encoder_instance.n_conv_layers,
-                                                         n_latents=encoder_instance.n_latents,
-                                                         encoder_conditional_type=encoder_instance.conditional_type,
-                                                         feature_layer=encoder_instance.feature_layer,
-                                                         hidden_channels=encoder_instance.hidden_channels,
-                                                         hidden_dim=encoder_instance.hidden_dim)
+        gr.dnn.networks.encoders.BaseDNNEncoder.__init__(self, config=encoder_instance.config)
         # connections and depth in the tree (number of connections)
         self.connect_lf = connect_lf
         self.connect_gf = connect_gf
@@ -1156,7 +1206,7 @@ class ConnectedEncoder(gr.dnn.networks.encoders.BaseDNNEncoder):
             gf += self.gf_c(parent_gf)
 
         # encoding
-        if self.conditional_type == "gaussian":
+        if self.config.encoder_conditional_type == "gaussian":
             mu, logvar = torch.chunk(self.ef(gf), 2, dim=1)
             z = self.reparameterize(mu, logvar)
             if z.ndim > 2:
@@ -1164,7 +1214,7 @@ class ConnectedEncoder(gr.dnn.networks.encoders.BaseDNNEncoder):
                 logvar = logvar.squeeze(dim=-1).squeeze(dim=-1)
                 z = z.squeeze(dim=-1).squeeze(dim=-1)
             encoder_outputs = {"x": x, "lf": lf, "gf": gf, "z": z, "mu": mu, "logvar": logvar}
-        elif self.conditional_type == "deterministic":
+        elif self.config.encoder_conditional_type == "deterministic":
             z = self.ef(gf)
             if z.ndim > 2:
                 z = z.squeeze(dim=-1).squeeze(dim=-1)
@@ -1185,7 +1235,7 @@ class ConnectedEncoder(gr.dnn.networks.encoders.BaseDNNEncoder):
         if self.connect_gf:
             gf += self.gf_c(parent_gf)
 
-        if self.conditional_type == "gaussian":
+        if self.config.encoder_conditional_type == "gaussian":
             mu, logvar = torch.chunk(self.ef(gf), 2, dim=1)
             z = self.reparameterize(mu, logvar)
         else:
@@ -1195,13 +1245,7 @@ class ConnectedEncoder(gr.dnn.networks.encoders.BaseDNNEncoder):
 
 class ConnectedDecoder(gr.dnn.networks.decoders.BaseDNNDecoder):
     def __init__(self, decoder_instance, depth, connect_gfi=False, connect_lfi=False, connect_recon=False, **kwargs):
-        gr.dnn.networks.decoders.BaseDNNDecoder.__init__(self, n_channels=decoder_instance.n_channels,
-                                                         input_size=decoder_instance.input_size,
-                                                         n_conv_layers=decoder_instance.n_conv_layers,
-                                                         n_latents=decoder_instance.n_latents,
-                                                         feature_layer=decoder_instance.feature_layer,
-                                                         hidden_channels=decoder_instance.hidden_channels,
-                                                         hidden_dim=decoder_instance.hidden_dim)
+        gr.dnn.networks.decoders.BaseDNNDecoder.__init__(self, config=decoder_instance.config)
 
         # connections and depth in the tree (number of connections)
         self.connect_gfi = connect_gfi
