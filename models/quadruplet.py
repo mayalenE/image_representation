@@ -231,7 +231,7 @@ class QuadrupletNet(nn.Module):
                 z_b = self.calc_embedding(x_b)
                 dist = (z_a - z_b).pow(2).sum(1).item()
                 dist_per_pair.append(dist)
-            if np.isnan(dist_per_pair).all():
+            if np.isnan(dist_per_pair).all() or np.isinf(dist_per_pair).all():
                 continue
             else:
                 closest_pair = np.nanargmin(dist_per_pair)
@@ -257,7 +257,7 @@ class QuadrupletNet(nn.Module):
                 z_b = self.calc_embedding(x_b)
                 dist = (z_a - z_b).pow(2).sum(1).item()
                 dist_per_pair.append(dist)
-            if np.isnan(dist_per_pair).all():
+            if np.isnan(dist_per_pair).all() or np.isinf(dist_per_pair).all():
                 continue
             else:
                 closest_pair = np.nanargmin(dist_per_pair)
@@ -284,21 +284,13 @@ class VAEQuadrupletModel(models.VAEModel, QuadrupletNet):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        assert "load_pretrained_model" in config
-        if config.load_pretrained_model == True:
-            assert "pretrained_model_filepath" in config
-            # load the model
-            vae_model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
-            # fuse the quadruplet config with the one of the vae model
-            if hasattr(vae_model, "config"):
-                config = gr.config.update_config(kwargs, config, vae_model.config)
+        models.VAEModel.__init__(self, config=config, **kwargs)
 
-        # call initializer with corresponding parameters (including Quadruplet loss)
-        models.VAEModel.__init__(self, config=config, loss_margin=0, **kwargs)
-
-        # load the pretrained state dict
-        if config.load_pretrained_model == True:
-            self.network.load_state_dict(vae_model.network.state_dict())
+        if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
+            model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
+            if hasattr(model, "config"):
+                self.config = gr.config.update_config(kwargs, self.config, model.config)
+            self.network.load_state_dict(model.network.state_dict())
 
     def forward(self, *args):
         if len(args) == 1:
@@ -355,21 +347,13 @@ class BetaVAEQuadrupletModel(models.BetaVAEModel, QuadrupletNet):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        assert "load_pretrained_model" in config
-        if config.load_pretrained_model == True:
-            assert "pretrained_model_filepath" in config
-            # load the model
-            betavae_model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
-            # fuse the quadruplet config with the one of the vae model
-            if hasattr(betavae_model, "config"):
-                config = gr.config.update_config(kwargs, config, betavae_model.config)
+        models.BetaVAEModel.__init__(self, config=config, **kwargs)
 
-        # call initializer with corresponding parameters (including Quadruplet loss)
-        models.BetaVAEModel.__init__(self, config=config, loss_margin=0, **kwargs)
-
-        # load the pretrained state dict
-        if config.load_pretrained_model == True:
-            self.network.load_state_dict(betavae_model.network.state_dict())
+        if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
+            model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
+            if hasattr(model, "config"):
+                self.config = gr.config.update_config(kwargs, self.config, model.config)
+            self.network.load_state_dict(model.network.state_dict())
 
     def forward(self, *args):
         if len(args) == 1:
@@ -427,21 +411,13 @@ class AnnealedVAEQuadrupletModel(models.AnnealedVAEModel, QuadrupletNet):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        assert "load_pretrained_model" in config
-        if config.load_pretrained_model == True:
-            assert "pretrained_model_filepath" in config
-            # load the model
-            annealedvae_model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
-            # fuse the quadruplet config with the one of the vae model
-            if hasattr(annealedvae_model, "config"):
-                config = gr.config.update_config(kwargs, config, annealedvae_model.config)
+        models.AnnealedVAEModel.__init__(self, config=config, **kwargs)
 
-        # call initializer with corresponding parameters (including Quadruplet loss)
-        models.AnnealedVAEModel.__init__(self, config=config, loss_margin=0, **kwargs)
-
-        # load the pretrained state dict
-        if config.load_pretrained_model == True:
-            self.network.load_state_dict(annealedvae_model.network.state_dict())
+        if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
+            model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
+            if hasattr(model, "config"):
+                self.config = gr.config.update_config(kwargs, self.config, model.config)
+            self.network.load_state_dict(model.network.state_dict())
 
     def forward(self, *args):
         if len(args) == 1:
@@ -499,21 +475,13 @@ class BetaTCVAEQuadrupletModel(models.BetaTCVAEModel, QuadrupletNet):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        assert "load_pretrained_model" in config
-        if config.load_pretrained_model == True:
-            assert "pretrained_model_filepath" in config
-            # load the model
-            betatcvae_model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
-            # fuse the quadruplet config with the one of the vae model
-            if hasattr(betatcvae_model, "config"):
-                config = gr.config.update_config(kwargs, config, betatcvae_model.config)
+        models.BetaTCVAEModel.__init__(self, config=config, **kwargs)
 
-        # call initializer with corresponding parameters (including Quadruplet loss)
-        models.BetaTCVAEModel.__init__(self, config=config, loss_margin=0, **kwargs)
-
-        # load the pretrained state dict
-        if config.load_pretrained_model == True:
-            self.network.load_state_dict(betatcvae_model.network.state_dict())
+        if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
+            model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
+            if hasattr(model, "config"):
+                self.config = gr.config.update_config(kwargs, self.config, model.config)
+            self.network.load_state_dict(model.network.state_dict())
 
     def forward(self, *args):
         if len(args) == 1:
@@ -571,21 +539,13 @@ class BiGANQuadrupletModel(models.BiGANModel, QuadrupletNet):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        assert "load_pretrained_model" in config
-        if config.load_pretrained_model == True:
-            assert "pretrained_model_filepath" in config
-            # load the model
-            bigan_model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
-            # fuse the quadruplet config with the one of the vae model
-            if hasattr(bigan_model, "config"):
-                config = gr.config.update_config(kwargs, config, bigan_model.config)
+        models.BiGANModel.__init__(self, config=config, **kwargs)
 
-        # call initializer with corresponding parameters (including Quadruplet loss)
-        models.BiGANModel.__init__(self, config=config, loss_margin=0, **kwargs)
-
-        # load the pretrained state dict
-        if config.load_pretrained_model == True:
-            self.network.load_state_dict(bigan_model.network.state_dict())
+        if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
+            model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
+            if hasattr(model, "config"):
+                self.config = gr.config.update_config(kwargs, self.config, model.config)
+            self.network.load_state_dict(model.network.state_dict())
 
     def forward(self, *args):
         if len(args) == 1:
@@ -643,21 +603,14 @@ class VAEGANQuadrupletModel(models.VAEGANModel, QuadrupletNet):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        assert "load_pretrained_model" in config
-        if config.load_pretrained_model == True:
-            assert "pretrained_model_filepath" in config
-            # load the model
-            vaegan_model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
-            # fuse the quadruplet config with the one of the vae model
-            if hasattr(vaegan_model, "config"):
-                config = gr.config.update_config(kwargs, config, vaegan_model.config)
+        models.VAEGANModel.__init__(self, config=config, **kwargs)
 
-        # call initializer with corresponding parameters (including Quadruplet loss)
-        models.VAEGANModel.__init__(self, config=config, loss_margin=0, **kwargs)
+        if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
+            model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
+            if hasattr(model, "config"):
+                self.config = gr.config.update_config(kwargs, self.config, model.config)
+            self.network.load_state_dict(model.network.state_dict())
 
-        # load the pretrained state dict
-        if config.load_pretrained_model == True:
-            self.network.load_state_dict(vaegan_model.network.state_dict())
 
     def forward(self, *args):
         if len(args) == 1:

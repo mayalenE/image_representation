@@ -202,7 +202,7 @@ class BaseDNN(nn.Module):
 
             model.network.load_state_dict(saved_model['network_state_dict'])
 
-            if model_type == "BiGANModel" or model_type == "VAEGANModel":
+            if "GAN" in model_type:
                 model.optimizer_discriminator.load_state_dict(saved_model['optimizer_discriminator_state_dict'])
                 model.optimizer_generator.load_state_dict(saved_model['optimizer_generator_state_dict'])
             else:
