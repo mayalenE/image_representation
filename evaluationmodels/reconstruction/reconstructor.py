@@ -69,6 +69,7 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
         default_config.checkpoint = gr.Config()
         default_config.checkpoint.folder = None
         default_config.checkpoint.save_model_every = 10
+        default_config.checkpoint.save_model_at_epochs = []
         return default_config
 
     def __init__(self, representation_model, config=None, **kwargs):
@@ -266,7 +267,7 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
     def visualize_results(self):
         pass
 
-    def run_training(self, train_loader=None, valid_loader=None, keep_best_model=True, logger=None):
+    def run_training(self, train_loader=None, valid_loader=None, keep_best_model=False, logger=None):
         """
         logger: tensorboard X summary writer
         """
@@ -299,6 +300,9 @@ class ReconstructorModel(dnn.BaseDNN, gr.BaseEvaluationModel):
 
                 if self.n_epochs % self.config.checkpoint.save_model_every == 0:
                     self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
+                if self.n_epochs in self.config.checkpoint.save_model_at_epochs:
+                    self.save_checkpoint(
+                        os.path.join(self.config.checkpoint.folder, "epoch_{}_weight_model.pth".format(self.n_epochs)))
 
                 if do_validation:
                     _, valid_losses = self.do_evaluation_pass(valid_loader, logger=logger)

@@ -21,58 +21,191 @@ def get_loss(loss_name):
 
 
 class TripletLoss(BaseLoss):
-    def __init__(self, margin=0.0, **kwargs):
+    def __init__(self, margin=0.0, distance='squared_euclidean', combined_loss_name=None, combined_loss_parameters=None,
+                 combined_loss_scale_factor=1.0, use_attention=False, **kwargs):
         self.margin = margin
+        self.distance = distance
 
-        self.input_keys_list = ['z_ref', 'z_a', 'z_b']
+        if combined_loss_name is None:
+            self.combined_loss = None
+        else:
+            combined_loss_class = get_loss(combined_loss_name)
+            self.combined_loss = combined_loss_class(**combined_loss_parameters)
+            self.combined_loss_scale_factor = combined_loss_scale_factor
+
+        self.use_attention = use_attention
+
+        if self.distance == 'cosine' or self.distance == 'squared_cosine':
+            assert self.margin < 1.0, print("cosine distance is between 0 and 1 so margin has to be < 1")
+            assert not self.use_attention, print("cosine distance does not support attention for the moment")
+
+
+        self.input_keys_list = ['x_ref_outputs', 'x_a_outputs', 'x_b_outputs', 'x_c_outputs']
+        if self.use_attention:
+            self.input_keys_list.append('attention')
 
     def __call__(self, loss_inputs, reduction="mean", **kwargs):
         try:
-            z_ref = loss_inputs['z_ref']
-            z_a = loss_inputs['z_a']
-            z_b = loss_inputs['z_b']
+            x_ref_outputs = loss_inputs['x_ref_outputs']
+            x_a_outputs = loss_inputs['x_a_outputs']
+            x_b_outputs = loss_inputs['x_b_outputs']
+            x_c_outputs = loss_inputs['x_c_outputs']
+            z_ref = x_ref_outputs["z"]
+            z_a = x_a_outputs["z"]
+            z_b = x_b_outputs["z"]
+            if self.use_attention:
+                attention = loss_inputs["attention"]
+            else:
+                attention = torch.ones_like(z_ref)
         except:
-            raise ValueError("DIMLoss needs {} inputs".format(self.input_keys_list))
+            raise ValueError("TripletLoss needs {} inputs".format(self.input_keys_list))
 
-        distance_a = (z_ref - z_a).pow(2).sum(1)
-        distance_b = (z_ref - z_b).pow(2).sum(1)
+        if self.distance == 'euclidean':
+            distance_a = ((z_ref - z_a).pow(2) * attention).sum(1).sqrt()
+            distance_b = ((z_ref - z_b).pow(2) * attention).sum(1).sqrt()
+        elif self.distance == 'cosine':
+            distance_a = (1.0-torch.nn.functional.cosine_similarity(z_ref, z_a))
+            distance_b = (1.0-torch.nn.functional.cosine_similarity(z_ref, z_b))
+        elif self.distance == 'chebyshev':
+            distance_a = ((z_ref - z_a).abs() * attention).max(dim=1)[0]
+            distance_b = ((z_ref - z_b).abs() * attention).max(dim=1)[0]
+        elif self.distance == 'squared_euclidean':
+            distance_a = ((z_ref - z_a).pow(2) * attention).sum(1)
+            distance_b = ((z_ref - z_b).pow(2) * attention).sum(1)
+        elif self.distance == 'squared_cosine':
+            distance_a = (1.0-torch.nn.functional.cosine_similarity(z_ref, z_a)).pow(2)
+            distance_b = (1.0-torch.nn.functional.cosine_similarity(z_ref, z_b)).pow(2)
+        elif self.distance == 'squared_chebyshev':
+            distance_a = ((z_ref - z_a).abs() * attention).max(dim=1)[0].pow(2)
+            distance_b = ((z_ref - z_b).abs() * attention).max(dim=1)[0].pow(2)
 
-        total_loss = F.relu(distance_a - distance_b + self.margin)
+        triplet_loss = F.relu(distance_a - distance_b + self.margin)
 
-        if reduction == "none":
-            return {'total': total_loss}
-        elif reduction == "sum":
-            return {'total': total_loss.sum()}
+        output_losses = dict()
+        if self.combined_loss is None:
+            output_losses['total'] = triplet_loss
+
+        else:
+            combined_loss = dict()
+            combined_loss_ref = self.combined_loss(x_ref_outputs, reduction=reduction)
+            combined_loss_a = self.combined_loss(x_a_outputs, reduction=reduction)
+            combined_loss_b = self.combined_loss(x_b_outputs, reduction=reduction)
+            combined_loss_c = self.combined_loss(x_c_outputs, reduction=reduction)
+            for k in combined_loss_ref.keys():
+                combined_loss[k] = (combined_loss_ref[k] + combined_loss_a[k] + combined_loss_b[k] + combined_loss_c[k]) / 4.0
+            combined_loss_scaled = combined_loss['total'] / self.combined_loss_scale_factor
+
+            total_loss = triplet_loss + combined_loss_scaled
+
+            output_losses['total'] = total_loss
+            output_losses['triplet'] = triplet_loss
+            output_losses['combined'] = combined_loss_scaled + combined_loss_b[k]
+            for k, v in combined_loss.items():
+                if k != 'total':
+                    output_losses[k] = v
+
+        if reduction == "sum":
+            for k, v in output_losses.items():
+                output_losses[k] = v.sum()
         elif reduction == "mean":
-            return {'total': total_loss.mean()}
+            for k, v in output_losses.items():
+                output_losses[k] = v.mean()
+
+        return output_losses
 
 
 class QuadrupletLoss(BaseLoss):
-    def __init__(self, margin=0.0, **kwargs):
+    def __init__(self, margin=0.0, distance='euclidean', combined_loss_name=None, combined_loss_parameters=None, combined_loss_scale_factor=1.0, use_attention = False, **kwargs):
         self.margin = margin
+        self.distance = distance
 
-        self.input_keys_list = ['z_pos_a', 'z_pos_b', 'z_neg_a', 'z_neg_b']
+        if combined_loss_name is None:
+            self.combined_loss = None
+        else:
+            combined_loss_class = get_loss(combined_loss_name)
+            self.combined_loss = combined_loss_class(**combined_loss_parameters)
+            self.combined_loss_scale_factor = combined_loss_scale_factor
+
+        self.use_attention = use_attention
+
+        if self.distance == 'cosine' or self.distance == 'squared_cosine':
+            assert self.margin < 1.0, print("cosine distance is between 0 and 1 so margin has to be < 1")
+            assert not self.use_attention, print("cosine distance does not support attention for the moment")
+
+        self.input_keys_list = ['x_pos_a_outputs', 'x_pos_b_outputs', 'x_neg_a_outputs', 'x_neg_b_outputs']
+        if self.use_attention:
+            self.input_keys_list.append('attention')
+
 
     def __call__(self, loss_inputs, reduction="mean", **kwargs):
         try:
-            z_pos_a = loss_inputs['z_pos_a']
-            z_pos_b = loss_inputs['z_pos_b']
-            z_neg_a = loss_inputs['z_neg_a']
-            z_neg_b = loss_inputs['z_neg_b']
+            x_pos_a_outputs = loss_inputs['x_pos_a_outputs']
+            x_pos_b_outputs = loss_inputs['x_pos_b_outputs']
+            x_neg_a_outputs = loss_inputs['x_neg_a_outputs']
+            x_neg_b_outputs = loss_inputs['x_neg_b_outputs']
+            z_pos_a = x_pos_a_outputs["z"]
+            z_pos_b = x_pos_b_outputs["z"]
+            z_neg_a = x_neg_a_outputs["z"]
+            z_neg_b = x_neg_b_outputs["z"]
+            if self.use_attention:
+                attention = loss_inputs["attention"]
+            else:
+                attention = torch.ones_like(z_pos_a)
         except:
-            raise ValueError("DIMLoss needs {} inputs".format(self.input_keys_list))
+            raise ValueError("QuadrupletLoss needs {} inputs".format(self.input_keys_list))
 
-        distance_pos = (z_pos_a - z_pos_b).pow(2).sum(1)
-        distance_neg = (z_neg_a - z_neg_b).pow(2).sum(1)
+        if self.distance == 'euclidean':
+            distance_pos = ((z_pos_a - z_pos_b).pow(2) * attention).sum(1).sqrt()
+            distance_neg = ((z_neg_a - z_neg_b).pow(2) * attention).sum(1).sqrt()
+        elif self.distance == 'cosine':
+            distance_pos = (1.0 - torch.nn.functional.cosine_similarity(z_pos_a, z_pos_b))
+            distance_neg = (1.0 - torch.nn.functional.cosine_similarity(z_neg_a, z_neg_b))
+        elif self.distance == 'chebyshev':
+            distance_pos = ((z_pos_a - z_pos_b).abs() * attention).max(dim=1)[0]
+            distance_neg = ((z_neg_a - z_neg_b).abs() * attention).max(dim=1)[0]
+        elif self.distance == 'squared_euclidean':
+            distance_pos = ((z_pos_a - z_pos_b).pow(2) * attention).sum(1)
+            distance_neg = ((z_neg_a - z_neg_b).pow(2) * attention).sum(1)
+        elif self.distance == 'squared_cosine':
+            distance_pos = (1.0 - torch.nn.functional.cosine_similarity(z_pos_a, z_pos_b)).pow(2)
+            distance_neg = (1.0 - torch.nn.functional.cosine_similarity(z_neg_a, z_neg_b)).pow(2)
+        elif self.distance == 'squared_chebyshev':
+            distance_pos = ((z_pos_a - z_pos_b).abs() * attention).max(dim=1)[0].pow(2)
+            distance_neg = ((z_neg_a - z_neg_b).abs() * attention).max(dim=1)[0].pow(2)
 
-        total_loss = F.relu(distance_pos - distance_neg + self.margin)
+        quadruplet_loss = F.relu(distance_pos - distance_neg + self.margin)
 
-        if reduction == "none":
-            return {'total': total_loss}
-        elif reduction == "sum":
-            return {'total': total_loss.sum()}
+        output_losses = dict()
+        if self.combined_loss is None:
+            output_losses['total'] = quadruplet_loss
+
+        else:
+            combined_loss = dict()
+            combined_loss_pos_a = self.combined_loss(x_pos_a_outputs, reduction=reduction)
+            combined_loss_pos_b = self.combined_loss(x_pos_b_outputs, reduction=reduction)
+            combined_loss_neg_a = self.combined_loss(x_neg_a_outputs, reduction=reduction)
+            combined_loss_neg_b = self.combined_loss(x_neg_b_outputs, reduction=reduction)
+            for k in combined_loss_pos_a.keys():
+                combined_loss[k] = (combined_loss_pos_a[k] + combined_loss_pos_b[k] + combined_loss_neg_a[k] + combined_loss_neg_b[k]) / 4.0
+            combined_loss_scaled = combined_loss['total'] / self.combined_loss_scale_factor
+
+            total_loss = quadruplet_loss + combined_loss_scaled
+
+            output_losses['total'] = total_loss
+            output_losses['quadruplet'] = quadruplet_loss
+            output_losses['combined'] = combined_loss_scaled
+            for k, v in combined_loss.items():
+                if k != 'total':
+                    output_losses[k] = v
+
+        if reduction == "sum":
+            for k, v in output_losses.items():
+                output_losses[k] = v.sum()
         elif reduction == "mean":
-            return {'total': total_loss.mean()}
+            for k, v in output_losses.items():
+                output_losses[k] = v.mean()
+
+        return output_losses
 
 
 class DIMLoss(BaseLoss):

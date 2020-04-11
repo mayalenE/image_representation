@@ -1,24 +1,33 @@
 import goalrepresent as gr
-from goalrepresent.helper.nnmodulehelper import Roll, SphericPad
+from goalrepresent.datasets.image.preprocess import RandomCenterCrop, RandomRoll,  RandomSphericalRotation, RandomGaussianBlur
 import h5py
 import numpy as np
 import os
 import torch
 from torch.utils.data import Dataset
 import torchvision
-from torchvision.transforms import CenterCrop, ToTensor, ToPILImage, RandomHorizontalFlip, RandomResizedCrop, \
-    RandomVerticalFlip, RandomRotation
+from torchvision.transforms import CenterCrop, Compose, ToTensor, ToPILImage, RandomHorizontalFlip, RandomVerticalFlip, RandomRotation, ColorJitter, Pad, RandomApply, RandomResizedCrop
 import warnings
+from PIL import Image
 
 to_tensor = ToTensor()
 to_PIL_image = ToPILImage()
 
+# ===========================
+# get dataset function
+# ===========================
+
+def get_dataset(dataset_name):
+    """
+    dataset_name: string such that the model called is <dataset_name>Dataset
+    """
+    return eval("gr.datasets.{}Dataset".format(dataset_name.upper()))
 
 # ===========================
-# HOLMES Datasets
+# Mixed Datasets
 # ===========================
 
-class HOLMESDataset(Dataset):
+class MIXEDDataset(Dataset):
 
     @staticmethod
     def default_config():
@@ -26,12 +35,21 @@ class HOLMESDataset(Dataset):
         default_config.data_augmentation = False
         default_config.transform = None
         default_config.target_transform = None
-        default_config.download = True
-
         return default_config
 
     def __init__(self, config=None, **kwargs):
         self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
+
+        # initially dataset lists are empty
+        self.n_images = 0
+        self.images = torch.FloatTensor([]) # list or torch tensor of size N*C*H*W
+        self.labels = torch.LongTensor([]) # list or torch tensor
+        self.datasets_ids = [] # list of the dataset idx each image is coming from
+
+        self.datasets = {}
+        for dataset in self.config.datasets:
+            dataset_class = get_dataset(dataset["name"])
+            self.datasets[dataset["name"]] = dataset_class(config=dataset.config)
 
         # data augmentation boolean
         self.data_augmentation = self.config.data_augmentation
@@ -39,18 +57,590 @@ class HOLMESDataset(Dataset):
         self.transform = self.config.transform
         self.target_transform = self.config.target_transform
 
-        # initially dataset lists are empty
-        self.n_images = 0
-        self.images = [] # list or torch tensor of size N*C*H*W
-        self.labels = [] # list or torch tensor
+    def update(self, n_images, images, labels=None, datasets_ids=None):
+        """ Update the current dataset lists """
+        if labels is None:
+            labels = torch.LongTensor([-1] * n_images)
+        assert n_images == images.shape[0] == labels.shape[0], print(
+            'ERROR: the given dataset size ({0}) mismatch with observations size ({1}) and labels size ({2})'.format(
+                n_images, images.shape[0], labels.shape[0]))
 
-        self.datasets = {}
-        for dataset in self.config.datasets:
-            dataset_class = get_torchvisiondataset(dataset["name"])
-            self.datasets[dataset["name"]] = dataset_class(config=dataset.config)
+        self.n_images = int(n_images)
+        self.images = images
+        self.labels = labels
+
+        if datasets_ids is not None:
+            self.datasets_ids = datasets_ids
+
+    def __len__(self):
+        return self.n_images
+
+    def __getitem__(self, idx):
+        # image
+        img_tensor = self.images[idx]
+
+        if self.data_augmentation:
+            datasets_names = list(self.datasets.keys())
+            if len(datasets_names) == 1:
+                img_tensor = self.datasets[datasets_names[0]].augment(img_tensor)
+            elif len(self.datasets_ids) > 0:
+                dataset_id = self.datasets_ids[idx]
+                if dataset_id is not None:  # if generated data (None) we do not augment
+                    img_tensor = self.datasets[dataset_id].augment(img_tensor)
+            else:
+                raise ValueError("Cannot augment data if dataset_ids is not given")
+
+        if self.transform is not None:
+            datasets_names = list(self.datasets.keys())
+            if len(datasets_names) == 1:
+                img_tensor = self.datasets[datasets_names[0]].transform(img_tensor)
+            elif len(self.datasets_ids) > 0:
+                dataset_id = self.datasets_ids[idx]
+                if dataset_id is not None:
+                    img_tensor = self.datasets[dataset_id].transform(img_tensor)
+            else:
+                raise ValueError("Cannot augment data if dataset_ids is not given")
+
+        # label
+        if self.labels[idx] is not None and not np.isnan(self.labels[idx]):
+            label = int(self.labels[idx])
+        else:
+            label = -1
+
+        if self.target_transform is not None:
+            datasets_names = list(self.datasets.keys())
+            if len(datasets_names) == 1:
+                label = self.datasets[datasets_names[0]].target_transform(label)
+            elif len(self.datasets_ids) > 0:
+                dataset_id = self.datasets_ids[idx]
+                if dataset_id is not None:
+                    label = self.datasets[dataset_id].target_transform(label)
+            else:
+                raise ValueError("Cannot augment data if dataset_ids is not given")
+
+        return {'obs': img_tensor, 'label': label, 'index': idx}
+
+
+    def save(self, output_npz_filepath):
+        np.savez(output_npz_filepath, n_images=self.n_images, images=np.stack(self.images),
+                 labels=np.asarray(self.labels))
+
+
+
+
+# =================
+# Torchvision Datasets
+# =================
+
+class MNISTDataset(torchvision.datasets.MNIST):
+
+    @staticmethod
+    def default_config():
+        default_config = gr.Config()
+
+        # load data
+        default_config.data_root = 'dataset'
+        default_config.download = True
+        default_config.split = "train"
+
+        # process data
+        default_config.preprocess = None
+        default_config.data_augmentation = False
+        default_config.transform = None
+        default_config.target_transform = None
+
+        return default_config
+
+    def __init__(self, config=None, **kwargs):
+        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
+
+        if self.config.split == "train":
+            train = True
+        elif self.config.split == "valid":
+            train = False
+            warnings.warn("WARNING: MNIST does not have a valid dataset so the test set is given, should NOT BE USED for model selection")
+        elif self.config.split == "test":
+            train = False
+        else:
+            raise ValueError("MNIST dataset does not have a {} split".format((self.config.split)))
+        torchvision.datasets.MNIST.__init__(
+            self, root=os.path.join(self.config['data_root'], "mnist"),
+            train=train, download=self.config.download)
+
+        # self.data transform to N*C*H*W, float type between 0 and 1, preprocess
+        self.images = self.data.unsqueeze(1)
+        self.images = self.images.float() / 255.0
+        if self.config.preprocess is not None:
+            self.images = self.config.preprocess(self.images)
+        del self.data
+
+        self.n_channels = self.images.shape[1]
+        self.img_size = (self.images.shape[2], self.images.shape[3])
+        self.n_images = len(self.images)
+
+        self.labels = self.targets
+        del self.targets
+
+        # data augmentation boolean
+        self.data_augmentation = self.config.data_augmentation
+        if self.data_augmentation:
+            # MNIST AUGMENT
+            ## rotation
+            if self.n_channels == 1:
+                fill = (0,)
+            else:
+                fill = 0
+            self.random_rotation = RandomApply([RandomRotation(30, resample=Image.BILINEAR, fill=fill)], p=0.6)
+            ## resized crop
+            self.random_resized_crop = RandomApply(
+                [RandomResizedCrop(self.img_size, scale=(0.9, 1.0), ratio=(0.75, 1.3333333333333333), interpolation=2)],
+                p=0.6)
+            ## composition
+            self.augment = Compose([to_PIL_image, self.random_rotation, self.random_resized_crop, to_tensor])
+
+
+        # the user can additionally specify a transform in the config
+        self.transform = self.config.transform
+        self.target_transform = self.config.target_transform
+
+    def get_image(self, image_idx, augment=False, transform=True):
+        image = self.images[image_idx]
+        if augment and self.data_augmentation:
+            image = self.augment(image)
+        if transform and self.transform is not None:
+            image = self.transform(image)
+        return image
+
+
+    def __len__(self):
+        return self.n_images
+
+    def __getitem__(self, idx):
+        # image
+        img_tensor = self.images[idx]
+
+        if self.data_augmentation:
+            img_tensor = self.augment(img_tensor)
+
+        if self.transform is not None:
+            img_tensor = self.transform(img_tensor)
+
+        # label
+        if self.labels[idx] is not None and not np.isnan(self.labels[idx]):
+            label = int(self.labels[idx])
+        else:
+            label = -1
+
+        if self.target_transform is not None:
+            label = self.target_transform(label)
+
+        return {'obs': img_tensor, 'label': label, 'index': idx}
+
+
+class SVHNDataset(torchvision.datasets.SVHN):
+    @staticmethod
+    def default_config():
+        default_config = gr.Config()
+
+        # load data
+        default_config.data_root = 'dataset'
+        default_config.download = True
+        default_config.split = "train"
+
+        # process data
+        default_config.preprocess = None
+        default_config.data_augmentation = False
+        default_config.transform = None
+        default_config.target_transform = None
+
+        return default_config
+
+    def __init__(self, config=None, **kwargs):
+        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
+        if self.config.split == "valid":
+            self.config.split = "test"
+            warnings.warn(
+                "WARNING: SVHN does not have a valid dataset so the test set is given, should NOT BE USED for model selection")
+        torchvision.datasets.SVHN.__init__(
+            self, root=os.path.join(self.config['data_root'], "svhn"),
+            split=self.config.split, download=self.config.download)
+
+        # self.data transform to N*C*H*W, float type between 0 and 1, preprocess
+        self.images = torch.from_numpy(self.data)
+        self.images = self.images.float() / 255.0
+        if self.config.preprocess is not None:
+            self.images = self.config.preprocess(self.images)
+        del self.data
+
+        self.n_channels = self.images.shape[1]
+        self.img_size = (self.images.shape[2], self.images.shape[3])
+        self.n_images = len(self.images)
+
+        self.labels = torch.from_numpy(self.labels)
+
+        # data augmentation boolean
+        self.data_augmentation = self.config.data_augmentation
+        if self.data_augmentation:
+            # SVHN AUGMENT
+            ## rotation
+            if self.n_channels == 1:
+                fill = (0,)
+            else:
+                fill = 0
+            radius = max(self.img_size[0], self.img_size[1]) / 2
+            padding_size = int(np.sqrt(2 * np.power(radius, 2)) - radius)
+            self.pad = Pad(padding_size, padding_mode='edge')
+            self.center_crop = CenterCrop(self.img_size)
+            self.random_rotation = RandomApply([self.pad, RandomRotation(30, resample=Image.BILINEAR, fill=fill), self.center_crop], p=0.6)
+            ## resized crop
+            self.random_resized_crop = RandomApply(
+                [RandomResizedCrop(self.img_size, scale=(0.8, 1.0), ratio=(0.75, 1.3333333333333333), interpolation=2)],
+                p=0.6)
+            ## color
+            self.random_color_jitter = RandomApply([ColorJitter(brightness=.4, contrast=.4, saturation=.4, hue=.1)], p=0.8)
+            ## gaussian blur
+            #self.random_gaussian_blur = RandomGaussianBlur(p=0.5, kernel_radius=1, max_sigma=2.0, n_channels=self.n_channels)
+            ## composition
+            self.augment = Compose([to_PIL_image, self.random_rotation, self.random_resized_crop, self.random_color_jitter, to_tensor])
+
+        # the user can additionally specify a transform in the config
+        self.transform = self.config.transform
+        self.target_transform = self.config.target_transform
+
+    def get_image(self, image_idx, augment=False, transform=True):
+        image = self.images[image_idx]
+        if augment and self.data_augmentation:
+            image = self.augment(image)
+        if transform and self.transform is not None:
+            image = self.transform(image)
+        return image
+
+
+    def __len__(self):
+        return self.n_images
+
+    def __getitem__(self, idx):
+        # image
+        img_tensor = self.images[idx]
+
+        if self.data_augmentation:
+            img_tensor = self.augment(img_tensor)
+
+        if self.transform is not None:
+            img_tensor = self.transform(img_tensor)
+
+        # label
+        if self.labels[idx] is not None and not np.isnan(self.labels[idx]):
+            label = int(self.labels[idx])
+        else:
+            label = -1
+
+        if self.target_transform is not None:
+            label = self.target_transform(label)
+
+        return {'obs': img_tensor, 'label': label, 'index': idx}
+
+class CIFAR10Dataset(torchvision.datasets.CIFAR10):
+    @staticmethod
+    def default_config():
+        default_config = gr.Config()
+
+        # load data
+        default_config.data_root = 'dataset'
+        default_config.download = True
+        default_config.split = "train"
+
+        # process data
+        default_config.preprocess = None
+        default_config.data_augmentation = False
+        default_config.transform = None
+        default_config.target_transform = None
+
+        return default_config
+
+    def __init__(self, config=None, **kwargs):
+        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
+        if self.config.split == "train":
+            train = True
+        elif self.config.split == "valid":
+            train = False
+            warnings.warn(
+                "WARNING: CIFAR10 does not have a valid dataset so the test set is given, should NOT BE USED for model selection")
+        elif self.config.split == "test":
+            train = False
+        else:
+            raise ValueError("CIFAR10 dataset does not have a {} split".format((self.config.split)))
+        torchvision.datasets.CIFAR10.__init__(
+            self, root=os.path.join(self.config['data_root'], "cifar10"),
+            train=train, download=self.config.download)
+
+        # self.data transform to N*C*H*W, float type between 0 and 1, preprocess
+        self.images = torch.from_numpy(np.transpose(self.data, (0, 3, 1, 2)))
+        self.images = self.images.float() / 255.0
+        if self.config.preprocess is not None:
+            self.images = self.config.preprocess(self.images)
+        del self.data
+
+        self.n_channels = self.images.shape[1]
+        self.img_size = (self.images.shape[2], self.images.shape[3])
+        self.n_images = len(self.images)
+
+        self.labels = torch.LongTensor(self.targets)
+
+        # data augmentation boolean
+        self.data_augmentation = self.config.data_augmentation
+        if self.data_augmentation:
+            # CIFAR10 AUGMENT
+            ## rotation
+            if self.n_channels == 1:
+                fill = (0,)
+            else:
+                fill = 0
+            radius = max(self.img_size[0], self.img_size[1]) / 2
+            padding_size = int(np.sqrt(2 * np.power(radius, 2)) - radius)
+            self.pad = Pad(padding_size, padding_mode='edge')
+            self.center_crop = CenterCrop(self.img_size)
+            self.random_rotation = RandomApply(
+                [self.pad, RandomRotation(30, resample=Image.BILINEAR, fill=fill), self.center_crop], p=0.6)
+            ## resized crop
+            self.random_resized_crop = RandomApply(
+                [RandomResizedCrop(self.img_size, scale=(0.5, 1.0), ratio=(0.75, 1.3333333333333333), interpolation=2)],
+                p=0.6)
+            ## horizontal flip
+            self.random_horizontal_flip = RandomHorizontalFlip(0.2)
+            ## color
+            self.random_color_jitter = RandomApply([ColorJitter(brightness=.5, contrast=.2, saturation=.2, hue=.1)], p=0.6)
+            ## gaussian blur
+            #self.random_gaussian_blur = RandomGaussianBlur(p=0.5, kernel_radius=1, max_sigma=2.0, n_channels=self.n_channels)
+            ## composition
+            self.augment = Compose(
+                [to_PIL_image, self.random_rotation, self.random_resized_crop, self.random_horizontal_flip, self.random_color_jitter, to_tensor])
+
+        # the user can additionally specify a transform in the config
+        self.transform = self.config.transform
+        self.target_transform = self.config.target_transform
+
+    def get_image(self, image_idx, augment=False, transform=True):
+        image = self.images[image_idx]
+        if augment and self.data_augmentation:
+            image = self.augment(image)
+        if transform and self.transform is not None:
+            image = self.transform(image)
+        return image
+
+    def __len__(self):
+        return self.n_images
+
+    def __getitem__(self, idx):
+        # image
+        img_tensor = self.images[idx]
+
+        if self.data_augmentation:
+            img_tensor = self.augment(img_tensor)
+
+        if self.transform is not None:
+            img_tensor = self.transform(img_tensor)
+
+        # label
+        if self.labels[idx] is not None and not np.isnan(self.labels[idx]):
+            label = int(self.labels[idx])
+        else:
+            label = -1
+
+        if self.target_transform is not None:
+            label = self.target_transform(label)
+
+        return {'obs': img_tensor, 'label': label, 'index': idx}
+
+
+
+class CIFAR100Dataset(torchvision.datasets.CIFAR100):
+
+    @staticmethod
+    def default_config():
+        default_config = gr.Config()
+
+        # load data
+        default_config.data_root = 'dataset'
+        default_config.download = True
+        default_config.split = "train"
+
+        # process data
+        default_config.preprocess = None
+        default_config.data_augmentation = False
+        default_config.transform = None
+        default_config.target_transform = None
+
+        return default_config
+
+    def __init__(self, config=None, **kwargs):
+        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
+        if self.config.split == "train":
+            train = True
+        elif self.config.split == "valid":
+            train = False
+            warnings.warn(
+                "WARNING: CIFAR100 does not have a valid dataset so the test set is given, should NOT BE USED for model selection")
+        elif self.config.split == "test":
+            train = False
+        else:
+            raise ValueError("CIFAR100 dataset does not have a {} split".format((self.config.split)))
+        torchvision.datasets.CIFAR100.__init__(
+            self, root=os.path.join(self.config['data_root'], "cifar100"),
+            train=train, download=self.config.download)
+
+        # self.data transform to N*C*H*W, float type between 0 and 1, preprocess
+        self.images = torch.from_numpy(np.transpose(self.data, (0, 3, 1, 2)))
+        self.images = self.images.float() / 255.0
+        if self.config.preprocess is not None:
+            self.images = self.config.preprocess(self.images)
+        del self.data
+
+        self.n_channels = self.images.shape[1]
+        self.img_size = (self.images.shape[2], self.images.shape[3])
+        self.n_images = len(self.images)
+
+        self.labels = torch.LongTensor(self.targets)
+
+        # data augmentation boolean
+        self.data_augmentation = self.config.data_augmentation
+        if self.data_augmentation:
+            ## rotation
+            if self.n_channels == 1:
+                fill = (0,)
+            else:
+                fill = 0
+            radius = max(self.img_size[0], self.img_size[1]) / 2
+            padding_size = int(np.sqrt(2 * np.power(radius, 2)) - radius)
+            self.pad = Pad(padding_size, padding_mode='edge')
+            self.center_crop = CenterCrop(self.img_size)
+            self.random_rotation = RandomApply(
+                [self.pad, RandomRotation(30, resample=Image.BILINEAR, fill=fill), self.center_crop], p=0.6)
+            ## resized crop
+            self.random_resized_crop = RandomApply(
+                [RandomResizedCrop(self.img_size, scale=(0.5, 1.0), ratio=(0.75, 1.3333333333333333), interpolation=2)],
+                p=0.6)
+            ## horizontal flip
+            self.random_horizontal_flip = RandomHorizontalFlip(0.2)
+            ## color
+            self.random_color_jitter = RandomApply([ColorJitter(brightness=.5, contrast=.2, saturation=.2, hue=.1)], p=0.6)
+            ## gaussian blur
+            #self.random_gaussian_blur = RandomGaussianBlur(p=0.5, kernel_radius=1, max_sigma=2.0, n_channels=self.n_channels)
+            ## composition
+            self.augment = Compose([to_PIL_image, self.random_rotation, self.random_resized_crop, self.random_horizontal_flip, self.random_color_jitter, to_tensor])
+
+        # the user can additionally specify a transform in the config
+        self.transform = self.config.transform
+        self.target_transform = self.config.target_transform
+
+    def get_image(self, image_idx, augment=False, transform=True):
+        image = self.images[image_idx]
+        if augment and self.data_augmentation:
+            image = self.augment(image)
+        if transform and self.transform is not None:
+            image = self.transform(image)
+        return image
+
+    def __len__(self):
+        return self.n_images
+
+    def __getitem__(self, idx):
+        # image
+        img_tensor = self.images[idx]
+
+        if self.data_augmentation:
+            img_tensor = self.augment(img_tensor)
+
+        if self.transform is not None:
+            img_tensor = self.transform(img_tensor)
+
+        # label
+        if self.labels[idx] is not None and not np.isnan(self.labels[idx]):
+            label = int(self.labels[idx])
+        else:
+            label = -1
+
+        if self.target_transform is not None:
+            label = self.target_transform(label)
+
+        return {'obs': img_tensor, 'label': label, 'index': idx}
+
+
+# ===========================
+# Lenia Dataset
+# ===========================
+
+class LENIADataset(Dataset):
+    """ Lenia dataset"""
+
+    @staticmethod
+    def default_config():
+        default_config = gr.Config()
+
+        # load data
+        default_config.data_root = None
+        default_config.split = "train"
+
+        # process data
+        default_config.preprocess = None
+        default_config.img_size = None
+        default_config.data_augmentation = False
+        default_config.transform = None
+        default_config.target_transform = None
+
+        return default_config
+
+    def __init__(self, config=None, **kwargs):
+        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
+
+        if self.config.data_root is None:
+            self.n_images = 0
+            self.images = []
+            if self.config.img_size is not None:
+                self.img_size = self.config.img_size
+            self.labels = []
+
+        else:
+            # load HDF5 lenia dataset
+            dataset_filepath = os.path.join(self.config.data_root, 'dataset', 'dataset.h5')
+            with h5py.File(dataset_filepath, 'r') as file:
+                if 'n_data' in file[self.config.split]:
+                    self.n_images = int(file[self.config.split]['n_data'])
+                else:
+                    self.n_images = int(file[self.config.split]['observations'].shape[0])
+
+                self.has_labels = bool('labels' in file[self.config.split])
+                if self.has_labels:
+                    self.labels = torch.LongTensor(file[self.config.split]['labels'])
+                else:
+                    self.labels = torch.LongTensor([-1] * self.n_images)
+
+                self.images = torch.Tensor(file[self.config.split]['observations']).float()
+                if self.config.preprocess is not None:
+                    self.images = self.config.preprocess(self.images)
+
+                self.n_channels = self.images.shape[1]
+                self.img_size = (self.images.shape[2], self.images.shape[3])
+
+
+        # data augmentation boolean
+        self.data_augmentation = self.config.data_augmentation
+        if self.data_augmentation:
+            # LENIA Augment
+            self.random_center_crop = RandomCenterCrop(p=0.6, crop_ratio=(1., 2.), keep_img_size=True)
+            self.random_roll = RandomRoll(p_x=0.6, p_y=0.6, max_dx=0.5, max_dy=0.5, img_size=self.img_size)
+            self.random_spherical_rotation = RandomSphericalRotation(p=0.6, max_degrees=20, n_channels=self.n_channels, img_size=self.img_size)
+            self.random_horizontal_flip = RandomHorizontalFlip(0.2)
+            self.random_vertical_flip = RandomVerticalFlip(0.2)
+            self.augment = Compose([self.random_center_crop, self.random_roll, self.random_spherical_rotation, to_PIL_image, self.random_horizontal_flip, self.random_vertical_flip, to_tensor])
+
+
+        # the user can additionally specify a transform in the config
+        self.transform = self.config.transform
+        self.target_transform = self.config.target_transform
 
     def update(self, n_images, images, labels=None):
-        """ Update the current dataset lists """
+        """update online the dataset"""
         if labels is None:
             labels = torch.Tensor([-1] * n_images)
         assert n_images == images.shape[0] == labels.shape[0], print(
@@ -61,6 +651,14 @@ class HOLMESDataset(Dataset):
         self.images = images
         self.labels = labels
 
+    def get_image(self, image_idx, augment=False, transform=True):
+        image = self.images[image_idx]
+        if augment and self.data_augmentation:
+            image = self.augment(image)
+        if transform and self.transform is not None:
+            image = self.transform(image)
+        return image
+
     def __len__(self):
         return self.n_images
 
@@ -68,8 +666,8 @@ class HOLMESDataset(Dataset):
         # image
         img_tensor = self.images[idx]
 
-        if self.data_augmentation is not None:
-            pass
+        if self.data_augmentation:
+            img_tensor = self.augment(img_tensor)
 
         if self.transform is not None:
             img_tensor = self.transform(img_tensor)
@@ -88,256 +686,171 @@ class HOLMESDataset(Dataset):
     def save(self, output_npz_filepath):
         np.savez(output_npz_filepath, n_images=self.n_images, images=np.stack(self.images),
                  labels=np.asarray(self.labels))
-
-
-
-
-# =================
-# Torchvision Datasets
-# =================
-def get_torchvisiondataset(dataset_name):
-    """
-    dataset_name: string such that the model called is <dataset_name>Dataset
-    """
-    return eval("gr.datasets.{}Dataset".format(dataset_name.upper()))
-
-class MNISTDataset(torchvision.datasets.MNIST):
-    name = 'mnist'
-    num_classes = 10
-
-    def __init__(self, config=None, **kwargs):
-        if config.split == "train":
-            train = True
-        elif config.split == "valid":
-            train = False
-            warnings.warn("WARNING: MNIST does not have a valid dataset so the test set is given, should NOT BE USED for model selection")
-        elif config.split == "test":
-            train = False
-        else:
-            raise ValueError("MNIST dataset does not have a {} split".format((config.split)))
-        torchvision.datasets.MNIST.__init__(
-            self, root=os.path.join(config['data_root'], self.name),
-            train=train, download=config.download)
-
-        # self.data transform to N*C*H*W, float type between 0 and 1, preprocess
-        self.images = self.data.unsqueeze(1)
-        self.images = self.images.float() / 255.0
-        if config.preprocess is not None:
-            self.images = config.preprocess(self.images)
-        del self.data
-
-        self.labels = self.targets
-        del self.targets
-
-    def __len__(self):
-        return len(self.images)
-
-    def __getitem__(self, index):
-       return {'obs': self.images[index], 'label': self.labels[index]}
-
-
-class SVHNDataset(torchvision.datasets.SVHN):
-    name = 'svhn'
-    num_classes = 10
-
-    def __init__(self, config=None, **kwargs):
-        if config.split == "valid":
-            config.split = "test"
-            warnings.warn(
-                "WARNING: SVHN does not have a valid dataset so the test set is given, should NOT BE USED for model selection")
-        torchvision.datasets.SVHN.__init__(
-            self, root=os.path.join(config['data_root'], self.name),
-            split=config.split, download=config.download)
-
-        # self.data transform to N*C*H*W, float type between 0 and 1, preprocess
-        self.images = torch.from_numpy(self.data)
-        self.images = self.images.float() / 255.0
-        if config.preprocess is not None:
-            self.images = config.preprocess(self.images)
-        del self.data
-
-        self.labels = torch.from_numpy(self.labels)
-
-    def __len__(self):
-        return len(self.images)
-
-    def __getitem__(self, index):
-       return {'obs': self.images[index], 'label': self.labels[index]}
-
-class CIFAR10Dataset(torchvision.datasets.CIFAR10):
-    name = 'cifar10'
-    num_classes = 10
-
-    def __init__(self, config=None, **kwargs):
-        if config.split == "train":
-            train = True
-        elif config.split == "valid":
-            train = False
-            warnings.warn(
-                "WARNING: CIFAR10 does not have a valid dataset so the test set is given, should NOT BE USED for model selection")
-        elif config.split == "test":
-            train = False
-        else:
-            raise ValueError("CIFAR10 dataset does not have a {} split".format((config.split)))
-        torchvision.datasets.CIFAR10.__init__(
-            self, root=os.path.join(config['data_root'], self.name),
-            train=train, download=config.download)
-
-        # self.data transform to N*C*H*W, float type between 0 and 1, preprocess
-        self.images = torch.from_numpy(self.data)
-        self.images = self.images.float() / 255.0
-        if config.preprocess is not None:
-            self.images = config.preprocess(self.images)
-        del self.data
-
-        self.labels = self.targets
-        del self.targets
-
-    def __len__(self):
-        return len(self.images)
-
-    def __getitem__(self, index):
-       return {'obs': self.images[index], 'label': self.labels[index]}
-
-
-
-class CIFAR100Dataset(torchvision.datasets.CIFAR100):
-    name = 'cifar100'
-    num_classes = 100
-
-    def __init__(self, config=None, **kwargs):
-        if config.split == "train":
-            train = True
-        elif config.split == "valid":
-            train = False
-            warnings.warn(
-                "WARNING: CIFAR100 does not have a valid dataset so the test set is given, should NOT BE USED for model selection")
-        elif config.split == "test":
-            train = False
-        else:
-            raise ValueError("CIFAR100 dataset does not have a {} split".format((config.split)))
-        torchvision.datasets.CIFAR100.__init__(
-            self, root=os.path.join(config['data_root'], self.name),
-            train=train, transform=config.transform, download=config.download)
-
-        # self.data transform to N*C*H*W, float type between 0 and 1, preprocess
-        self.images = torch.from_numpy(self.data)
-        self.images = self.images.float() / 255.0
-        if config.preprocess is not None:
-            self.images = config.preprocess(self.images)
-        del self.data
-
-        self.labels = self.targets
-        del self.targets
-
-    def __len__(self):
-        return len(self.images)
-
-    def __getitem__(self, index):
-       return {'obs': self.images[index], 'label': self.labels[index]}
-
-
-
-# ===========================
-# Lenia Dataset
-# ===========================
-
-class DatasetLenia(Dataset):
-    """ Dataset to train auto-encoders representations during exploration"""
-
-    def __init__(self, img_size, preprocess=None, data_augmentation=False):
-
-        self.n_images = 0
-        self.images = []
-        self.labels = []
-
-        self.img_size = img_size
-
-        self.preprocess = preprocess
-
-        self.data_augmentation = data_augmentation
-        if self.data_augmentation:
-            radius = max(self.img_size[0], self.img_size[1]) / 2
-            padding_size = int(np.sqrt(2 * np.power(radius, 2)) - radius)
-            self.spheric_pad = SphericPad(
-                padding_size=padding_size)  # max rotation needs padding of [sqrt(2*128^2)-128 = 53.01]
-            self.random_horizontal_flip = RandomHorizontalFlip(0.2)
-            self.random_vertical_flip = RandomVerticalFlip(0.2)
-            self.random_resized_crop = RandomResizedCrop(size=self.img_size)
-            self.random_rotation = RandomRotation(40)
-            self.center_crop = CenterCrop(self.img_size)
-            self.roll_y = Roll(shift=0, dim=1)
-            self.roll_x = Roll(shift=0, dim=2)
-
-    def update(self, n_images, images, labels=None):
-        if labels is None:
-            labels = torch.Tensor([-1] * n_images)
-        assert n_images == images.shape[0] == labels.shape[0], print(
-            'ERROR: the given dataset size ({0}) mismatch with observations size ({1}) and labels size ({2})'.format(
-                n_images, images.shape[0], labels.shape[0]))
-
-        self.n_images = int(n_images)
-        self.images = images
-        self.labels = labels
-
-    def __len__(self):
-        return self.n_images
-
-    def __getitem__(self, idx):
-        # image
-        img_tensor = self.images[idx]
-
-        if self.data_augmentation:
-            # random rolled translation (ie pixels shifted outside appear on the other side of image))
-            p_y = p_x = 0.3
-
-            if np.random.random() < p_y:
-                ## the maximum translation is of half the image size
-                max_dy = 0.5 * self.img_size[0]
-                shift_y = int(np.round(np.random.uniform(-max_dy, max_dy)))
-                self.roll_y.shift = shift_y
-                img_tensor = self.roll_y(img_tensor)
-
-            if np.random.random() < p_x:
-                max_dx = 0.5 * self.img_size[1]
-                shift_x = int(np.round(np.random.uniform(-max_dx, max_dx)))
-                self.roll_y.shift = shift_x
-                img_tensor = self.roll_x(img_tensor)
-
-            # random spherical padding + rotation (avoid "black holes" when rotating)
-            p_r = 0.3
-
-            if np.random.random() < p_r:
-                img_tensor = self.spheric_pad(
-                    img_tensor.view(1, img_tensor.size(0), img_tensor.size(1), img_tensor.size(2))).squeeze(0)
-                img_PIL = to_PIL_image(img_tensor)
-                img_PIL = self.random_rotation(img_PIL)
-                img_PIL = self.center_crop(img_PIL)
-                img_tensor = to_tensor(img_PIL)
-
-            img_PIL = to_PIL_image(img_tensor)
-            # random horizontal flip
-            img_PIL = self.random_horizontal_flip(img_PIL)
-            # random vertical flip
-            img_PIL = self.random_vertical_flip(img_PIL)
-            # convert back to tensor
-            img_tensor = to_tensor(img_PIL)
-
-        if self.preprocess:
-            img_tensor = self.preprocess(img_tensor)
-
-        # label
-        if self.labels[idx] is not None and not np.isnan(self.labels[idx]):
-            label = int(self.labels[idx])
-        else:
-            label = -1
-
-        return {'obs': img_tensor, 'label': label}
-
-    def save(self, output_npz_filepath):
-        np.savez(output_npz_filepath, n_images=self.n_images, images=np.stack(self.images),
-                 labels=np.asarray(self.labels))
         return
+
+
+
+
+
+# ===========================
+# Quadruplet Dataset
+# ===========================
+
+def load_quadruplets_tl_from_annotations(datapoints, loss_type="triplet"):
+    if loss_type == "triplet":
+        # construct triplets from data
+        refs = []
+        positives = []
+        negatives = []
+        fourth = []
+        for d in datapoints:
+            # if not pass, add two triplets
+            if d[-1] == 0:
+                refs.append(d[0])
+                positives.append(d[1])
+                negatives.append(d[2])
+                fourth.append(d[3])
+                refs.append(d[0])
+                positives.append(d[1])
+                negatives.append(d[3])
+                fourth.append(d[2])
+        refs = np.array(refs).reshape(-1, 1)
+        positives = np.array(positives).reshape(-1, 1)
+        negatives = np.array(negatives).reshape(-1, 1)
+        fourth = np.array(fourth).reshape(-1, 1)
+        quadruplets = np.concatenate([refs, positives, negatives, fourth], axis=1)
+
+
+    elif loss_type == "quadruplet":
+        # construct triplets from data
+        positive_pairs = []
+        negative_pairs = []
+        for d in datapoints:
+            # if not pass, add two triplets
+            if d[-1] == 0:
+                for i in range(4):
+                    for j in range(i + 1, 4):
+                        if (i, j) != (0, 1):
+                            positive_pairs.append([d[0], d[1]])
+                            negative_pairs.append([d[i], d[j]])
+
+        quadruplets = np.concatenate([positive_pairs, negative_pairs], axis=1)
+
+    return quadruplets
+
+
+
+class QuadrupletDataset(Dataset):
+    """Triplet dataset but still returns quadruplets """
+
+    @staticmethod
+    def default_config():
+        default_config = gr.Config()
+
+        # load data
+        default_config.data_root = None
+        default_config.split = "train"
+        default_config.n_quadruplets_per_epoch = None
+
+        # quadruplet annotation if given
+        default_config.annotations_filepath = None
+        default_config.use_annotated_quadruplets = False
+        #default_config.use_annotations_with_loss_type = "triplet" # either "triplet" or "quadruplet"
+        #default_config.n_annotated_quadruplets_per_epoch = 100
+
+        # process data
+        default_config.img_size = None
+        default_config.data_augmentation = False
+        default_config.transform = None
+        default_config.target_transform = None
+
+        return default_config
+
+    def __init__(self, dataset_name='lenia', config=None, **kwargs):
+        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
+        # call super class to load data, augmentation and transform
+        dataset_class = get_dataset(dataset_name)
+        base_dataset = dataset_class(config, **kwargs)
+        self.n_images = base_dataset.n_images
+        self.images = base_dataset.images
+        self.labels = base_dataset.labels
+        self.data_augmentation = base_dataset.data_augmentation
+        if self.config.data_augmentation:
+            self.augment = base_dataset.augment
+        self.transform = base_dataset.transform
+        self.target_transform = base_dataset.target_transform
+        self.get_image = base_dataset.get_image
+
+        # define number of quadruplets per epoch
+        if self.config.n_quadruplets_per_epoch is None:
+            self.config.n_quadruplets_per_epoch = int(self.n_images / 4)
+
+        # load annotated quadruplets
+        if self.config.annotations_filepath is not None:
+            datapoints = np.load(self.config.annotations_filepath)[self.config.split]
+            # annotated combinaisons
+            self.annotated_quadruplets = []
+            for d in datapoints:
+                if d[-1] == 0:
+                    self.annotated_quadruplets.append([d[0], d[1], d[2], d[3]])
+
+            if self.config.use_annotated_quadruplets:
+                # all combinaisons
+
+                quadruplets = load_quadruplets_tl_from_annotations(datapoints, loss_type=self.config.use_annotations_with_loss_type)
+                inds = np.arange(quadruplets.shape[0])
+                np.random.shuffle(inds)
+                self.quadruplets = quadruplets[inds].copy()
+
+                if self.config.n_annotated_quadruplets_per_epoch is None:
+                    self.config.n_annotated_quadruplets_per_epoch = quadruplets.shape[0]
+                if self.config.n_quadruplets_per_epoch < self.config.n_annotated_quadruplets_per_epoch:
+                    self.config.n_quadruplets_per_epoch = self.config.n_annotated_quadruplets_per_epoch
+                    warnings.warn("WARNING: n_quadruplets_per_epoch < n_annotated_quadruplets_per_epoch, augmenting it!")
+
+                print('break')
+
+
+
+
+    def __len__(self):
+        return self.config.n_quadruplets_per_epoch
+
+    def __getitem__(self, index):
+        if self.config.use_annotated_quadruplets and index < self.config.n_annotated_quadruplets_per_epoch:
+            quadruplet_ids = self.quadruplets[index]
+        else:
+            # choose random images
+            triplet_ids = np.random.choice(self.n_images, 3)
+            quadruplet_ids = np.concatenate([[triplet_ids[0]], triplet_ids])
+
+        cur_images = [self.images[i] for i in quadruplet_ids]
+        cur_labels = [self.labels[i] for i in quadruplet_ids]
+
+        if self.data_augmentation:
+            for i in range(4):
+                cur_images[i] = self.augment(cur_images[i])
+
+        if self.transform is not None:
+            for i in range(4):
+                cur_images[i] = self.transform(cur_images[i])
+
+        if self.target_transform is not None:
+            for i in range(4):
+                cur_labels[i] = self.target_transform(cur_labels[i])
+
+        data_ref = {"obs": cur_images[0], "label": cur_labels[0], "index": quadruplet_ids[0]}
+        data_a = {"obs": cur_images[1], "label": cur_labels[1], "index": quadruplet_ids[1]}
+        data_b = {"obs": cur_images[2], "label": cur_labels[2], "index": quadruplet_ids[2]}
+        data_c = {"obs": cur_images[3], "label": cur_labels[3], "index": quadruplet_ids[3]}
+
+        return (data_ref, data_a, data_b, data_c)
+
+
+
+
+
+'''
 
 class DatasetLeniaHDF5(Dataset):
     """ Dataset to train auto-encoders representations during exploration"""
@@ -382,7 +895,6 @@ class DatasetLeniaHDF5(Dataset):
                 padding_size=padding_size)  # max rotation needs padding of [sqrt(2*128^2)-128 = 53.01]
             self.random_horizontal_flip = RandomHorizontalFlip(0.2)
             self.random_vertical_flip = RandomVerticalFlip(0.2)
-            self.random_resized_crop = RandomResizedCrop(size=self.img_size)
             self.random_rotation = RandomRotation(40)
             self.center_crop = CenterCrop(self.img_size)
             self.roll_y = Roll(shift=0, dim=1)
@@ -420,7 +932,7 @@ class DatasetLeniaHDF5(Dataset):
             if np.random.random() < p_x:
                 max_dx = 0.5 * self.img_size[1]
                 shift_x = int(np.round(np.random.uniform(-max_dx, max_dx)))
-                self.roll_y.shift = shift_x
+                self.roll_x.shift = shift_x
                 img_tensor = self.roll_x(img_tensor)
 
             # random spherical padding + rotation (avoid "black holes" when rotating)
@@ -522,12 +1034,12 @@ class DatasetHDF5(Dataset):
 # Triplet/Quadruplet Dataset
 # ===========================
 class ImageTripletDatasetFromHuman(Dataset):
-    def __init__(self, dataset_filepath, anno_filepath, split='train', use_pass=False, distance='euclidean',
+    def __init__(self, dataset_filepath, anno_filepath, split='train', data_size=None, use_pass=False,
                  preprocess=None, data_augmentation=False):
 
+        self.dataset_filepath = dataset_filepath
         assert split == 'train' or split == 'test'
         self.split = split
-        self.distance = distance
         self.use_pass = use_pass
         self.preprocess = preprocess
         self.data_augmentation = data_augmentation
@@ -538,6 +1050,7 @@ class ImageTripletDatasetFromHuman(Dataset):
         refs = []
         positives = []
         negatives = []
+        fourth = []
         for d in datapoints:
             if self.use_pass:
                 # if pass, add 6 triplets (positive pair being AA, negative pairs AB, AC, AD)
@@ -547,30 +1060,36 @@ class ImageTripletDatasetFromHuman(Dataset):
                             refs.append(d[i])
                             positives.append(d[i])
                             negatives.append(d[j])
+                            fourth.append(d[j])
             # if not pass, add two triplets
             if d[-1] == 0:
                 refs.append(d[0])
                 positives.append(d[1])
                 negatives.append(d[2])
+                fourth.append(d[3])
                 refs.append(d[0])
                 positives.append(d[1])
                 negatives.append(d[3])
+                fourth.append(d[2])
         refs = np.array(refs).reshape(-1, 1)
         positives = np.array(positives).reshape(-1, 1)
         negatives = np.array(negatives).reshape(-1, 1)
-        triplets = np.concatenate([refs, positives, negatives], axis=1)
+        fourth = np.array(fourth).reshape(-1, 1)
+        quadruplets = np.concatenate([refs, positives, negatives, fourth], axis=1)
 
-        inds = np.arange(triplets.shape[0])
+        inds = np.arange(quadruplets.shape[0])
 
         np.random.shuffle(inds)
         with h5py.File(dataset_filepath, 'r') as file:
-            self.images = torch.Tensor(file[self.split]['observations']).float()
-            self.img_size = (self.images.shape[2], self.images.shape[3])
-            self.labels = torch.Tensor(file[self.split]['labels']).float()
+            self.n_images = len(file[self.split]['observations'])
+            self.img_size = (file[self.split]['observations'].shape[2], file[self.split]['observations'].shape[3])
 
-        self.triplets = triplets[inds].copy()
+        self.quadruplets = quadruplets[inds].copy()
 
-        self.data_size = triplets.shape[0]
+        if data_size is None:
+            self.data_size = quadruplets.shape[0]
+        else:
+            self.data_size = data_size
 
         # save annotated quadruplets for evaluation
         self.annotated_quadruplets = []
@@ -579,40 +1098,103 @@ class ImageTripletDatasetFromHuman(Dataset):
             if d[-1] == 0:
                 self.annotated_quadruplets.append([d[0], d[1], d[2], d[3]])
 
+        # data augmentation
+        if self.data_augmentation:
+            self.random_center_crop = RandomCenterCrop(0.8, crop_ratio=(1, 2), keep_img_size=True)
+            radius = max(self.img_size[0], self.img_size[1]) / 2
+            padding_size = int(np.sqrt(2 * np.power(radius, 2)) - radius)
+            self.spheric_pad = SphericPad(padding_size=padding_size)  # max rotation needs padding of [sqrt(2*128^2)-128 = 53.01]
+            self.random_horizontal_flip = RandomHorizontalFlip(0.2)
+            self.random_vertical_flip = RandomVerticalFlip(0.2)
+            self.random_rotation = RandomRotation(20, fill=(0,))
+            self.center_crop = CenterCrop(self.img_size)
+            self.roll_y = Roll(shift=0, dim=1)
+            self.roll_x = Roll(shift=0, dim=2)
+
+    def get_image(self, image_idx):
+        with h5py.File(self.dataset_filepath, 'r') as file:
+            image = torch.Tensor(file[self.split]['observations'][image_idx]).float()
+        return image
+
     def __getitem__(self, index):
-        img_ref = self.images[self.triplets[index][0]]
-        img_a = self.images[self.triplets[index][1]]
-        img_b = self.images[self.triplets[index][2]]
+        if index < self.quadruplets.shape[0]:
+            quadruplet_ids = self.quadruplets[index]
+        else:
+            # choose random images
+            triplet_ids = np.random.choice(self.n_images, 3)
+            quadruplet_ids = np.concatenate([[triplet_ids[0]], triplet_ids])
+
+        with h5py.File(self.dataset_filepath, 'r') as file:
+            images = [torch.Tensor(file[self.split]['observations'][quadruplet_ids[i]]).float() for i in range(4)]
+            labels = [int(file[self.split]['labels'][quadruplet_ids[i]]) for i in range(4)]
+
 
         if self.data_augmentation:
-            pass
+            for i in range(4):
+                img_tensor = images[i]
+
+                # random center crop
+                self.random_center_crop(img_tensor)
+
+                # random rolled translation (ie pixels shifted outside appear on the other side of image))
+                p_y = p_x = 0.8
+
+                if np.random.random() < p_y:
+                    ## the maximum translation is of half the image size
+                    max_dy = 0.5 * self.img_size[0]
+                    shift_y = int(np.round(np.random.uniform(-max_dy, max_dy)))
+                    self.roll_y.shift = shift_y
+                    img_tensor = self.roll_y(img_tensor)
+
+                if np.random.random() < p_x:
+                    max_dx = 0.5 * self.img_size[1]
+                    shift_x = int(np.round(np.random.uniform(-max_dx, max_dx)))
+                    self.roll_x.shift = shift_x
+                    img_tensor = self.roll_x(img_tensor)
+
+                # random spherical padding + rotation (avoid "black holes" when rotating)
+                p_r = 0.8
+
+                if np.random.random() < p_r:
+                    img_tensor = self.spheric_pad(
+                        img_tensor.view(1, img_tensor.size(0), img_tensor.size(1), img_tensor.size(2))).squeeze(0)
+                    img_PIL = to_PIL_image(img_tensor)
+                    img_PIL = self.random_rotation(img_PIL)
+                    img_PIL = self.center_crop(img_PIL)
+                    img_tensor = to_tensor(img_PIL)
+
+                img_PIL = to_PIL_image(img_tensor)
+                # random horizontal flip
+                img_PIL = self.random_horizontal_flip(img_PIL)
+                # random vertical flip
+                img_PIL = self.random_vertical_flip(img_PIL)
+                # convert back to tensor
+                images[i] = to_tensor(img_PIL)
+
 
         if self.preprocess is not None:
-            img_ref = self.preprocess(img_ref).float()
-            img_a = self.preprocess(img_a).float()
-            img_b = self.preprocess(img_b).float()
+            for i in range(4):
+                images[i] = self.preprocess(images[i]).float()
 
-        label_ref = self.labels[self.triplets[index][0]]
-        label_a = self.labels[self.triplets[index][1]]
-        label_b = self.labels[self.triplets[index][2]]
 
-        data_ref = {"obs": img_ref, "label": label_ref}
-        data_a = {"obs": img_a, "label": label_a}
-        data_b = {"obs": img_b, "label": label_b}
+        data_ref = {"obs": images[0], "label": labels[0]}
+        data_a = {"obs": images[1], "label": labels[1]}
+        data_b = {"obs": images[2], "label": labels[2]}
+        data_c = {"obs": images[3], "label": labels[3]}
 
-        return (data_ref, data_a, data_b)
+        return (data_ref, data_a, data_b, data_c)
 
     def __len__(self):
         return self.data_size
 
 
 class ImageQuadrupletDatasetFromHuman(Dataset):
-    def __init__(self, dataset_filepath, anno_filepath, split='train', use_pass=False, distance='euclidean',
+    def __init__(self, dataset_filepath, anno_filepath, split='train', data_size=None, use_pass=False,
                  preprocess=None, data_augmentation=False):
 
+        self.dataset_filepath = dataset_filepath
         assert split == 'train' or split == 'test'
         self.split = split
-        self.distance = distance
         self.use_pass = use_pass
         self.preprocess = preprocess
         self.data_augmentation = data_augmentation
@@ -643,14 +1225,16 @@ class ImageQuadrupletDatasetFromHuman(Dataset):
         inds = np.arange(quadruplets.shape[0])
 
         np.random.shuffle(inds)
-        with h5py.File(dataset_filepath, 'r') as file:
-            self.images = torch.Tensor(file[self.split]['observations']).float()
-            self.img_size = (self.images.shape[2], self.images.shape[3])
-            self.labels = torch.Tensor(file[self.split]['labels']).float()
+        with h5py.File(self.dataset_filepath, 'r') as file:
+            self.n_images = len(file[self.split]['observations'])
+            self.img_size = (file[self.split]['observations'].shape[2], file[self.split]['observations'].shape[3])
 
         self.quadruplets = quadruplets[inds].copy()
 
-        self.data_size = quadruplets.shape[0]
+        if data_size is None:
+            self.data_size = quadruplets.shape[0]
+        else:
+            self.data_size = data_size
 
         # save annotated quadruplets for evaluation
         self.annotated_quadruplets = []
@@ -659,32 +1243,92 @@ class ImageQuadrupletDatasetFromHuman(Dataset):
             if d[-1] == 0:
                 self.annotated_quadruplets.append([d[0], d[1], d[2], d[3]])
 
+        # data augmentation
+        if self.data_augmentation:
+            self.random_center_crop = RandomCenterCrop(0.8, crop_ratio=(1, 2), keep_img_size=True)
+            radius = max(self.img_size[0], self.img_size[1]) / 2
+            padding_size = int(np.sqrt(2 * np.power(radius, 2)) - radius)
+            self.spheric_pad = SphericPad(
+                padding_size=padding_size)  # max rotation needs padding of [sqrt(2*128^2)-128 = 53.01]
+            self.random_horizontal_flip = RandomHorizontalFlip(0.2)
+            self.random_vertical_flip = RandomVerticalFlip(0.2)
+            self.random_rotation = RandomRotation(20, fill=(0,))
+            self.center_crop = CenterCrop(self.img_size)
+            self.roll_y = Roll(shift=0, dim=1)
+            self.roll_x = Roll(shift=0, dim=2)
+
+
+    def get_image(self, image_idx):
+        with h5py.File(self.dataset_filepath, 'r') as file:
+            image = torch.Tensor(file[self.split]['observations'][image_idx]).float()
+        return image
+
     def __getitem__(self, index):
-        img_pos_a = self.images[self.quadruplets[index][0]]
-        img_pos_b = self.images[self.quadruplets[index][1]]
-        img_neg_a = self.images[self.quadruplets[index][2]]
-        img_neg_b = self.images[self.quadruplets[index][3]]
+        if index < self.quadruplets.shape[0]:
+            quadruplet_ids = self.quadruplets[index]
+        else:
+            # choose random images
+            triplet_ids = np.random.choice(self.n_images, 3)
+            quadruplet_ids = np.concatenate([[triplet_ids[0]], triplet_ids])
+
+        with h5py.File(self.dataset_filepath, 'r') as file:
+            images = [torch.Tensor(file[self.split]['observations'][quadruplet_ids[i]]).float() for i in range(4)]
+            labels = [int(file[self.split]['labels'][quadruplet_ids[i]]) for i in range(4)]
 
         if self.data_augmentation:
-            pass
+            for i in range(4):
+                img_tensor = images[i]
+
+                # random center crop
+                self.random_center_crop(img_tensor)
+
+                # random rolled translation (ie pixels shifted outside appear on the other side of image))
+                p_y = p_x = 0.3
+
+                if np.random.random() < p_y:
+                    ## the maximum translation is of half the image size
+                    max_dy = 0.5 * self.img_size[0]
+                    shift_y = int(np.round(np.random.uniform(-max_dy, max_dy)))
+                    self.roll_y.shift = shift_y
+                    img_tensor = self.roll_y(img_tensor)
+
+                if np.random.random() < p_x:
+                    max_dx = 0.5 * self.img_size[1]
+                    shift_x = int(np.round(np.random.uniform(-max_dx, max_dx)))
+                    self.roll_x.shift = shift_x
+                    img_tensor = self.roll_x(img_tensor)
+
+                # random spherical padding + rotation (avoid "black holes" when rotating)
+                p_r = 0.3
+
+                if np.random.random() < p_r:
+                    img_tensor = self.spheric_pad(
+                        img_tensor.view(1, img_tensor.size(0), img_tensor.size(1), img_tensor.size(2))).squeeze(0)
+                    img_PIL = to_PIL_image(img_tensor)
+                    img_PIL = self.random_rotation(img_PIL)
+                    img_PIL = self.center_crop(img_PIL)
+                    img_tensor = to_tensor(img_PIL)
+
+                img_PIL = to_PIL_image(img_tensor)
+                # random horizontal flip
+                img_PIL = self.random_horizontal_flip(img_PIL)
+                # random vertical flip
+                img_PIL = self.random_vertical_flip(img_PIL)
+                # convert back to tensor
+                images[i] = to_tensor(img_PIL)
 
         if self.preprocess is not None:
-            img_pos_a = self.preprocess(img_pos_a).float()
-            img_pos_b = self.preprocess(img_pos_b).float()
-            img_neg_a = self.preprocess(img_neg_a).float()
-            img_neg_b = self.preprocess(img_neg_b).float()
+            for i in range(4):
+                images[i] = self.preprocess(images[i]).float()
 
-        label_pos_a = self.labels[self.quadruplets[index][0]]
-        label_pos_b = self.labels[self.quadruplets[index][1]]
-        label_neg_a = self.labels[self.quadruplets[index][2]]
-        label_neg_b = self.labels[self.quadruplets[index][3]]
-
-        data_pos_a = {"obs": img_pos_a, "label": label_pos_a}
-        data_pos_b = {"obs": img_pos_b, "label": label_pos_b}
-        data_neg_a = {"obs": img_neg_a, "label": label_neg_a}
-        data_neg_b = {"obs": img_neg_b, "label": label_neg_b}
+        data_pos_a = {"obs": images[0], "label": labels[0]}
+        data_pos_b = {"obs": images[1], "label": labels[1]}
+        data_neg_a = {"obs": images[2], "label": labels[2]}
+        data_neg_b = {"obs": images[3], "label": labels[3]}
 
         return (data_pos_a, data_pos_b, data_neg_a, data_neg_b)
 
     def __len__(self):
         return self.data_size
+
+'''

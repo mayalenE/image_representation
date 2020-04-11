@@ -12,3 +12,5 @@ from goalrepresent.gui.jupyter.experimentrepetitionloaderwidget import Experimen
 from goalrepresent.gui.jupyter.plotexperimentimageswidget import PlotExperimentImagesWidget
 from goalrepresent.gui.jupyter.imagelistwidget import ImageListWidget
 from goalrepresent.gui.jupyter.plotrepresentationspacewidget import PlotRepresentationSpaceWidget
+from goalrepresent.gui.jupyter.plot_discoveries_treemap import plot_discoveries_treemap
+from goalrepresent.gui.jupyter.plot_holmes_partitioning import plot_holmes_partitioning

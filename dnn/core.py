@@ -59,6 +59,7 @@ class BaseDNN(nn.Module):
         default_config.checkpoint = gr.Config()
         default_config.checkpoint.folder = None
         default_config.checkpoint.save_model_every = 10
+        default_config.checkpoint.save_model_at_epochs = []
 
         ## evaluation (when we do testing during training, save every X epochs)
         default_config.evaluation = gr.Config()
@@ -194,6 +195,7 @@ class BaseDNN(nn.Module):
 
             if model_type == "ProgressiveTreeModel":
                 split_history = saved_model['split_history']
+
                 for split_node_path, split_node_attr in split_history.items():
                     model.split_node(split_node_path)
                     node = model.network.get_child_node(split_node_path)

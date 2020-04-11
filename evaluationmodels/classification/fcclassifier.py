@@ -157,7 +157,7 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
 
         return losses
 
-    def run_training(self, train_loader=None, valid_loader=None, keep_best_model=True, logger=None):
+    def run_training(self, train_loader=None, valid_loader=None, keep_best_model=False, logger=None):
         """
         logger: tensorboard X summary writer
         """
@@ -189,6 +189,8 @@ class FCClassifierModel(dnn.BaseDNN, evaluationmodels.BaseClassifierModel):
 
             if self.n_epochs % self.config.checkpoint.save_model_every == 0:
                 self.save_checkpoint(os.path.join(self.config.checkpoint.folder, "current_weight_model.pth"))
+            if self.n_epochs in self.config.checkpoint.save_model_at_epochs:
+                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, "epoch_{}_weight_model.pth".format(self.n_epochs)))
 
             if do_validation:
                 _, valid_losses = self.do_evaluation_pass(valid_loader, logger=logger)

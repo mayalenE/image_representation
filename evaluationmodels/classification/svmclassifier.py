@@ -73,7 +73,7 @@ class SVMClassifierModel(evaluationmodels.BaseClassifierModel):
 
         self.n_epochs += 1
 
-    def run_training(self, train_loader=None, valid_loader=None, keep_best_model=True, logger=None):
+    def run_training(self, train_loader=None, valid_loader=None, keep_best_model=False, logger=None):
         """
         logger: tensorboard X summary writer
         """

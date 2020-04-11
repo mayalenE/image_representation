@@ -43,7 +43,7 @@ class SingleModelRepresentation(gr.BaseRepresentation):
         self.config.model.name = model_name
         self.config.model.config = gr.config.update_config(model_config, self.config.model.config)
         
-    def run_training(self, train_loader, valid_loader, training_config, keep_best_model=True, logging=True):
+    def run_training(self, train_loader, valid_loader, training_config, keep_best_model=False, logging=True):
         training_config = gr.config.update_config(training_config, self.config.training)
 
         # prepare output folders

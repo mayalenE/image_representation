@@ -36,6 +36,7 @@ class BaseClassifierModel(gr.BaseEvaluationModel):
         default_config.checkpoint = gr.Config()
         default_config.checkpoint.folder = None
         default_config.checkpoint.save_model_every = 10
+        default_config.checkpoint.save_model_at_epochs = []
 
         return default_config
 
@@ -157,7 +158,7 @@ class BaseClassifierModel(gr.BaseEvaluationModel):
     def visualize_results(self):
         pass
 
-    def run_training(self, train_loader=None, valid_loader=None, keep_best_model=True, logger=None):
+    def run_training(self, train_loader=None, valid_loader=None, keep_best_model=False, logger=None):
         pass
 
     def run_representation_testing(self, dataloader, testing_config=None):

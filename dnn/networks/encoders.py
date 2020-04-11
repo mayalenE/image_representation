@@ -4,6 +4,7 @@ from goalrepresent.helper.nnmodulehelper import Flatten, conv2d_output_sizes
 import math
 import torch
 from torch import nn
+import torch.nn.functional as F
 import warnings
 
 
@@ -33,6 +34,9 @@ class BaseDNNEncoder(nn.Module, gr.BaseEncoder, metaclass=ABCMeta):
         default_config.hidden_channels = None
         default_config.hidden_dim = None
 
+        # add attention layer
+        default_config.use_attention = False
+
         return default_config
 
     def __init__(self, config=None, **kwargs):
@@ -51,6 +55,9 @@ class BaseDNNEncoder(nn.Module, gr.BaseEncoder, metaclass=ABCMeta):
         lf = self.lf(x)
         # global feature map
         gf = self.gf(lf)
+
+        encoder_outputs = {"x": x, "lf": lf, "gf": gf}
+
         # encoding
         if self.config.encoder_conditional_type == "gaussian":
             mu, logvar = torch.chunk(self.ef(gf), 2, dim=1)
@@ -59,12 +66,18 @@ class BaseDNNEncoder(nn.Module, gr.BaseEncoder, metaclass=ABCMeta):
                 mu = mu.squeeze(dim=-1).squeeze(dim=-1)
                 logvar = logvar.squeeze(dim=-1).squeeze(dim=-1)
                 z = z.squeeze(dim=-1).squeeze(dim=-1)
-            encoder_outputs = {"x": x, "lf": lf, "gf": gf, "z": z, "mu": mu, "logvar": logvar}
+            encoder_outputs.update({"z": z, "mu": mu, "logvar": logvar})
         elif self.config.encoder_conditional_type == "deterministic":
             z = self.ef(gf)
             if z.ndim > 2:
                 z = z.squeeze(dim=-1).squeeze(dim=-1)
-            encoder_outputs = {"x": x, "lf": lf, "gf": gf, "z": z}
+            encoder_outputs.update({"z": z})
+
+        # attention features
+        if self.config.use_attention:
+            af = self.af(gf)
+            af = F.normalize(af, p=2)
+            encoder_outputs.update({"af": af})
 
         return encoder_outputs
 
@@ -182,6 +195,10 @@ class BurgessEncoder(BaseDNNEncoder):
         else:
             raise ValueError("The conditional type must be either gaussian or deterministic")
 
+        # attention feature
+        if self.config.use_attention:
+            self.add_module("af", nn.Linear(hidden_dim, 4 * self.config.n_latents))
+
 
 class HjelmEncoder(BaseDNNEncoder):
     """ 
@@ -260,6 +277,10 @@ class HjelmEncoder(BaseDNNEncoder):
             self.add_module("ef", nn.Linear(hidden_dim, self.config.n_latents))
         else:
             raise ValueError("The conditional type must be either gaussian or deterministic")
+
+        # attention feature
+        if self.config.use_attention:
+            self.add_module("af", nn.Linear(hidden_dim, 4 * self.config.n_latents))
 
     def forward(self, x):
         # batch norm cannot deal with batch_size 1 in train mode
@@ -383,6 +404,10 @@ class DumoulinEncoder(BaseDNNEncoder):
                 nn.Conv2d(hidden_channels, self.config.n_latents, kernel_size=1, stride=1)
             ))
 
+        # attention feature
+        if self.config.use_attention:
+            self.add_module("af", nn.Linear(hidden_dim, 4 * self.config.n_latents))
+
     def forward(self, x):
         # batch norm cannot deal with batch_size 1 in train mode
         if self.training and x.size(0) == 1:
@@ -439,6 +464,10 @@ class MNISTEncoder(BaseDNNEncoder):
             self.add_module("ef", nn.Linear(self.config.hidden_dim, self.config.n_latents))
         else:
             raise ValueError("The conditional type must be either gaussian or deterministic")
+
+        # attention feature
+        if self.config.use_attention:
+            self.add_module("af", nn.Linear(hidden_dim, 4 * self.config.n_latents))
 
 
 class CedricEncoder(BaseDNNEncoder):
@@ -507,3 +536,7 @@ class CedricEncoder(BaseDNNEncoder):
             self.add_module("ef", nn.Linear(hidden_dim, self.config.n_latents))
         else:
             raise ValueError("The conditional type must be either gaussian or deterministic")
+
+        # attention feature
+        if self.config.use_attention:
+            self.add_module("af", nn.Linear(hidden_dim, 4 * self.config.n_latents))

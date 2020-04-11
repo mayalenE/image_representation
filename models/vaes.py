@@ -128,6 +128,8 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
 
             if self.n_epochs % self.config.checkpoint.save_model_every == 0:
                 self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
+            if self.n_epochs in self.config.checkpoint.save_model_at_epochs:
+                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, "epoch_{}_weight_model.pth".format(self.n_epochs)))
 
             if do_validation:
                 t2 = time.time()

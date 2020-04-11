@@ -95,7 +95,7 @@ class BaseEvaluationModel(metaclass=ABCMeta):
         self.representation_encoder = representation_model.get_encoder()
 
     @abstractmethod
-    def run_training(self, train_loader=None, valid_loader=None, keep_best_model=True, logger=None):
+    def run_training(self, train_loader=None, valid_loader=None, keep_best_model=False, logger=None):
         pass
 
     @abstractmethod

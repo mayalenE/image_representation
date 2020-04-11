@@ -1,13 +1,13 @@
 import goalrepresent as gr
 from goalrepresent import models
 from goalrepresent.helper import tensorboardhelper
-from itertools import chain
 import numpy as np
 import os
 import sys
 import time
 import torch
 from torch import nn
+import torch.nn.functional as F
 from torchvision.utils import make_grid
 
 
@@ -16,12 +16,18 @@ class QuadrupletNet(nn.Module):
     def forward(self, x_pos_a, x_pos_b, x_neg_a, x_neg_b):
         if torch._C._get_tracing_state():
             return self.forward_for_graph_tracing(x_pos_a, x_pos_b, x_neg_a, x_neg_b)
-        z_pos_a = self.calc_embedding(x_pos_a)
-        z_pos_b = self.calc_embedding(x_pos_b)
-        z_neg_a = self.calc_embedding(x_neg_a)
-        z_neg_b = self.calc_embedding(x_neg_b)
+        x_pos_a_outputs = self.forward(x_pos_a)
+        x_pos_b_outputs = self.forward(x_pos_b)
+        x_neg_a_outputs = self.forward(x_neg_a)
+        x_neg_b_outputs = self.forward(x_neg_b)
+        model_outputs = {"x_pos_a_outputs": x_pos_a_outputs, "x_pos_b_outputs": x_pos_b_outputs, "x_neg_a_outputs": x_neg_a_outputs,
+                         "x_neg_b_outputs": x_neg_b_outputs}
 
-        model_outputs = {"z_pos_a": z_pos_a, "z_pos_b": z_pos_b, "z_neg_a": z_neg_a, "z_neg_b": z_neg_b}
+        if self.loss_f.use_attention:
+            att_outputs = [x_pos_a_outputs["af"], x_pos_b_outputs["af"], x_neg_a_outputs["af"], x_neg_b_outputs["af"]]
+            sum_att = torch.stack(att_outputs, dim=0).sum(dim=0)
+            attention = F.softmax(self.network.fc_cast(sum_att))
+            model_outputs.update({"attention": attention})
         return model_outputs
 
     def forward_for_graph_tracing(self, x_pos_a, x_pos_b, x_neg_a, x_neg_b):
@@ -30,7 +36,7 @@ class QuadrupletNet(nn.Module):
         z_neg_a = self.calc_embedding(x_neg_a)
         z_neg_b = self.calc_embedding(x_neg_b)
 
-        return z_pos_a, z_pos_b, z_neg_a,
+        return z_pos_a, z_pos_b, z_neg_a, z_neg_b
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
         """
@@ -75,6 +81,8 @@ class QuadrupletNet(nn.Module):
 
             if self.n_epochs % self.config.checkpoint.save_model_every == 0:
                 self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
+            if self.n_epochs in self.config.checkpoint.save_model_at_epochs:
+                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, "epoch_{}_weight_model.pth".format(self.n_epochs)))
 
             # validation epoch
             if do_validation:
@@ -107,9 +115,9 @@ class QuadrupletNet(nn.Module):
             batch_losses = self.loss_f(loss_inputs)
             # backward
             loss = batch_losses['total']
-            self.optimizer_encoder.zero_grad()
+            self.optimizer.zero_grad()
             loss.backward()
-            self.optimizer_encoder.step()
+            self.optimizer.step()
             # save losses
             for k, v in batch_losses.items():
                 if k not in losses:
@@ -214,57 +222,76 @@ class QuadrupletNet(nn.Module):
         return losses
 
     def evaluation_epoch(self, train_loader, test_loader):
-        # train prediction accuracy
-        train_quadruplets = train_loader.dataset.annotated_quadruplets
-        train_acc = 0
-        for quadruplet in train_quadruplets:
-            pairs = []
-            # 6 possible pairs
-            for i in range(4):
-                for j in range(i + 1, 4):
-                    pairs.append([quadruplet[i], quadruplet[j]])
-            dist_per_pair = []
-            for pair in pairs:
-                x_a = self.push_variable_to_device(train_loader.dataset.images[pair[0]].unsqueeze(0))
-                x_b = self.push_variable_to_device(train_loader.dataset.images[pair[1]].unsqueeze(0))
-                z_a = self.calc_embedding(x_a)
-                z_b = self.calc_embedding(x_b)
-                dist = (z_a - z_b).pow(2).sum(1).item()
-                dist_per_pair.append(dist)
-            if np.isnan(dist_per_pair).all() or np.isinf(dist_per_pair).all():
-                continue
-            else:
-                closest_pair = np.nanargmin(dist_per_pair)
-                if closest_pair == 0:
-                    train_acc += 1
+        self.eval()
+        with torch.no_grad():
+            # train prediction accuracy
+            train_quadruplets = train_loader.dataset.annotated_quadruplets
+            train_acc = 0
+            for quadruplet in train_quadruplets:
+                x_ref = self.push_variable_to_device(train_loader.dataset.get_image(quadruplet[0])).unsqueeze(0)
+                x_a = self.push_variable_to_device(train_loader.dataset.get_image(quadruplet[1])).unsqueeze(0)
+                x_b = self.push_variable_to_device(train_loader.dataset.get_image(quadruplet[2])).unsqueeze(0)
+                x_c = self.push_variable_to_device(train_loader.dataset.get_image(quadruplet[3])).unsqueeze(0)
+                model_outputs = self.forward(x_ref, x_a, x_b, x_c)
+                quadruplet_z = [model_outputs['x_ref_outputs']['z'], model_outputs['x_a_outputs']['z'], model_outputs['x_b_outputs']['z'], model_outputs['x_c_outputs']['z']]
+                if "attention" in model_outputs:
+                    attention = model_outputs["attention"]
+                else:
+                    attention = torch.ones_like(quadruplet_z[0])
+                pairs = []
+                # 6 possible pairs
+                for i in range(4):
+                    for j in range(i + 1, 4):
+                        pairs.append([i, j])
+                dist_per_pair = []
+                for pair in pairs:
+                    z_a = quadruplet_z[pair[0]]
+                    z_b = quadruplet_z[pair[1]]
+                    dist = self.calc_distance(z_a, z_b, attention=attention)
+                    dist_per_pair.append(dist)
+                if np.isnan(dist_per_pair).all() or np.isinf(dist_per_pair).all():
+                    continue
+                else:
+                    closest_pair = np.nanargmin(dist_per_pair)
+                    if closest_pair == 0:
+                        train_acc += 1
 
-        train_acc /= len(train_quadruplets)
+            train_acc /= len(train_quadruplets)
 
-        # test prediction accuracy
-        test_quadruplets = test_loader.dataset.annotated_quadruplets
-        test_acc = 0
-        for quadruplet in test_quadruplets:
-            pairs = []
-            # 6 possible pairs
-            for i in range(4):
-                for j in range(i + 1, 4):
-                    pairs.append([quadruplet[i], quadruplet[j]])
-            dist_per_pair = []
-            for pair in pairs:
-                x_a = self.push_variable_to_device(test_loader.dataset.images[pair[0]].unsqueeze(0))
-                x_b = self.push_variable_to_device(test_loader.dataset.images[pair[1]].unsqueeze(0))
-                z_a = self.calc_embedding(x_a)
-                z_b = self.calc_embedding(x_b)
-                dist = (z_a - z_b).pow(2).sum(1).item()
-                dist_per_pair.append(dist)
-            if np.isnan(dist_per_pair).all() or np.isinf(dist_per_pair).all():
-                continue
-            else:
-                closest_pair = np.nanargmin(dist_per_pair)
-                if closest_pair == 0:
-                    test_acc += 1
+            # test prediction accuracy
+            test_quadruplets = test_loader.dataset.annotated_quadruplets
+            test_acc = 0
+            for quadruplet in test_quadruplets:
+                x_ref = self.push_variable_to_device(test_loader.dataset.get_image(quadruplet[0])).unsqueeze(0)
+                x_a = self.push_variable_to_device(test_loader.dataset.get_image(quadruplet[1])).unsqueeze(0)
+                x_b = self.push_variable_to_device(test_loader.dataset.get_image(quadruplet[2])).unsqueeze(0)
+                x_c = self.push_variable_to_device(test_loader.dataset.get_image(quadruplet[3])).unsqueeze(0)
+                model_outputs = self.forward(x_ref, x_a, x_b, x_c)
+                quadruplet_z = [model_outputs['x_ref_outputs']['z'], model_outputs['x_a_outputs']['z'],
+                                model_outputs['x_b_outputs']['z'], model_outputs['x_c_outputs']['z']]
+                if "attention" in model_outputs:
+                    attention = model_outputs["attention"]
+                else:
+                    attention = torch.ones_like(quadruplet_z[0])
+                pairs = []
+                # 6 possible pairs
+                for i in range(4):
+                    for j in range(i + 1, 4):
+                        pairs.append([i, j])
+                dist_per_pair = []
+                for pair in pairs:
+                    z_a = quadruplet_z[pair[0]]
+                    z_b = quadruplet_z[pair[1]]
+                    dist = self.calc_distance(z_a, z_b, attention=attention)
+                    dist_per_pair.append(dist)
+                if np.isnan(dist_per_pair).all() or np.isinf(dist_per_pair).all():
+                    continue
+                else:
+                    closest_pair = np.nanargmin(dist_per_pair)
+                    if closest_pair == 0:
+                        test_acc += 1
 
-        test_acc /= len(test_quadruplets)
+            test_acc /= len(test_quadruplets)
 
         return train_acc, test_acc
 
@@ -277,6 +304,8 @@ class VAEQuadrupletModel(models.VAEModel, QuadrupletNet):
         # loss parameters
         default_config.loss.name = "Quadruplet"
         default_config.loss.parameters.margin = 1.0
+        default_config.loss.parameters.distance = 'euclidean'
+        default_config.loss.combined_loss_name = None
 
         # load pretrained model
         default_config.load_pretrained_model = False
@@ -290,7 +319,20 @@ class VAEQuadrupletModel(models.VAEModel, QuadrupletNet):
             model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
             if hasattr(model, "config"):
                 self.config = gr.config.update_config(kwargs, self.config, model.config)
-            self.network.load_state_dict(model.network.state_dict())
+                if self.network.encoder.config.use_attention:
+                    self.network.encoder.lf.load_state_dict(model.network.encoder.lf.state_dict())
+                    self.network.encoder.gf.load_state_dict(model.network.encoder.gf.state_dict())
+                    self.network.encoder.ef.load_state_dict(model.network.encoder.ef.state_dict())
+                    self.network.decoder.load_state_dict(model.network.decoder.state_dict())
+                else:
+                    self.network.load_state_dict(model.network.state_dict())
+
+    def set_network(self, network_name, network_parameters):
+        models.VAEModel.set_network(self, network_name, network_parameters)
+        if self.network.encoder.config.use_attention:
+            self.network.fc_cast = nn.Linear(self.config.network.parameters.n_latents * 4,
+                                             self.config.network.parameters.n_latents)
+
 
     def forward(self, *args):
         if len(args) == 1:
@@ -306,21 +348,6 @@ class VAEQuadrupletModel(models.VAEModel, QuadrupletNet):
             raise ValueError(
                 "VAEQuadrupletModel can take either one input image (VAE) or four input images (Quadruplet), not {}".format(
                     len(args)))
-
-    def set_optimizer(self, optimizer_name, optimizer_parameters):
-        # vae optimizer
-        optimizer_class = eval("torch.optim.{}".format(optimizer_name))
-        self.optimizer = optimizer_class(self.network.parameters(),
-                                         **optimizer_parameters)
-
-        # triplet optimizer on the encoder
-        self.optimizer_encoder = optimizer_class(self.network.encoder.parameters(),
-                                                 **optimizer_parameters)
-
-        # update config
-        self.config.optimizer.name = optimizer_name
-        self.config.optimizer.parameters = gr.config.update_config(optimizer_parameters,
-                                                                   self.config.optimizer.parameters)
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
         return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader, logger=logger)
@@ -340,6 +367,8 @@ class BetaVAEQuadrupletModel(models.BetaVAEModel, QuadrupletNet):
         # loss parameters
         default_config.loss.name = "Quadruplet"
         default_config.loss.parameters.margin = 1.0
+        default_config.loss.parameters.distance = 'euclidean'
+        default_config.loss.combined_loss_name = None
 
         # load pretrained model
         default_config.load_pretrained_model = False
@@ -353,7 +382,20 @@ class BetaVAEQuadrupletModel(models.BetaVAEModel, QuadrupletNet):
             model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
             if hasattr(model, "config"):
                 self.config = gr.config.update_config(kwargs, self.config, model.config)
-            self.network.load_state_dict(model.network.state_dict())
+                if self.network.encoder.config.use_attention:
+                    self.network.encoder.lf.load_state_dict(model.network.encoder.lf.state_dict())
+                    self.network.encoder.gf.load_state_dict(model.network.encoder.gf.state_dict())
+                    self.network.encoder.ef.load_state_dict(model.network.encoder.ef.state_dict())
+                    self.network.decoder.load_state_dict(model.network.decoder.state_dict())
+                else:
+                    self.network.load_state_dict(model.network.state_dict())
+
+    def set_network(self, network_name, network_parameters):
+        models.BetaVAEModel.set_network(self, network_name, network_parameters)
+        if self.network.encoder.config.use_attention:
+            self.network.fc_cast = nn.Linear(self.config.network.parameters.n_latents * 4,
+                                             self.config.network.parameters.n_latents)
+
 
     def forward(self, *args):
         if len(args) == 1:
@@ -369,21 +411,6 @@ class BetaVAEQuadrupletModel(models.BetaVAEModel, QuadrupletNet):
             raise ValueError(
                 "BetaVAEQuadrupletModel can take either one input image (BetaVAE) or four input images (Quadruplet), not {}".format(
                     len(args)))
-
-    def set_optimizer(self, optimizer_name, optimizer_parameters):
-        # vae optimizer
-        optimizer_class = eval("torch.optim.{}".format(optimizer_name))
-        self.optimizer = optimizer_class(self.network.parameters(),
-                                         **optimizer_parameters)
-
-        # quadruplet optimizer on the encoder
-        self.optimizer_encoder = optimizer_class(self.network.encoder.parameters(),
-                                                 **optimizer_parameters)
-
-        # update config
-        self.config.optimizer.name = optimizer_name
-        self.config.optimizer.parameters = gr.config.update_config(optimizer_parameters,
-                                                                   self.config.optimizer.parameters)
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
         return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader,
@@ -404,6 +431,8 @@ class AnnealedVAEQuadrupletModel(models.AnnealedVAEModel, QuadrupletNet):
         # loss parameters
         default_config.loss.name = "Quadruplet"
         default_config.loss.parameters.margin = 1.0
+        default_config.loss.parameters.distance = 'euclidean'
+        default_config.loss.combined_loss_name = None
 
         # load pretrained model
         default_config.load_pretrained_model = False
@@ -417,7 +446,20 @@ class AnnealedVAEQuadrupletModel(models.AnnealedVAEModel, QuadrupletNet):
             model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
             if hasattr(model, "config"):
                 self.config = gr.config.update_config(kwargs, self.config, model.config)
-            self.network.load_state_dict(model.network.state_dict())
+                if self.network.encoder.config.use_attention:
+                    self.network.encoder.lf.load_state_dict(model.network.encoder.lf.state_dict())
+                    self.network.encoder.gf.load_state_dict(model.network.encoder.gf.state_dict())
+                    self.network.encoder.ef.load_state_dict(model.network.encoder.ef.state_dict())
+                    self.network.decoder.load_state_dict(model.network.decoder.state_dict())
+                else:
+                    self.network.load_state_dict(model.network.state_dict())
+
+    def set_network(self, network_name, network_parameters):
+        models.AnnealedVAEModel.set_network(self, network_name, network_parameters)
+        if self.network.encoder.config.use_attention:
+            self.network.fc_cast = nn.Linear(self.config.network.parameters.n_latents * 4,
+                                             self.config.network.parameters.n_latents)
+
 
     def forward(self, *args):
         if len(args) == 1:
@@ -433,21 +475,6 @@ class AnnealedVAEQuadrupletModel(models.AnnealedVAEModel, QuadrupletNet):
             raise ValueError(
                 "AnnealedVAEQuadrupletModel can take either one input image (AnnealedVAE) or four input images (Quadruplet), not {}".format(
                     len(args)))
-
-    def set_optimizer(self, optimizer_name, optimizer_parameters):
-        # vae optimizer
-        optimizer_class = eval("torch.optim.{}".format(optimizer_name))
-        self.optimizer = optimizer_class(self.network.parameters(),
-                                         **optimizer_parameters)
-
-        # quadruplet optimizer on the encoder
-        self.optimizer_encoder = optimizer_class(self.network.encoder.parameters(),
-                                                 **optimizer_parameters)
-
-        # update config
-        self.config.optimizer.name = optimizer_name
-        self.config.optimizer.parameters = gr.config.update_config(optimizer_parameters,
-                                                                   self.config.optimizer.parameters)
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
         return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader,
@@ -468,6 +495,8 @@ class BetaTCVAEQuadrupletModel(models.BetaTCVAEModel, QuadrupletNet):
         # loss parameters
         default_config.loss.name = "Quadruplet"
         default_config.loss.parameters.margin = 1.0
+        default_config.loss.parameters.distance = 'euclidean'
+        default_config.loss.combined_loss_name = None
 
         # load pretrained model
         default_config.load_pretrained_model = False
@@ -481,7 +510,20 @@ class BetaTCVAEQuadrupletModel(models.BetaTCVAEModel, QuadrupletNet):
             model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
             if hasattr(model, "config"):
                 self.config = gr.config.update_config(kwargs, self.config, model.config)
-            self.network.load_state_dict(model.network.state_dict())
+                if self.network.encoder.config.use_attention:
+                    self.network.encoder.lf.load_state_dict(model.network.encoder.lf.state_dict())
+                    self.network.encoder.gf.load_state_dict(model.network.encoder.gf.state_dict())
+                    self.network.encoder.ef.load_state_dict(model.network.encoder.ef.state_dict())
+                    self.network.decoder.load_state_dict(model.network.decoder.state_dict())
+                else:
+                    self.network.load_state_dict(model.network.state_dict())
+
+    def set_network(self, network_name, network_parameters):
+        models.BetaTCVAEModel.set_network(self, network_name, network_parameters)
+        if self.network.encoder.config.use_attention:
+            self.network.fc_cast = nn.Linear(self.config.network.parameters.n_latents * 4,
+                                             self.config.network.parameters.n_latents)
+
 
     def forward(self, *args):
         if len(args) == 1:
@@ -497,150 +539,6 @@ class BetaTCVAEQuadrupletModel(models.BetaTCVAEModel, QuadrupletNet):
             raise ValueError(
                 "BetaTCVAEQuadrupletModel can take either one input image (BetaTCVAE) or four input images (Quadruplet), not {}".format(
                     len(args)))
-
-    def set_optimizer(self, optimizer_name, optimizer_parameters):
-        # vae optimizer
-        optimizer_class = eval("torch.optim.{}".format(optimizer_name))
-        self.optimizer = optimizer_class(self.network.parameters(),
-                                         **optimizer_parameters)
-
-        # quadruplet optimizer on the encoder
-        self.optimizer_encoder = optimizer_class(self.network.encoder.parameters(),
-                                                 **optimizer_parameters)
-
-        # update config
-        self.config.optimizer.name = optimizer_name
-        self.config.optimizer.parameters = gr.config.update_config(optimizer_parameters,
-                                                                   self.config.optimizer.parameters)
-
-    def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
-        return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader,
-                                          logger=logger)
-
-    def train_epoch(self, train_loader, logger=None):
-        return QuadrupletNet.train_epoch(self, train_loader, logger=logger)
-
-    def valid_epoch(self, valid_loader, logger=None):
-        return QuadrupletNet.valid_epoch(self, valid_loader, logger=logger)
-
-
-class BiGANQuadrupletModel(models.BiGANModel, QuadrupletNet):
-    @staticmethod
-    def default_config():
-        default_config = models.BiGANModel.default_config()
-
-        # loss parameters
-        default_config.loss.name = "Quadruplet"
-        default_config.loss.parameters.margin = 1.0
-
-        # load pretrained model
-        default_config.load_pretrained_model = False
-
-        return default_config
-
-    def __init__(self, config=None, **kwargs):
-        models.BiGANModel.__init__(self, config=config, **kwargs)
-
-        if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
-            model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
-            if hasattr(model, "config"):
-                self.config = gr.config.update_config(kwargs, self.config, model.config)
-            self.network.load_state_dict(model.network.state_dict())
-
-    def forward(self, *args):
-        if len(args) == 1:
-            x = args[0]
-            return models.BiGANModel.forward(self, x)
-        elif len(args) == 4:
-            x_pos_a = args[0]
-            x_pos_b = args[1]
-            x_neg_a = args[2]
-            x_neg_b = args[3]
-            return QuadrupletNet.forward(self, x_pos_a, x_pos_b, x_neg_a, x_neg_b)
-        else:
-            raise ValueError(
-                "BiGANQuadrupletModel can take either one input image (BiGAN) or four input images (Quadruplet), not {}".format(
-                    len(args)))
-
-    def set_optimizer(self, optimizer_name, optimizer_parameters):
-        # bigans optimizer
-        optimizer_class = eval("torch.optim.{}".format(optimizer_name))
-        self.optimizer_generator = optimizer_class(
-            chain(self.network.encoder.parameters(), self.network.decoder.parameters()), **optimizer_parameters)
-        self.optimizer_discriminator = optimizer_class(self.network.discriminator.parameters(), **optimizer_parameters)
-
-        # quadruplet optimizer on the encoder
-        self.optimizer_encoder = optimizer_class(self.network.encoder.parameters(),
-                                                 **optimizer_parameters)
-        # update config
-        self.config.optimizer.name = optimizer_name
-        self.config.optimizer.parameters = gr.config.update_config(optimizer_parameters,
-                                                                   self.config.optimizer.parameters)
-
-    def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
-        return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader,
-                                          logger=logger)
-
-    def train_epoch(self, train_loader, logger=None):
-        return QuadrupletNet.train_epoch(self, train_loader, logger=logger)
-
-    def valid_epoch(self, valid_loader, logger=None):
-        return QuadrupletNet.valid_epoch(self, valid_loader, logger=logger)
-
-
-class VAEGANQuadrupletModel(models.VAEGANModel, QuadrupletNet):
-    @staticmethod
-    def default_config():
-        default_config = models.VAEGANModel.default_config()
-
-        # loss parameters
-        default_config.loss.name = "Quadruplet"
-        default_config.loss.parameters.margin = 1.0
-
-        # load pretrained model
-        default_config.load_pretrained_model = False
-
-        return default_config
-
-    def __init__(self, config=None, **kwargs):
-        models.VAEGANModel.__init__(self, config=config, **kwargs)
-
-        if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
-            model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
-            if hasattr(model, "config"):
-                self.config = gr.config.update_config(kwargs, self.config, model.config)
-            self.network.load_state_dict(model.network.state_dict())
-
-
-    def forward(self, *args):
-        if len(args) == 1:
-            x = args[0]
-            return models.VAEGANModel.forward(self, x)
-        elif len(args) == 4:
-            x_pos_a = args[0]
-            x_pos_b = args[1]
-            x_neg_a = args[2]
-            x_neg_b = args[3]
-            return QuadrupletNet.forward(self, x_pos_a, x_pos_b, x_neg_a, x_neg_b)
-        else:
-            raise ValueError(
-                "VAEGANQuadrupletModel can take either one input image (VAEGAN) or four input images (Quadruplet), not {}".format(
-                    len(args)))
-
-    def set_optimizer(self, optimizer_name, optimizer_parameters):
-        # bigans optimizer
-        optimizer_class = eval("torch.optim.{}".format(optimizer_name))
-        self.optimizer_generator = optimizer_class(
-            chain(self.network.encoder.parameters(), self.network.decoder.parameters()), **optimizer_parameters)
-        self.optimizer_discriminator = optimizer_class(self.network.discriminator.parameters(), **optimizer_parameters)
-
-        # quadruplet optimizer on the encoder
-        self.optimizer_encoder = optimizer_class(self.network.encoder.parameters(),
-                                                 **optimizer_parameters)
-        # update config
-        self.config.optimizer.name = optimizer_name
-        self.config.optimizer.parameters = gr.config.update_config(optimizer_parameters,
-                                                                   self.config.optimizer.parameters)
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
         return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader,
