@@ -595,10 +595,11 @@ class LENIADataset(Dataset):
 
         if self.config.data_root is None:
             self.n_images = 0
-            self.images = []
+            self.images = torch.zeros((0, 1, self.config.img_size[0], self.config.img_size[0]))
             if self.config.img_size is not None:
                 self.img_size = self.config.img_size
-            self.labels = []
+                self.n_channels = 1
+            self.labels = torch.zeros((0, 1), dtype=torch.long)
 
         else:
             # load HDF5 lenia dataset
@@ -619,7 +620,9 @@ class LENIADataset(Dataset):
                 if self.config.preprocess is not None:
                     self.images = self.config.preprocess(self.images)
 
-                self.n_channels = self.images.shape[1]
+                self.n_channels = 1
+                if self.images.ndim == 3:
+                    self.images = self.images.unsqueeze(1)
                 self.img_size = (self.images.shape[2], self.images.shape[3])
 
 

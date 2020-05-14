@@ -19,7 +19,7 @@ class SingleModelRepresentation(gr.BaseRepresentation):
         # training parameters
         default_config.training = gr.Config()
         default_config.training.output_folder = None
-        default_config.training_data_type = "iid" # either "iid" or "sequential"
+        default_config.training.training_data_type = "iid"  # either "iid" or "sequential"
         default_config.training.n_epochs = 0
         
         default_config.testing = gr.Config()

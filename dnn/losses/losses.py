@@ -326,12 +326,26 @@ class BetaVAELoss(BaseLoss):
 
 
 class AnnealedVAELoss(BaseLoss):
-    def __init__(self, gamma=1000.0, capacity=0.0, reconstruction_dist="bernoulli", **kwargs):
+    def __init__(self, gamma=1000.0, c_min=0.0, c_max=5.0, c_change_duration=100000, reconstruction_dist="bernoulli",
+                 **kwargs):
         self.reconstruction_dist = reconstruction_dist
         self.gamma = gamma
-        self.capacity = capacity
+        self.c_min = c_min
+        self.c_max = c_max
+        self.c_change_duration = c_change_duration
+
+        # update counters
+        self.capacity = self.c_min
+        self.n_iters = 0
 
         self.input_keys_list = ['x', 'recon_x', 'mu', 'logvar']
+
+    def update_encoding_capacity(self):
+        if self.n_iters > self.c_change_duration:
+            self.capacity = self.c_max
+        else:
+            self.capacity = min(self.c_min + (self.c_max - self.c_min) * self.n_iters / self.c_change_duration,
+                                self.c_max)
 
     def __call__(self, loss_inputs, reduction="mean", **kwargs):
         try:
@@ -344,6 +358,10 @@ class AnnealedVAELoss(BaseLoss):
         recon_loss = _reconstruction_loss(recon_x, x, self.reconstruction_dist)
         KLD_loss, KLD_per_latent_dim, KLD_var = _kld_loss(mu, logvar)
         total_loss = recon_loss + self.gamma * (KLD_loss - self.capacity).abs()
+
+        if total_loss.requires_grad:  # if we are in "train mode", update counters
+            self.n_iters += 1
+            self.update_encoding_capacity()
 
         return {'total': total_loss, 'recon': recon_loss, 'KLD': KLD_loss}
 
@@ -395,7 +413,7 @@ class BetaTCVAELoss(BaseLoss):
         elif self.tc_approximate == 'mss':
             # minibatch stratified sampling
             N = self.dataset_size
-            M = batch_size - 1
+            M = max(batch_size - 1, 1)
             strat_weight = (N - M) / (N * M)
             W = torch.Tensor(batch_size, batch_size).fill_(1 / M)
             W.view(-1)[::M + 1] = 1 / N

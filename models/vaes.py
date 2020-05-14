@@ -309,49 +309,6 @@ class AnnealedVAEModel(VAEModel):
 
     def __init__(self, config=None, **kwargs):
         VAEModel.__init__(self, config, **kwargs)
-        # add n_iter counter to update the capacity
-        self.n_iters = 0
-
-    def update_encoding_capacity(self):
-        if self.n_iters > self.config.loss.parameters.c_change_duration:
-            self.C = self.config.loss.parameters.c_max
-        else:
-            self.C = min(self.config.loss.parameters.c_min + (
-                    self.config.loss.parameters.c_max - self.config.loss.parameters.c_min) * self.n_iters / self.config.loss.parameters.c_change_duration,
-                         self.config.loss.parameters.c_max)
-
-    def train_epoch(self, train_loader, logger=None):
-        self.train()
-        losses = {}
-        for data in train_loader:
-            x = Variable(data['obs'])
-            x = self.push_variable_to_device(x)
-            # forward
-            model_outputs = self.forward(x)
-            loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
-            batch_losses = self.loss_f(loss_inputs)
-            # backward
-            loss = batch_losses['total']
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-            # save losses
-            for k, v in batch_losses.items():
-                if k not in losses:
-                    losses[k] = [v.data.item()]
-                else:
-                    losses[k].append(v.data.item())
-            # update capacity after each batch pass
-            self.n_iters += 1
-            self.update_encoding_capacity()
-
-        for k, v in losses.items():
-            losses[k] = np.mean(v)
-
-        self.n_epochs += 1
-
-        return losses
-
 
 class BetaTCVAEModel(VAEModel):
     '''

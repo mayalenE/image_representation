@@ -416,7 +416,7 @@ AnnealedVAENode_local = get_node_class(models.AnnealedVAEModel)
 AnnealedVAENode = type('AnnealedVAENode', (Node, models.AnnealedVAEModel), dict(AnnealedVAENode_local.__dict__))
 
 BetaTCVAENode_local = get_node_class(models.BetaTCVAEModel)
-BetaTCVAENode = type('VAENode', (Node, models.VAEModel), dict(BetaTCVAENode_local.__dict__))
+BetaTCVAENode = type('BetaTCVAENode', (Node, models.BetaTCVAEModel), dict(BetaTCVAENode_local.__dict__))
 
 
 class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
@@ -869,8 +869,8 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                     self.evaluation_epoch(valid_loader, save_results_per_node=save_results_per_node)
 
             # 5) Stop splitting when close to the end
-            if self.n_epochs >= (training_config.n_epochs - split_trigger.conditions.n_epochs_min_between_splits):
-                split_trigger["active"] = False
+            # if split_trigger["active"] and (self.n_epochs >= (training_config.n_epochs - split_trigger.conditions.n_epochs_min_between_splits)):
+            #     split_trigger["active"] = False
 
 
 
@@ -1185,10 +1185,12 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 if self.n_epochs >= (n_epochs_total - split_trigger.conditions.n_epochs_min_between_splits):
                     split_trigger["active"] = False
 
-
     def trigger_split(self, train_loader, split_trigger):
 
-        if (len(self.split_history) > split_trigger.conditions.n_max_splits) or (self.n_epochs < split_trigger.conditions.min_init_n_epochs):
+        splitted_leafs = []
+
+        if (len(self.split_history) > split_trigger.conditions.n_max_splits) or (
+                self.n_epochs < split_trigger.conditions.min_init_n_epochs):
             return
 
         self.eval()
@@ -1245,8 +1247,8 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 if len(leaf_node.fitness_last_epochs) > split_trigger.parameters.n_steps_average:
                     leaf_node.fitness_last_epochs.pop(0)
                 fitness_vals = np.asarray(leaf_node.fitness_last_epochs)
-                fitness_speed_last_epochs = np.abs(fitness_vals[1:] - fitness_vals[:-1])
-                running_average_speed = fitness_speed_last_epochs.mean()
+                fitness_speed_last_epochs = fitness_vals[1:] - fitness_vals[:-1]
+                running_average_speed = np.abs(fitness_speed_last_epochs.mean())
                 if (running_average_speed < split_trigger.parameters.epsilon):
                     trigger_split_in_leaf = True
 
@@ -1272,12 +1274,13 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 leaf_node.epochs_since_split = None
                 leaf_node.fitness_speed_last_epoches = []
 
+                splitted_leafs.append(leaf_path)
 
                 # uncomment following line for allowing only one split at the time
                 # break;
 
         train_loader.dataset.data_augmentation = old_augment_state
-        return
+        return splitted_leafs
 
 
     def train_epoch(self, train_loader, logger=None):
