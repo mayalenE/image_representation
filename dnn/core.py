@@ -178,7 +178,7 @@ class BaseDNN(nn.Module):
             config = saved_model['config']
             if not use_gpu:
                 config.device.use_gpu = False
-                if model_type == "ProgressiveTreeModel":
+                if "ProgressiveTree" in model_type:
                     config.node.device.use_gpu = False
             # the saved dnn can belong to gr.dnn, gr.models, gr.evaluationmodels
             if hasattr(gr.dnn, model_type):
@@ -193,7 +193,7 @@ class BaseDNN(nn.Module):
             else:
                 raise ValueError("the model cannot be load as it does not iherit from the BaseDNN class")
 
-            if model_type == "ProgressiveTreeModel":
+            if "ProgressiveTree" in model_type:
                 split_history = saved_model['split_history']
 
                 for split_node_path, split_node_attr in split_history.items():

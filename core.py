@@ -8,7 +8,6 @@ from goalrepresent.helper import datahelper, randomhelper
 import numpy as np
 import torch
 
-
 class BaseEncoder(metaclass=ABCMeta):
     """
     Base Encoder class

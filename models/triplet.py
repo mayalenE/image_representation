@@ -147,7 +147,10 @@ class TripletModel(dnn.BaseDNN, gr.BaseModel):
                                              self.config.network.parameters.n_latents)
     def calc_embedding(self, x):
         x = self.push_variable_to_device(x)
-        return self.network.encoder.calc_embedding(x)
+        self.eval()
+        with torch.no_grad():
+            z = self.network.encoder.calc_embedding(x)
+        return z
 
     def forward(self, x_ref, x_a, x_b, x_c):
         if torch._C._get_tracing_state():

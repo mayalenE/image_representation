@@ -3,6 +3,15 @@ from goalrepresent.models.baselines.manifold import TSNEModel, UMAPModel
 from goalrepresent.models.dim import DIMModel
 from goalrepresent.models.vaes import VAEModel, BetaVAEModel, AnnealedVAEModel, BetaTCVAEModel
 from goalrepresent.models.gans import BiGANModel, VAEGANModel
+from goalrepresent.models.clr import SimCLRModel, TripletCLRModel
 from goalrepresent.models.progressivetree import ProgressiveTreeModel
+from goalrepresent.models.progressivetreeclr import ProgressiveTreeCLRModel
 from goalrepresent.models.quadruplet import VAEQuadrupletModel, BetaVAEQuadrupletModel, AnnealedVAEQuadrupletModel, BetaTCVAEQuadrupletModel
 from goalrepresent.models.triplet import TripletModel, VAETripletModel, BetaVAETripletModel, AnnealedVAETripletModel, BetaTCVAETripletModel
+
+from goalrepresent.models.lenia_BC.BC_bvae.BC_bvae import BCBVAEModel
+from goalrepresent.models.lenia_BC.BC_patchbvae.BC_patchbvae import BCPatchBVAEModel
+from goalrepresent.models.lenia_BC.BC_leniastatistics.BC_leniastatistics import BCLeniaStatisticsModel
+from goalrepresent.models.lenia_BC.BC_ellipticalfourier.BC_ellipticalfourier import BCEllipticalFourierModel
+from goalrepresent.models.lenia_BC.BC_spectrumfourier.BC_spectrumfourier import BCSpectrumFourierModel
+from goalrepresent.models.lenia_BC.BC_imageactivation.BC_imageactivation import BCImageActivationModel

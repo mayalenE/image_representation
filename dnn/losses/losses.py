@@ -19,6 +19,111 @@ def get_loss(loss_name):
     """
     return eval("{}Loss".format(loss_name))
 
+class TripletCLRLoss(BaseLoss):
+    def __init__(self, margin=1.0, distance='cosine', **kwargs):
+        self.distance = distance
+        self.margin = margin
+
+        self.input_keys_list = ['z', 'z_aug']
+
+
+    def __call__(self, loss_inputs, reduction="mean", **kwargs):
+        try:
+            z_ref = loss_inputs['z']
+            z_a = loss_inputs['z_aug']
+        except:
+            raise ValueError("TripletCLRLoss needs {} inputs".format(self.input_keys_list))
+
+        # normalize projection feature vectors
+        z_ref = F.normalize(z_ref, dim=1)
+        z_a = F.normalize(z_a, dim=1)
+        # we artificially create negatives by shuffling the indices
+        id_shuffle = torch.randperm(z_a.size()[0], requires_grad=False)
+        id_shuffle[id_shuffle == torch.arange(z_a.size()[0])] -= 1
+        id_shuffle = id_shuffle.detach()
+        z_b = z_a[id_shuffle]
+
+        if self.distance == 'euclidean':
+            distance_a = (z_ref - z_a).pow(2).sum(1).sqrt()
+            distance_b = (z_ref - z_b).pow(2).sum(1).sqrt()
+        elif self.distance == 'cosine':
+            distance_a = (1.0 - F.cosine_similarity(z_ref, z_a))
+            distance_b = (1.0 - F.cosine_similarity(z_ref, z_b))
+        elif self.distance == 'chebyshev':
+            distance_a = (z_ref - z_a).abs().max(dim=1)[0]
+            distance_b = (z_ref - z_b).abs().max(dim=1)[0]
+
+        triplet_loss = F.relu(distance_a - distance_b + self.margin)
+
+        output_losses = dict()
+        output_losses['total'] = triplet_loss
+
+        if reduction == "sum":
+            for k, v in output_losses.items():
+                output_losses[k] = v.sum()
+        elif reduction == "mean":
+            for k, v in output_losses.items():
+                output_losses[k] = v.mean()
+
+        return output_losses
+
+class SimCLRLoss(BaseLoss):
+    def __init__(self, temperature=0.5, distance='cosine', **kwargs):
+        self.distance = distance
+        self.temperature = temperature
+
+        self.input_keys_list = ['proj_z', 'proj_z_aug']
+
+    def get_correlated_mask(self, batch_size):
+        diag = np.eye(2 * batch_size)
+        l1 = np.eye((2 * batch_size), 2 * batch_size, k=-batch_size)
+        l2 = np.eye((2 * batch_size), 2 * batch_size, k=batch_size)
+        mask = torch.from_numpy((diag + l1 + l2))
+        mask = (1 - mask).type(torch.bool)
+        mask = mask.type(torch.bool)
+        return mask
+
+
+    def __call__(self, loss_inputs, reduction="mean", **kwargs):
+        try:
+            proj_z = loss_inputs['proj_z']
+            proj_z_aug = loss_inputs['proj_z_aug']
+
+        except:
+            raise ValueError("SimCLRLoss needs {} inputs".format(self.input_keys_list))
+
+        batch_size = proj_z.shape[0]
+
+        # normalize projection feature vectors
+        proj_z = F.normalize(proj_z, dim=1)
+        proj_z_aug = F.normalize(proj_z_aug, dim=1)
+
+        representations = torch.cat([proj_z, proj_z_aug], dim=0)
+        if self.distance == 'cosine':
+            similarity_matrix = F.cosine_similarity(representations.unsqueeze(1), representations.unsqueeze(0), dim=-1)
+
+        # filter out the scores from the positive samples
+        l_pos = torch.diag(similarity_matrix, batch_size)
+        r_pos = torch.diag(similarity_matrix, -batch_size)
+        positives = torch.cat([l_pos, r_pos]).view(2 * batch_size, 1)
+
+        mask_samples_from_same_repr = self.get_correlated_mask(batch_size).to(similarity_matrix.device)
+
+        negatives = similarity_matrix[mask_samples_from_same_repr].view(2 * batch_size, -1)
+
+        logits = torch.cat((positives, negatives), dim=1)
+        logits /= self.temperature
+
+        labels = torch.zeros(2 * batch_size).to(similarity_matrix.device).long()
+        loss = _ce_loss(logits, labels, reduction=reduction)
+
+        clr_loss = loss / (2 * batch_size)
+
+        output_losses = dict()
+        output_losses['total'] = clr_loss
+
+        return output_losses
+
 
 class TripletLoss(BaseLoss):
     def __init__(self, margin=0.0, distance='squared_euclidean', combined_loss_name=None, combined_loss_parameters=None,
@@ -64,8 +169,8 @@ class TripletLoss(BaseLoss):
             distance_a = ((z_ref - z_a).pow(2) * attention).sum(1).sqrt()
             distance_b = ((z_ref - z_b).pow(2) * attention).sum(1).sqrt()
         elif self.distance == 'cosine':
-            distance_a = (1.0-torch.nn.functional.cosine_similarity(z_ref, z_a))
-            distance_b = (1.0-torch.nn.functional.cosine_similarity(z_ref, z_b))
+            distance_a = (1.0-F.cosine_similarity(z_ref, z_a))
+            distance_b = (1.0-F.cosine_similarity(z_ref, z_b))
         elif self.distance == 'chebyshev':
             distance_a = ((z_ref - z_a).abs() * attention).max(dim=1)[0]
             distance_b = ((z_ref - z_b).abs() * attention).max(dim=1)[0]
@@ -73,8 +178,8 @@ class TripletLoss(BaseLoss):
             distance_a = ((z_ref - z_a).pow(2) * attention).sum(1)
             distance_b = ((z_ref - z_b).pow(2) * attention).sum(1)
         elif self.distance == 'squared_cosine':
-            distance_a = (1.0-torch.nn.functional.cosine_similarity(z_ref, z_a)).pow(2)
-            distance_b = (1.0-torch.nn.functional.cosine_similarity(z_ref, z_b)).pow(2)
+            distance_a = (1.0-F.cosine_similarity(z_ref, z_a)).pow(2)
+            distance_b = (1.0-F.cosine_similarity(z_ref, z_b)).pow(2)
         elif self.distance == 'squared_chebyshev':
             distance_a = ((z_ref - z_a).abs() * attention).max(dim=1)[0].pow(2)
             distance_b = ((z_ref - z_b).abs() * attention).max(dim=1)[0].pow(2)
@@ -158,8 +263,8 @@ class QuadrupletLoss(BaseLoss):
             distance_pos = ((z_pos_a - z_pos_b).pow(2) * attention).sum(1).sqrt()
             distance_neg = ((z_neg_a - z_neg_b).pow(2) * attention).sum(1).sqrt()
         elif self.distance == 'cosine':
-            distance_pos = (1.0 - torch.nn.functional.cosine_similarity(z_pos_a, z_pos_b))
-            distance_neg = (1.0 - torch.nn.functional.cosine_similarity(z_neg_a, z_neg_b))
+            distance_pos = (1.0 - F.cosine_similarity(z_pos_a, z_pos_b))
+            distance_neg = (1.0 - F.cosine_similarity(z_neg_a, z_neg_b))
         elif self.distance == 'chebyshev':
             distance_pos = ((z_pos_a - z_pos_b).abs() * attention).max(dim=1)[0]
             distance_neg = ((z_neg_a - z_neg_b).abs() * attention).max(dim=1)[0]
@@ -167,8 +272,8 @@ class QuadrupletLoss(BaseLoss):
             distance_pos = ((z_pos_a - z_pos_b).pow(2) * attention).sum(1)
             distance_neg = ((z_neg_a - z_neg_b).pow(2) * attention).sum(1)
         elif self.distance == 'squared_cosine':
-            distance_pos = (1.0 - torch.nn.functional.cosine_similarity(z_pos_a, z_pos_b)).pow(2)
-            distance_neg = (1.0 - torch.nn.functional.cosine_similarity(z_neg_a, z_neg_b)).pow(2)
+            distance_pos = (1.0 - F.cosine_similarity(z_pos_a, z_pos_b)).pow(2)
+            distance_neg = (1.0 - F.cosine_similarity(z_neg_a, z_neg_b)).pow(2)
         elif self.distance == 'squared_chebyshev':
             distance_pos = ((z_pos_a - z_pos_b).abs() * attention).max(dim=1)[0].pow(2)
             distance_neg = ((z_neg_a - z_neg_b).abs() * attention).max(dim=1)[0].pow(2)
@@ -209,7 +314,7 @@ class QuadrupletLoss(BaseLoss):
 
 
 class DIMLoss(BaseLoss):
-    def __init__(self, alpha=1.0, beta=0.0, gamma=1.0, **kwargs):
+    def __init__(self, alpha=0.5, beta=1.0, gamma=0.1, **kwargs):
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma

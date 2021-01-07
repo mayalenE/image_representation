@@ -1,1 +1,0 @@
-import goalrepresent.gui.jupyter

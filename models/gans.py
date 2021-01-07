@@ -87,9 +87,9 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
         z_fake = Variable(torch.randn_like(z_real))
         x_fake = self.network.decoder(z_fake)["recon_x"]
 
-        if self.training:
-            noise1 = Variable(torch.zeros_like(x_real.detach()).normal_(0, 0.1 * (1000 - self.n_epochs) / 1000))
-            noise2 = Variable(torch.zeros_like(x_fake.detach()).normal_(0, 0.1 * (1000 - self.n_epochs) / 1000))
+        if self.training and self.n_epochs < 5000:
+            noise1 = Variable(torch.zeros_like(x_real.detach()).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000))
+            noise2 = Variable(torch.zeros_like(x_fake.detach()).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000))
             x_real = x_real + noise1
             x_fake = x_fake + noise2
 
@@ -121,10 +121,13 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
         recon_x = self.network.decoder(z)
         return prob_pos, recon_x
 
-    def calc_embedding(self, x):
+    def calc_embedding(self, x, **kwargs):
         ''' the function calc outputs a representation vector of size batch_size*n_latents'''
         x = self.push_variable_to_device(x)
-        return self.network.encoder.calc_embedding(x)
+        self.eval()
+        with torch.no_grad():
+            z = self.network.encoder.calc_embedding(x)
+        return z
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
         """
@@ -152,7 +155,6 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
             t0 = time.time()
             train_losses = self.train_epoch(train_loader, logger=logger)
             t1 = time.time()
-            print("Epoch {}: {:.2f} secs".format(self.n_epochs, t1 - t0))
 
             if logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
                 for k, v in train_losses.items():
@@ -357,9 +359,9 @@ class VAEGANModel(BiGANModel):
         z_fake = Variable(torch.randn_like(z_real))
         x_fake = self.network.decoder(z_fake)["recon_x"]
 
-        if self.training:
-            noise1 = Variable(torch.zeros_like(x_real.detach()).normal_(0, 0.1 * (1000 - self.n_epochs) / 1000))
-            noise2 = Variable(torch.zeros_like(x_fake.detach()).normal_(0, 0.1 * (1000 - self.n_epochs) / 1000))
+        if self.training and self.n_epochs < 5000:
+            noise1 = Variable(torch.zeros_like(x_real.detach()).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000))
+            noise2 = Variable(torch.zeros_like(x_fake.detach()).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000))
             x_real = x_real + noise1
             x_fake = x_fake + noise2
 

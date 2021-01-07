@@ -42,9 +42,9 @@ class GlobalDiscriminator(nn.Module):
             nn.Linear(hidden_dim, 1),
         )
 
-    def forward(self, z, feature_map):
+    def forward(self, z, lf):
         # Flatten local features and concat with global encoding
-        x = torch.cat([feature_map.view(feature_map.size(0), -1), z], dim=-1)
+        x = torch.cat([lf.view(lf.size(0), -1), z], dim=-1)
         return self.network(x)
 
 
@@ -105,15 +105,15 @@ class LocalEncodeAndDotDiscriminator(nn.Module):
             nn.ReLU(),
         )
 
-    def forward(self, z, feature_map):
+    def forward(self, z, lf):
         if self.training and z.size(0) == 1:
             self.eval()
             g = self.G1(z) + self.G2(z)
-            l = self.block_layer_norm(self.L1(feature_map) + self.L2(feature_map))
+            l = self.block_layer_norm(self.L1(lf) + self.L2(lf))
             self.train()
         else:
             g = self.G1(z) + self.G2(z)
-            l = self.block_layer_norm(self.L1(feature_map) + self.L2(feature_map))
+            l = self.block_layer_norm(self.L1(lf) + self.L2(lf))
         # broadcast over channel dimension
         g = g.view(g.size(0), g.size(1), 1, 1)
         return (g * l).sum(1)
@@ -208,14 +208,14 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
 
     def forward_from_encoder(self, encoder_outputs):
         z = encoder_outputs["z"]
-        feature_map = encoder_outputs["feature_map"]
+        lf = encoder_outputs["lf"]
 
         # outputs
         model_outputs = dict()
         model_outputs = encoder_outputs
         ## postive example
-        model_outputs['global_pos'] = self.network.global_discrim(z, feature_map)
-        model_outputs['local_pos'] = self.network.local_discrim(z, feature_map)
+        model_outputs['global_pos'] = self.network.global_discrim(z, lf)
+        model_outputs['local_pos'] = self.network.local_discrim(z, lf)
         prior_sample = torch.rand_like(z)  # uniform prior on [0,1]
         model_outputs['prior_pos'] = self.network.prior_discrim(prior_sample)
 
@@ -232,17 +232,17 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
                 cur_neg_indices = random.sample(all_cur_neg_indices, num_negatives)
                 neg_indices.append(cur_neg_indices)
 
-            feature_map_prime = feature_map[neg_indices, ...]  # Shape is [batch_size, batch_size-1, C, H, W]
+            lf_prime = lf[neg_indices, ...]  # Shape is [batch_size, batch_size-1, C, H, W]
             model_outputs['global_neg'] = torch.stack(
-                [self.network.global_discrim(z, feature_map_prime[:, i]) for i in range(num_negatives)]).mean(dim=0)
+                [self.network.global_discrim(z, lf_prime[:, i]) for i in range(num_negatives)]).mean(dim=0)
             model_outputs['local_neg'] = torch.stack(
-                [self.network.local_discrim(z, feature_map_prime[:, i]) for i in range(num_negatives)]).mean(dim=0)
+                [self.network.local_discrim(z, lf_prime[:, i]) for i in range(num_negatives)]).mean(dim=0)
         else:
             # if there is no negative example we add noise to the positive feature map
-            noise = torch.empty_like(feature_map).normal_(0.0, 1.0)
-            feature_map_prime = feature_map + noise
-            model_outputs['global_neg'] = self.network.global_discrim(z, feature_map_prime)
-            model_outputs['local_neg'] = self.network.local_discrim(z, feature_map_prime)
+            noise = torch.empty_like(lf).normal_(0.0, 1.0)
+            lf_prime = lf + noise
+            model_outputs['global_neg'] = self.network.global_discrim(z, lf_prime)
+            model_outputs['local_neg'] = self.network.local_discrim(z, lf_prime)
 
         return model_outputs
 
@@ -256,16 +256,19 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
 
     def forward_for_graph_tracing(self, x):
         x = self.push_variable_to_device(x)
-        z, feature_map = self.network.encoder.forward_for_graph_tracing(x)
-        global_pred = self.network.global_discrim(z, feature_map)
-        local_pred = self.network.local_discrim(z, feature_map)
+        z, lf = self.network.encoder.forward_for_graph_tracing(x)
+        global_pred = self.network.global_discrim(z, lf)
+        local_pred = self.network.local_discrim(z, lf)
         prior_pred = self.network.prior_discrim(torch.sigmoid(z))
         return global_pred, local_pred, prior_pred
 
-    def calc_embedding(self, x):
+    def calc_embedding(self, x, **kwargs):
         ''' the function calc outputs a representation vector of size batch_size*n_latents'''
         x = self.push_variable_to_device(x)
-        return self.network.encoder.calc_embedding(x)
+        self.eval()
+        with torch.no_grad():
+            z = self.network.encoder.calc_embedding(x)
+        return z
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
         """

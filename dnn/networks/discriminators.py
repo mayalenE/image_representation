@@ -49,8 +49,8 @@ class BurgessDiscriminator(BaseDNNDiscriminator):
         self.infer_x.lf = encoder.lf
         self.infer_x.gf = encoder.gf
 
-        hidden_dim_x = 256
-        hidden_dim_joint = 512
+        hidden_dim_x = self.config.hidden_dim
+        hidden_dim_joint = self.config.hidden_dim * 2
         self.infer_joint = nn.Sequential(
             nn.Linear(hidden_dim_x + self.config.n_latents, hidden_dim_joint),
             nn.ReLU(),
@@ -76,8 +76,8 @@ class HjelmDiscriminator(BaseDNNDiscriminator):
         self.infer_x.lf = encoder.lf
         self.infer_x.gf = encoder.gf
 
-        hidden_dim_x = 1024
-        hidden_dim_joint = 2048
+        hidden_dim_x = self.config.hidden_dim
+        hidden_dim_joint = self.config.hidden_dim * 2
         self.infer_joint = nn.Sequential(
             nn.Linear(hidden_dim_x + self.config.n_latents, hidden_dim_joint),
             nn.ReLU(),
