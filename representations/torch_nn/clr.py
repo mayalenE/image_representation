@@ -1,26 +1,46 @@
 from copy import deepcopy
-from itertools import chain
 import goalrepresent as gr
 from goalrepresent import dnn
-from goalrepresent.dnn import losses
-from goalrepresent.dnn.networks import decoders, discriminators
-from goalrepresent.helper import mathhelper, tensorboardhelper
+from goalrepresent.helper import tensorboardhelper
 import numpy as np
-import math
 import os
 import sys
 import time
 import torch
 from torch import nn
-from torch.autograd import Variable
-from torchvision.utils import make_grid
 
 """ ========================================================================================================================
-Base VAE architecture
+Base SimCLR architecture
 ========================================================================================================================="""
-class VAEModel(dnn.BaseDNN, gr.BaseModel):
+
+class ProjectionHead(nn.Module):
+    """
+    nn module
+    """
+    @staticmethod
+    def default_config():
+        default_config = Dict()
+        return default_config
+
+    def __init__(self, config=None, **kwargs):
+        nn.Module.__init__(self)
+        self.config = self.__class__.default_config()
+        self.config.update(config)
+        self.config.update(kwargs)
+
+        out_dim = self.config.n_latents
+        self.network = nn.Sequential(
+            nn.Linear(self.config.n_latents, self.config.n_latents),
+            nn.ReLU(),
+            nn.Linear(self.config.n_latents, out_dim),
+        )
+    def forward(self, z):
+        proj_z = self.network(z)
+        return proj_z
+
+class SimCLRModel(dnn.BaseDNN, gr.BaseModel):
     '''
-    Base VAE Class
+    Base SimCLR Class
     '''
 
     @staticmethod
@@ -28,9 +48,9 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         default_config = dnn.BaseDNN.default_config()
 
         # network parameters
-        default_config.network = gr.Config()
+        default_config.network = Dict()
         default_config.network.name = "Burgess"
-        default_config.network.parameters = gr.Config()
+        default_config.network.parameters = Dict()
         default_config.network.parameters.n_channels = 1
         default_config.network.parameters.input_size = (64, 64)
         default_config.network.parameters.n_latents = 10
@@ -39,20 +59,20 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         default_config.network.parameters.encoder_conditional_type = "gaussian"
 
         # initialization parameters
-        default_config.network.initialization = gr.Config()
+        default_config.network.initialization = Dict()
         default_config.network.initialization.name = "pytorch"
-        default_config.network.initialization.parameters = gr.Config()
+        default_config.network.initialization.parameters = Dict()
 
         # loss parameters
-        default_config.loss = gr.Config()
-        default_config.loss.name = "VAE"
-        default_config.loss.parameters = gr.Config()
+        default_config.loss = Dict()
+        default_config.loss.name = "SimCLR"
+        default_config.loss.parameters = Dict()
         default_config.loss.parameters.reconstruction_dist = "bernoulli"
 
         # optimizer parameters
-        default_config.optimizer = gr.Config()
+        default_config.optimizer = Dict()
         default_config.optimizer.name = "Adam"
-        default_config.optimizer.parameters = gr.Config()
+        default_config.optimizer.parameters = Dict()
         default_config.optimizer.parameters.lr = 1e-3
         default_config.optimizer.parameters.weight_decay = 1e-5
         return default_config
@@ -64,14 +84,14 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
 
     def set_network(self, network_name, network_parameters):
         dnn.BaseDNN.set_network(self, network_name, network_parameters)
-        # add a decoder to the network for the VAE
-        decoder_class = decoders.get_decoder(network_name)
-        self.network.decoder = decoder_class(config=network_parameters)
+        # add a decoder to the network for the SimCLR
+        self.network.projection_head = ProjectionHead(config=network_parameters)
 
     def forward_from_encoder(self, encoder_outputs):
-        decoder_outputs = self.network.decoder(encoder_outputs["z"])
+        z = encoder_outputs["z"]
+        proj_z = self.network.projection_head(z)
         model_outputs = encoder_outputs
-        model_outputs.update(decoder_outputs)
+        model_outputs["proj_z"] = proj_z
         return model_outputs
 
     def forward(self, x):
@@ -85,8 +105,8 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
     def forward_for_graph_tracing(self, x):
         x = self.push_variable_to_device(x)
         z, feature_map = self.network.encoder.forward_for_graph_tracing(x)
-        recon_x = self.network.decoder(z)
-        return recon_x
+        proj_z = self.network.projection_head(z)
+        return proj_z
 
     def calc_embedding(self, x, **kwargs):
         ''' the function calc outputs a representation vector of size batch_size*n_latents'''
@@ -153,10 +173,14 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         self.train()
         losses = {}
         for data in train_loader:
-            x = Variable(data['obs'])
+            x = data['obs']
             x = self.push_variable_to_device(x)
+            x_aug = train_loader.dataset.get_augmented_batch(data['index'], augment=True)
+            x_aug = self.push_variable_to_device(x_aug)
             # forward
             model_outputs = self.forward(x)
+            model_outputs_aug = self.forward(x_aug)
+            model_outputs.update({k+'_aug': v for k, v in model_outputs_aug.items()})
             loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
             batch_losses = self.loss_f(loss_inputs)
             # backward
@@ -182,80 +206,51 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         self.eval()
         losses = {}
 
-        # Prepare logging
-        record_valid_images = False
         record_embeddings = False
         if logger is not None:
-            if self.n_epochs % self.config.logging.record_valid_images_every == 0:
-                record_valid_images = True
-                images = []
-                recon_images = []
             if self.n_epochs % self.config.logging.record_embeddings_every == 0:
                 record_embeddings = True
-                embeddings = []
-                labels = []
-                if images is None:
-                    images = []
+                embedding_samples = []
+                embedding_metadata = []
+                embedding_images = []
+
         with torch.no_grad():
             for data in valid_loader:
-                x = Variable(data['obs'])
+                x = data['obs']
                 x = self.push_variable_to_device(x)
+                x_aug = valid_loader.dataset.get_augmented_batch(data['index'], augment=True)
+                x_aug = self.push_variable_to_device(x_aug)
                 # forward
                 model_outputs = self.forward(x)
+                model_outputs_aug = self.forward(x_aug)
+                model_outputs.update({k + '_aug': v for k, v in model_outputs_aug.items()})
                 loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
                 batch_losses = self.loss_f(loss_inputs)
                 # save losses
                 for k, v in batch_losses.items():
                     if k not in losses:
-                        losses[k] = np.expand_dims(v.detach().cpu().numpy(), axis=-1)
+                        losses[k] = [v.data.item()]
                     else:
-                        losses[k] = np.vstack([losses[k], np.expand_dims(v.detach().cpu().numpy(), axis=-1)])
-
-                if record_valid_images:
-                    recon_x = model_outputs["recon_x"]
-                    images.append(x)
-                    recon_images.append(recon_x)
-
+                        losses[k].append(v.data.item())
+                # record embeddings
                 if record_embeddings:
-                    embeddings.append(model_outputs["z"])
-                    labels.append(data["label"])
-                    if not record_valid_images:
-                        images.append(x)
+                    embedding_samples.append(model_outputs["z"])
+                    embedding_metadata.append(data['label'])
+                    embedding_images.append(x)
 
-        if record_valid_images:
-            recon_images = torch.cat(recon_images)
-            images = torch.cat(images)
-        if record_embeddings:
-            embeddings = torch.cat(embeddings)
-            labels = torch.cat(labels)
-            if not record_valid_images:
-                images = torch.cat(images)
-
-        # log results
-        if record_valid_images:
-            n_images = min(len(images), 40)
-            sampled_ids = np.random.choice(len(images), n_images, replace=False)
-            input_images = images[sampled_ids].detach().cpu()
-            output_images = recon_images[sampled_ids].detach().cpu()
-            if self.config.loss.parameters.reconstruction_dist == "bernoulli":
-                output_images = torch.sigmoid(output_images)
-            vizu_tensor_list = [None] * (2 * n_images)
-            vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]
-            vizu_tensor_list[1::2] = [output_images[n] for n in range(n_images)]
-            img = make_grid(vizu_tensor_list, nrow=2, padding=0)
-            logger.add_image("reconstructions", img, self.n_epochs)
-
-        if record_embeddings:
-            images = tensorboardhelper.resize_embeddings(images)
-            logger.add_embedding(
-                embeddings,
-                metadata=labels,
-                label_img=images,
-                global_step=self.n_epochs)
-
-        # average loss and return
         for k, v in losses.items():
             losses[k] = np.mean(v)
+
+        if record_embeddings:
+            embedding_samples = torch.cat(embedding_samples)
+            embedding_metadata = torch.cat(embedding_metadata)
+            embedding_images = torch.cat(embedding_images)
+            embedding_images = tensorboardhelper.resize_embeddings(embedding_images)
+            logger.add_embedding(
+                embedding_samples,
+                metadata=embedding_metadata,
+                label_img=embedding_images,
+                global_step=self.n_epochs)
 
         return losses
 
@@ -263,108 +258,36 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         return deepcopy(self.network.encoder)
 
     def get_decoder(self):
-        return deepcopy(self.network.decoder)
+        return None
 
 
-""" ========================================================================================================================
-State-of-the-art modifications of the basic VAE
-========================================================================================================================="""
-
-
-class BetaVAEModel(VAEModel):
+class TripletCLRModel(SimCLRModel):
     '''
-    BetaVAE Class
+    TripletCLR Class
     '''
 
     @staticmethod
     def default_config():
-        default_config = VAEModel.default_config()
+        default_config = SimCLRModel.default_config()
 
         # loss parameters
-        default_config.loss.name = "BetaVAE"
-        default_config.loss.parameters.reconstruction_dist = "bernoulli"
-        default_config.loss.parameters.beta = 5.0
+        default_config.loss.name = "TripletCLR"
+        default_config.loss.parameters.distance = "cosine"
+        default_config.loss.parameters.margin = 1.0
 
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        VAEModel.__init__(self, config, **kwargs)
+        SimCLRModel.__init__(self, config, **kwargs)
 
+    def set_network(self, network_name, network_parameters):
+        dnn.BaseDNN.set_network(self, network_name, network_parameters)
+        # no projection head here!
 
-class AnnealedVAEModel(VAEModel):
-    '''
-    AnnealedVAE Class
-    '''
+    def forward_from_encoder(self, encoder_outputs):
+        return encoder_outputs
 
-    @staticmethod
-    def default_config():
-        default_config = VAEModel.default_config()
-
-        # loss parameters
-        default_config.loss.name = "AnnealedVAE"
-        default_config.loss.parameters.reconstruction_dist = "bernoulli"
-        default_config.loss.parameters.gamma = 1000.0
-        default_config.loss.parameters.c_min = 0.0
-        default_config.loss.parameters.c_max = 5.0
-        default_config.loss.parameters.c_change_duration = 100000
-
-        return default_config
-
-    def __init__(self, config=None, **kwargs):
-        VAEModel.__init__(self, config, **kwargs)
-
-class BetaTCVAEModel(VAEModel):
-    '''
-    BetaTCVAE Class
-    '''
-
-    @staticmethod
-    def default_config():
-        default_config = VAEModel.default_config()
-
-        # loss parameters
-        default_config.loss.name = "BetaTCVAE"
-        default_config.loss.parameters.reconstruction_dist = "bernoulli"
-        default_config.loss.parameters.alpha = 1.0
-        default_config.loss.parameters.beta = 10.0
-        default_config.loss.parameters.gamma = 1.0
-        default_config.loss.parameters.tc_approximate = 'mss'
-        default_config.loss.parameters.dataset_size = 0
-
-        return default_config
-
-    def __init__(self, config=None, **kwargs):
-        VAEModel.__init__(self, config, **kwargs)
-
-    def train_epoch(self, train_loader, logger=None):
-        self.train()
-        losses = {}
-
-        # update dataset size
-        self.loss_f.dataset_size = len(train_loader.dataset)
-
-        for data in train_loader:
-            x = Variable(data['obs'])
-            x = self.push_variable_to_device(x)
-            # forward
-            model_outputs = self.forward(x)
-            loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
-            batch_losses = self.loss_f(loss_inputs)
-            # backward
-            loss = batch_losses['total']
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-            # save losses
-            for k, v in batch_losses.items():
-                if k not in losses:
-                    losses[k] = [v.data.item()]
-                else:
-                    losses[k].append(v.data.item())
-
-        for k, v in losses.items():
-            losses[k] = np.mean(v)
-
-        self.n_epochs += 1
-
-        return losses
+    def forward_for_graph_tracing(self, x):
+        x = self.push_variable_to_device(x)
+        z, feature_map = self.network.encoder.forward_for_graph_tracing(x)
+        return z

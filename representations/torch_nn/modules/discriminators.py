@@ -14,7 +14,7 @@ class BaseDNNDiscriminator(nn.Module, metaclass=ABCMeta):
 
     @staticmethod
     def default_config():
-        default_config = gr.Config()
+        default_config = Dict()
 
         default_config.n_latents = 10
 
@@ -22,7 +22,9 @@ class BaseDNNDiscriminator(nn.Module, metaclass=ABCMeta):
 
     def __init__(self, config=None, **kwargs):
         nn.Module.__init__(self)
-        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
+        self.config = self.__class__.default_config()
+        self.config.update(config)
+        self.config.update(kwargs)
 
 
 def get_discriminator(model_architecture):

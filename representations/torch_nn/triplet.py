@@ -27,7 +27,9 @@ def get_combined_triplet_class(base_class):
             if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
                 model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
                 if hasattr(model, "config"):
-                    self.config = gr.config.update_config(kwargs, self.config, model.config)
+                    self.config = model.config
+                    self.config.update(self.config)
+                    self.config.update(kwargs)
                 if self.network.encoder.config.use_attention:
                     self.network.encoder.lf.load_state_dict(model.network.encoder.lf.state_dict())
                     self.network.encoder.gf.load_state_dict(model.network.encoder.gf.state_dict())
@@ -104,9 +106,9 @@ class TripletModel(dnn.BaseDNN, gr.BaseModel):
         default_config = dnn.BaseDNN.default_config()
 
         # network parameters
-        default_config.network = gr.Config()
+        default_config.network = Dict()
         default_config.network.name = "Burgess"
-        default_config.network.parameters = gr.Config()
+        default_config.network.parameters = Dict()
         default_config.network.parameters.n_channels = 1
         default_config.network.parameters.input_size = (64, 64)
         default_config.network.parameters.n_latents = 10
@@ -115,22 +117,22 @@ class TripletModel(dnn.BaseDNN, gr.BaseModel):
         default_config.network.parameters.encoder_conditional_type = "gaussian"
 
         # initialization parameters
-        default_config.network.initialization = gr.Config()
+        default_config.network.initialization = Dict()
         default_config.network.initialization.name = "pytorch"
-        default_config.network.initialization.parameters = gr.Config()
+        default_config.network.initialization.parameters = Dict()
 
         # loss parameters
-        default_config.loss = gr.Config()
+        default_config.loss = Dict()
         default_config.loss.name = "Triplet"
-        default_config.loss.parameters = gr.Config()
+        default_config.loss.parameters = Dict()
         default_config.loss.parameters.distance = "squared_euclidean"
         default_config.loss.parameters.margin = 1.0
         default_config.loss.parameters.use_attention = True
 
         # optimizer parameters
-        default_config.optimizer = gr.Config()
+        default_config.optimizer = Dict()
         default_config.optimizer.name = "Adam"
-        default_config.optimizer.parameters = gr.Config()
+        default_config.optimizer.parameters = Dict()
         default_config.optimizer.parameters.lr = 1e-3
         default_config.optimizer.parameters.weight_decay = 1e-5
         return default_config

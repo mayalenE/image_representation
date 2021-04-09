@@ -1,30 +1,23 @@
-import goalrepresent as gr
+from image_representation import Representation
+from addict import Dict
 import numpy as np
-import pickle
 from sklearn.decomposition import PCA
 
 
-class PCAModel(gr.BaseModel):
-    '''
-    PCA Model Class
-    '''
+class PCARepresentation(Representation):
 
     @staticmethod
     def default_config():
-        default_config = gr.BaseModel.default_config()
+        default_config = Representation.default_config()
 
-        # hyperparameters
-        default_config.hyperparameters = gr.Config()
-        default_config.hyperparameters.random_state = None
+        # parameters
+        default_config.parameters = Dict()
+        default_config.parameters.random_state = None
 
         return default_config
 
     def __init__(self, n_features=28 * 28, n_latents=10, config=None, **kwargs):
-        gr.BaseModel.__init__(self, config=config, **kwargs)
-
-        # store the initial parameters used to create the model
-        self.init_params = locals()
-        del self.init_params['self']
+        Representation.__init__(self, config=config, **kwargs)
 
         # input size (flatten)
         self.n_features = n_features
@@ -58,25 +51,5 @@ class PCAModel(gr.BaseModel):
         x = self.algorithm.transform(x)
         return x
 
-    def update_hyperparameters(self, hyperparameters):
-        gr.BaseModel.update_hyperparameters(self, hyperparameters)
-        self.update_algorithm_parameters()
-
     def update_algorithm_parameters(self):
-        self.algorithm.set_params(n_components=self.n_latents, **self.config.hyperparameters)
-
-    def get_encoder(self):
-        return
-
-    def get_decoder(self):
-        return
-
-    def save_checkpoint(self, checkpoint_filepath):
-        with open(checkpoint_filepath, 'wb') as pickle_file:
-            pickle.dump(self, pickle_file)
-
-    @staticmethod
-    def load_model(checkpoint_filepath):
-        with open(checkpoint_filepath, 'rb') as f:
-            pca_model = pickle.load(f)
-        return pca_model
+        self.algorithm.set_params(n_components=self.n_latents, **self.config.parameters)

@@ -16,53 +16,53 @@ class BaseDNN(nn.Module):
 
     @staticmethod
     def default_config():
-        default_config = gr.Config()
+        default_config = Dict()
 
         # network parameters
-        default_config.network = gr.Config()
+        default_config.network = Dict()
         default_config.network.name = "Burgess"
-        default_config.network.parameters = gr.Config()
+        default_config.network.parameters = Dict()
         default_config.network.parameters.n_channels = 1
         default_config.network.parameters.input_size = (64, 64)
         default_config.network.parameters.n_latents = 10
         default_config.network.parameters.n_conv_layers = 4
 
         # initialization parameters
-        default_config.network.initialization = gr.Config()
+        default_config.network.initialization = Dict()
         default_config.network.initialization.name = "pytorch"
-        default_config.network.initialization.parameters = gr.Config()
+        default_config.network.initialization.parameters = Dict()
 
         # device parameters
-        default_config.device = gr.Config()
+        default_config.device = Dict()
         default_config.device.use_gpu = True
 
         # loss parameters
-        default_config.loss = gr.Config()
+        default_config.loss = Dict()
         default_config.loss.name = "VAE"
-        default_config.loss.parameters = gr.Config()
+        default_config.loss.parameters = Dict()
 
         # optimizer parameters
-        default_config.optimizer = gr.Config()
+        default_config.optimizer = Dict()
         default_config.optimizer.name = "Adam"
-        default_config.optimizer.parameters = gr.Config()
+        default_config.optimizer.parameters = Dict()
         default_config.optimizer.parameters.lr = 1e-3
         default_config.optimizer.parameters.weight_decay = 1e-5
 
         # In training folder:
         ## logging (will save every X epochs)
-        default_config.logging = gr.Config()
+        default_config.logging = Dict()
         default_config.logging.record_loss_every = 1
         default_config.logging.record_valid_images_every = 1
         default_config.logging.record_embeddings_every = 1
 
         ## checkpoints (will save model every X epochs)
-        default_config.checkpoint = gr.Config()
+        default_config.checkpoint = Dict()
         default_config.checkpoint.folder = None
         default_config.checkpoint.save_model_every = 10
         default_config.checkpoint.save_model_at_epochs = []
 
         ## evaluation (when we do testing during training, save every X epochs)
-        default_config.evaluation = gr.Config()
+        default_config.evaluation = Dict()
         default_config.evaluation.folder = None
         default_config.evaluation.save_results_every = 1
 
@@ -70,7 +70,9 @@ class BaseDNN(nn.Module):
 
     def __init__(self, config=None, **kwargs):
         nn.Module.__init__(self)
-        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
+        self.config = self.__class__.default_config()
+        self.config.update(config)
+        self.config.update(kwargs)
 
         # define the device to use (gpu or cpu)
         if self.config.device.use_gpu and not torch.cuda.is_available():

@@ -1,126 +1,83 @@
-# CORE
-/!\ skeletton to follow, all the classes inheriting from a BaseXXX class should have this
-## BaseRepresentation
-#### config
--  *config.seed*: seed for the experiment (for reproducibility and statistical viability)
-#### property attributes
--  *model*: attribute or nn.Module() that has several sub models
-#### methods
-##### static methods
-- *default_config()*: returns the default configuration
-##### instance methods
-- *preprocess (observations)*: given raw observations, convert them to the correct input format x for the representation
-- *calc (x)*: given correct input x, calc the embedding z
-- *calc_distance (z1, z2,goal_space_extent)*: calc distance between two embeddings z1,z2 given the goal space boundaries (to normalize)
+# Table of Contents
+
+* [Install and Run](#imagerepresentation-install-and-run)
+  
+* [Code Skeleton](#imagerepresentation-code-skeleton)
+  
+* [RoadMap](#imagerepresentation-roadmap)
+
+---
+
+# ImageRepresentation: Install and Run
+
+1. If you do not already have it, please install [Conda](https://www.anaconda.com/)
+2. Create *morphosearch* conda environment: `conda create --name morphosearch python=3.6`
+3. Activate *morphosearch* conda environment: `conda activate morphosearch`
+4. If you do not already have it, please create a package folder that you will link to your conda env: `mkdir <path_to_packages_folder>`
+5. Into your package folder, clone the following packages:  
+    b. `git clone git@github.com:mayalenE/imagerepresentation.git`
+5. Include thos packages in the conda environment:  
+   `echo <path_to_packages_folder> "$HOME/miniconda3/envs/morphosearch/lib/python3.6/site-packages/my_packages.pth"`
+6. Install the required conda packages in the environment (*requirements.txt* file can be found in imagerepresentation directory):  
+   `while read requirement; do conda install --yes $requirement --channel default --channel anaconda --channel conda-forge --channel pytorch; done < requirements.txt`
+
+# ImageRepresentation: Code Skeleton
+The main classes (***System***, ***OutputRepresentation***, ***OutputFitness*** and ***Explorer***) are implemented in `core.py`.
+
+
+## addict.Dict
+Class which implements a dictionary that provides attribute-style access.  
+This class is used to implement configurations of all morphosearch classes, typically initialized in the
+class `__init__` function with:
+
+```
+self.config = self.__class__.default_config()
+self.config.update(config)
+self.config.update(kwargs)
+```
 
 
 
+## image_representation.Representation
+The main API methods that this class needs to implement are:
+- **calc_embedding(x)**: given an input image x calculate the embedding
+- **save(filepath)**: saves the model
 
-## BaseModel
-#### config
-#### property attributes
-#### methods
-##### static methods
-- *default_config()*: returns the default configuration
-- *get_model(model_name)*: calls the model class defined with model_name
-##### instance methods
-- *calc_embedding (x)*: given an input x calc the embedding z
-- *get_encoder()*: returns the encoder of the model (mandatory)
-- *get_decoder()*: returns the decoder of the model (if no decoder return None)
-- *save_checkpoint (checkpoint_filepath)*: saves the model
+## image_representation.TorchNNRepresentation
+Base class of representations that are also torch neural modules. Inherits from image_representation.Representation and torch.nn.Module.  
+- **config**: 
+	- **config.network**:
+		- *config.network.name*:
+		- *config.network.parameters*:
+		- *config.network.initialization*:
+		- *config.network.initialization.name*:
+		- *config.network.initialization.parameters*:
+	- **config.device**: 'cpu', 'cuda'
+	- **config.loss**:
+		- *config.loss.name*
+		- *config.loss.parameters*
+	- **config.optimizer**:
+		- *config.optimizer.name*
+		- *config.optimizer.parameters*
+	- **config.logging**:
+	- **config.checkpoint**:
+		- *config.checkpoint.folder*:
+- **network**: torch.nn.Module or Dict of torch.nn.Modules with several sub networks (encoder, decoder, etc)
+- **loss_f**: torch.nn.functional or Dict of sub losses(discriminator, generator)
+- **optimizer**: torch.optim or Dict of sub optimizers (discriminator, generator)
+- **n_epochs**: number of training epochs
+- **n_latents**: number of dimensions of the encoding 
 
-## BaseEncoder
-#### config
-#### property attributes
-- *n_latents*: number of dimensions of the encoding 
-#### methods
-##### static methods
-- *default_config()*: returns the default configuration
-##### instance methods
-- *calc_embedding (x)*: given an input x calc the embedding z
+Aditionnally to Representation's main API methods, the following main API methods must be implemented:
+- **set_network(network_name, network_parameters)**:
+- **init_network(initialization_name, initialization_parameters)**:
+- **set_loss(loss_name, loss_parameters)**:
+- **set_optimizer (optimizer_name, optimizer_parameters)**:
+- **run_training (train_loader, n_epochs, valid_loader = None, training_logger=None)**:
+- **train_epoch (train_loader, logger = None)**:
+- **valid_epoch (valid_loader, logger = None)**:
+- **load(checkpoint_filepath, map_loaction='cpu')**:
+- **save(checkpoint_filepath, map_loaction='cpu')**:
+- **calc_embedding (x)**: given an input image x calc the embedding z
 
-## BaseEvaluationModel
-#### config
--  *config.output_name*:
-#### property attributes
-- *representation_encoder*: the evalmodel are all build up on top of the representation's encoder (this variable is untouched even if retraining on top)
-#### methods
-##### static methods
-- *default_config()*: returns the default configuration
-- *get_evaluationmodel(model_name)*: calls the evaluationmodel class defined with model_name
-##### instance methods
-- *run_training (train_loader, valid_loader=None, logger=None)*: trains the evaluation model given a training/validation dataset (optional)
-- *run_representation_testing (test_loader, testing_config = None)*: tests the representation plugged with the evaluation model given a test dataset. For each evaluation model specifies how and what to output, and the testing_config specifies if and where to save the results. Always returns the loss.
-- *do_evaluation_pass(dataloader, logger=None)*: given a dataset (train/valid/test), loop over it and returns the loss per data-element, optional logging
-- *visualize_results( visualization_config = None)*:
-- *save_checkpoint (checkpoint_filepath)*: saves the model
-
-
-## dnn.BaseDNN
-#### config
-- *config.network*:
-	- *config.network.name*:
-	- *config.network.parameters*:
-	- *config.network.initialization*:
-	- *config.network.initialization.name*:
-	- *config.network.initialization.parameters*:
-- *config.device*:
-	- *config.device.use_gpu*
-- *config.loss*:
-	- *config.loss.name*
-	- *config.loss.parameters*
-- *config.optimizer*:
-	- *config.optimizer.name*
-	- *config.optimizer.parameters*
-- *config.logging*:
-- *config.checkpoint*:
-	- *config.checkpoint.folder*:
-#### property attributes
-- *network*: attribute or AttrDict() that has several sub networks (encoder, decoder, etc)
-- *loss_f*: attribute or AttrDict() that has several sub losses(discriminator, generator)
-- *optimizer*: attribute or AttrDict() that has several sub optimizers (discriminator, generator)
-- *n_epochs*:
-#### methods
-##### static methods
-- *default_config()*: returns the default configuration
-- *load_checkpoint(checkpoint_filepath, use_gpu = False)*:
-##### instance methods
-- *__init\__(config=None, **kwargs)*:
-- *set_network(network_name, network_parameters)*:
-- *init_network(initialization_name, initialization_parameters)*:
-- *set_device(use_gpu)*:
-- *push_variable_to_device(x)*:
-- *set_loss(loss_name, loss_parameters)*:
-- *set_optimizer (optimizer_name, optimizer_parameters)*:
-- *run_training (train_loader, n_epochs, valid_loader = None, training_logger=None)*:
-- *train_epoch (train_loader, logger = None)*:
-- *valid_epoch (valid_loader, logger = None)*:
-- *save_checkpoint (checkpoint_filepath)*:
-
-## evaluationmodels.classification.BaseClassifier
-#### config
-- *config.loss*:
-	- *config.loss.name*
-	- *config.loss.parameters*
-- *config.optimizer*:
-	- *config.optimizer.name*
-	- *config.optimizer.parameters*
-- *config.logging*:
-- *config.checkpoint*:
-	- *config.checkpoint.folder*:
-#### property attributes
-- *encoder*:
-- *n_epochs*:
-#### methods
-##### static methods
-##### instance methods
-
-
-# dnn
-# models
-# evaluationmodels
-# representations
-# datasets
-# helper
-- *save (object, filepath)*: save the object as it is
-- *load (filepath, map_location, config)*: loads a saved object on the desired device, with possibility to update the config (warning though as the config might not correspond anymore to saved params)
+# ImageRepresentation: RoadMap

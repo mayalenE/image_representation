@@ -31,14 +31,16 @@ class MIXEDDataset(Dataset):
 
     @staticmethod
     def default_config():
-        default_config = gr.Config()
+        default_config = Dict()
         default_config.data_augmentation = False
         default_config.transform = None
         default_config.target_transform = None
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
+        self.config = self.__class__.default_config()
+        self.config.update(config)
+        self.config.update(kwargs)
 
         # initially dataset lists are empty
         self.n_images = 0
@@ -136,7 +138,7 @@ class MNISTDataset(torchvision.datasets.MNIST):
 
     @staticmethod
     def default_config():
-        default_config = gr.Config()
+        default_config = Dict()
 
         # load data
         default_config.data_root = 'dataset'
@@ -152,7 +154,9 @@ class MNISTDataset(torchvision.datasets.MNIST):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
+        self.config = self.__class__.default_config()
+        self.config.update(config)
+        self.config.update(kwargs)
 
         if self.config.split == "train":
             train = True
@@ -240,7 +244,7 @@ class MNISTDataset(torchvision.datasets.MNIST):
 class SVHNDataset(torchvision.datasets.SVHN):
     @staticmethod
     def default_config():
-        default_config = gr.Config()
+        default_config = Dict()
 
         # load data
         default_config.data_root = 'dataset'
@@ -256,7 +260,9 @@ class SVHNDataset(torchvision.datasets.SVHN):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
+        self.config = self.__class__.default_config()
+        self.config.update(config)
+        self.config.update(kwargs)
         if self.config.split == "valid":
             self.config.split = "test"
             warnings.warn(
@@ -343,7 +349,7 @@ class SVHNDataset(torchvision.datasets.SVHN):
 class CIFAR10Dataset(torchvision.datasets.CIFAR10):
     @staticmethod
     def default_config():
-        default_config = gr.Config()
+        default_config = Dict()
 
         # load data
         default_config.data_root = 'dataset'
@@ -359,7 +365,9 @@ class CIFAR10Dataset(torchvision.datasets.CIFAR10):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
+        self.config = self.__class__.default_config()
+        self.config.update(config)
+        self.config.update(kwargs)
         if self.config.split == "train":
             train = True
         elif self.config.split == "valid":
@@ -458,7 +466,7 @@ class CIFAR100Dataset(torchvision.datasets.CIFAR100):
 
     @staticmethod
     def default_config():
-        default_config = gr.Config()
+        default_config = Dict()
 
         # load data
         default_config.data_root = 'dataset'
@@ -474,7 +482,9 @@ class CIFAR100Dataset(torchvision.datasets.CIFAR100):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
+        self.config = self.__class__.default_config()
+        self.config.update(config)
+        self.config.update(kwargs)
         if self.config.split == "train":
             train = True
         elif self.config.split == "valid":
@@ -575,7 +585,7 @@ class LENIADataset(Dataset):
 
     @staticmethod
     def default_config():
-        default_config = gr.Config()
+        default_config = Dict()
 
         # load data
         default_config.data_root = None
@@ -591,7 +601,9 @@ class LENIADataset(Dataset):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
+        self.config = self.__class__.default_config()
+        self.config.update(config)
+        self.config.update(kwargs)
 
         if self.config.data_root is None:
             self.n_images = 0
@@ -756,7 +768,7 @@ class QuadrupletDataset(Dataset):
 
     @staticmethod
     def default_config():
-        default_config = gr.Config()
+        default_config = Dict()
 
         # load data
         default_config.data_root = None
@@ -778,7 +790,9 @@ class QuadrupletDataset(Dataset):
         return default_config
 
     def __init__(self, dataset_name='lenia', config=None, **kwargs):
-        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
+        self.config = self.__class__.default_config()
+        self.config.update(config)
+        self.config.update(kwargs)
         # call super class to load data, augmentation and transform
         dataset_class = get_dataset(dataset_name)
         base_dataset = dataset_class(config, **kwargs)

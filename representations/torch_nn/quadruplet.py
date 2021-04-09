@@ -318,7 +318,9 @@ class VAEQuadrupletModel(models.VAEModel, QuadrupletNet):
         if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
             model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
             if hasattr(model, "config"):
-                self.config = gr.config.update_config(kwargs, self.config, model.config)
+                self.config = model.config
+                self.config.update(self.config)
+                self.config.update(kwargs)
                 if self.network.encoder.config.use_attention:
                     self.network.encoder.lf.load_state_dict(model.network.encoder.lf.state_dict())
                     self.network.encoder.gf.load_state_dict(model.network.encoder.gf.state_dict())
@@ -381,7 +383,9 @@ class BetaVAEQuadrupletModel(models.BetaVAEModel, QuadrupletNet):
         if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
             model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
             if hasattr(model, "config"):
-                self.config = gr.config.update_config(kwargs, self.config, model.config)
+                self.config = model.config
+                self.config.update(self.config)
+                self.config.update(kwargs)
                 if self.network.encoder.config.use_attention:
                     self.network.encoder.lf.load_state_dict(model.network.encoder.lf.state_dict())
                     self.network.encoder.gf.load_state_dict(model.network.encoder.gf.state_dict())
@@ -445,7 +449,9 @@ class AnnealedVAEQuadrupletModel(models.AnnealedVAEModel, QuadrupletNet):
         if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
             model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
             if hasattr(model, "config"):
-                self.config = gr.config.update_config(kwargs, self.config, model.config)
+                self.config = model.config
+                self.config.update(self.config)
+                self.config.update(kwargs)
                 if self.network.encoder.config.use_attention:
                     self.network.encoder.lf.load_state_dict(model.network.encoder.lf.state_dict())
                     self.network.encoder.gf.load_state_dict(model.network.encoder.gf.state_dict())
@@ -509,7 +515,9 @@ class BetaTCVAEQuadrupletModel(models.BetaTCVAEModel, QuadrupletNet):
         if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
             model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
             if hasattr(model, "config"):
-                self.config = gr.config.update_config(kwargs, self.config, model.config)
+                self.config = model.config
+                self.config.update(self.config)
+                self.config.update(kwargs)
                 if self.network.encoder.config.use_attention:
                     self.network.encoder.lf.load_state_dict(model.network.encoder.lf.state_dict())
                     self.network.encoder.gf.load_state_dict(model.network.encoder.gf.state_dict())

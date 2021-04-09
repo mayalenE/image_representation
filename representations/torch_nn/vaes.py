@@ -1,24 +1,26 @@
 from copy import deepcopy
+from itertools import chain
 import goalrepresent as gr
 from goalrepresent import dnn
-from goalrepresent.helper import tensorboardhelper
+from goalrepresent.dnn import losses
 from goalrepresent.dnn.networks import decoders, discriminators
-from itertools import chain
+from goalrepresent.helper import mathhelper, tensorboardhelper
 import numpy as np
+import math
 import os
 import sys
 import time
 import torch
+from torch import nn
 from torch.autograd import Variable
 from torchvision.utils import make_grid
 
 """ ========================================================================================================================
-Base BiGAN architecture
+Base VAE architecture
 ========================================================================================================================="""
-# TODO: implement FID and early stopped on it
-class BiGANModel(dnn.BaseDNN, gr.BaseModel):
+class VAEModel(dnn.BaseDNN, gr.BaseModel):
     '''
-    BiGAN Class
+    Base VAE Class
     '''
 
     @staticmethod
@@ -26,9 +28,9 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
         default_config = dnn.BaseDNN.default_config()
 
         # network parameters
-        default_config.network = gr.Config()
-        default_config.network.name = "Dumoulin"
-        default_config.network.parameters = gr.Config()
+        default_config.network = Dict()
+        default_config.network.name = "Burgess"
+        default_config.network.parameters = Dict()
         default_config.network.parameters.n_channels = 1
         default_config.network.parameters.input_size = (64, 64)
         default_config.network.parameters.n_latents = 10
@@ -37,19 +39,20 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
         default_config.network.parameters.encoder_conditional_type = "gaussian"
 
         # initialization parameters
-        default_config.network.initialization = gr.Config()
+        default_config.network.initialization = Dict()
         default_config.network.initialization.name = "pytorch"
-        default_config.network.initialization.parameters = gr.Config()
+        default_config.network.initialization.parameters = Dict()
 
         # loss parameters
-        default_config.loss = gr.Config()
-        default_config.loss.name = "BiGAN"
-        default_config.loss.parameters = gr.Config()
+        default_config.loss = Dict()
+        default_config.loss.name = "VAE"
+        default_config.loss.parameters = Dict()
+        default_config.loss.parameters.reconstruction_dist = "bernoulli"
 
         # optimizer parameters
-        default_config.optimizer = gr.Config()
+        default_config.optimizer = Dict()
         default_config.optimizer.name = "Adam"
-        default_config.optimizer.parameters = gr.Config()
+        default_config.optimizer.parameters = Dict()
         default_config.optimizer.parameters.lr = 1e-3
         default_config.optimizer.parameters.weight_decay = 1e-5
         return default_config
@@ -57,53 +60,18 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
     def __init__(self, config=None, **kwargs):
         dnn.BaseDNN.__init__(self, config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
 
-        self.output_keys_list = self.network.encoder.output_keys_list + ["prob_pos", "prob_neg"]
+        self.output_keys_list = self.network.encoder.output_keys_list + ["recon_x"]
 
     def set_network(self, network_name, network_parameters):
         dnn.BaseDNN.set_network(self, network_name, network_parameters)
-        # add a decoder to the network for the BiGAN
+        # add a decoder to the network for the VAE
         decoder_class = decoders.get_decoder(network_name)
         self.network.decoder = decoder_class(config=network_parameters)
-        # add a discriminator to the network for the BiGAN
-        discriminator_class = discriminators.get_discriminator(network_name)
-        self.network.discriminator = discriminator_class(config=network_parameters)
-
-    def set_optimizer(self, optimizer_name, optimizer_parameters):
-        optimizer_class = eval("torch.optim.{}".format(optimizer_name))
-        self.optimizer_generator = optimizer_class(
-            chain(self.network.encoder.parameters(), self.network.decoder.parameters()), **optimizer_parameters)
-        self.optimizer_discriminator = optimizer_class(self.network.discriminator.parameters(), **optimizer_parameters)
-
-        # update config
-        self.config.optimizer.name = optimizer_name
-        self.config.optimizer.parameters = gr.config.update_config(optimizer_parameters,
-                                                                   self.config.optimizer.parameters)
 
     def forward_from_encoder(self, encoder_outputs):
-        x_real = encoder_outputs["x"]
-        z_real = encoder_outputs["z"]
+        decoder_outputs = self.network.decoder(encoder_outputs["z"])
         model_outputs = encoder_outputs
-
-        z_fake = Variable(torch.randn_like(z_real))
-        x_fake = self.network.decoder(z_fake)["recon_x"]
-
-        if self.training and self.n_epochs < 5000:
-            noise1 = Variable(torch.zeros_like(x_real.detach()).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000))
-            noise2 = Variable(torch.zeros_like(x_fake.detach()).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000))
-            x_real = x_real + noise1
-            x_fake = x_fake + noise2
-
-        prob_pos = self.network.discriminator(x_real, z_real)
-        prob_neg = self.network.discriminator(x_fake, z_fake)
-
-        model_outputs["prob_pos"] = prob_pos
-        model_outputs["prob_neg"] = prob_neg
-
-        # we reconstruct images during validation for visual evaluations
-        if not self.training:
-            with torch.no_grad():
-                model_outputs["recon_x"] = self.network.decoder(z_real)["recon_x"]
-
+        model_outputs.update(decoder_outputs)
         return model_outputs
 
     def forward(self, x):
@@ -117,9 +85,8 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
     def forward_for_graph_tracing(self, x):
         x = self.push_variable_to_device(x)
         z, feature_map = self.network.encoder.forward_for_graph_tracing(x)
-        prob_pos = self.network.discriminator(x, z)
         recon_x = self.network.decoder(z)
-        return prob_pos, recon_x
+        return recon_x
 
     def calc_embedding(self, x, **kwargs):
         ''' the function calc outputs a representation vector of size batch_size*n_latents'''
@@ -182,7 +149,6 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
                     best_valid_loss = valid_loss
                     self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
 
-
     def train_epoch(self, train_loader, logger=None):
         self.train()
         losses = {}
@@ -194,17 +160,10 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
             loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
             batch_losses = self.loss_f(loss_inputs)
             # backward
-            loss_d = batch_losses['discriminator']
-            loss_g = batch_losses['generator']
-
-            self.optimizer_discriminator.zero_grad()
-            loss_d.backward(retain_graph=True)
-            self.optimizer_discriminator.step()
-
-            self.optimizer_generator.zero_grad()
-            loss_g.backward()
-            self.optimizer_generator.step()
-
+            loss = batch_losses['total']
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
             # save losses
             for k, v in batch_losses.items():
                 if k not in losses:
@@ -218,7 +177,6 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
         self.n_epochs += 1
 
         return losses
-
 
     def valid_epoch(self, valid_loader, logger=None):
         self.eval()
@@ -307,107 +265,96 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
     def get_decoder(self):
         return deepcopy(self.network.decoder)
 
-    def save_checkpoint(self, checkpoint_filepath):
-        # save current epoch weight file with optimizer if we want to relaunch training from that point
-        network = {
-            "epoch": self.n_epochs,
-            "type": self.__class__.__name__,
-            "config": self.config,
-            "network_state_dict": self.network.state_dict(),
-            "optimizer_discriminator_state_dict": self.optimizer_discriminator.state_dict(),
-            "optimizer_generator_state_dict": self.optimizer_generator.state_dict(),
-        }
-
-        torch.save(network, checkpoint_filepath)
-
 
 """ ========================================================================================================================
-Modified versions of BiGAN architecture
+State-of-the-art modifications of the basic VAE
 ========================================================================================================================="""
 
 
-class VAEGANModel(BiGANModel):
+class BetaVAEModel(VAEModel):
     '''
-    VAEGAN Class, see https://github.com/seangal/dcgan_vae_pytorch/blob/master/main.py
+    BetaVAE Class
     '''
 
     @staticmethod
     def default_config():
-        default_config = BiGANModel.default_config()
+        default_config = VAEModel.default_config()
 
         # loss parameters
-        default_config.loss.name = "VAEGAN"
+        default_config.loss.name = "BetaVAE"
         default_config.loss.parameters.reconstruction_dist = "bernoulli"
         default_config.loss.parameters.beta = 5.0
 
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        BiGANModel.__init__(self, config, **kwargs)
+        VAEModel.__init__(self, config, **kwargs)
 
-    def forward_from_encoder(self, encoder_outputs):
-        x_real = encoder_outputs["x"]
-        z_real = encoder_outputs["z"]
-        model_outputs = encoder_outputs
 
-        # decoder/generator reconstruction
-        decoder_outputs_real = self.network.decoder(z_real)
-        model_outputs.update(decoder_outputs_real)
+class AnnealedVAEModel(VAEModel):
+    '''
+    AnnealedVAE Class
+    '''
 
-        # discriminator probabilities
+    @staticmethod
+    def default_config():
+        default_config = VAEModel.default_config()
 
-        z_fake = Variable(torch.randn_like(z_real))
-        x_fake = self.network.decoder(z_fake)["recon_x"]
+        # loss parameters
+        default_config.loss.name = "AnnealedVAE"
+        default_config.loss.parameters.reconstruction_dist = "bernoulli"
+        default_config.loss.parameters.gamma = 1000.0
+        default_config.loss.parameters.c_min = 0.0
+        default_config.loss.parameters.c_max = 5.0
+        default_config.loss.parameters.c_change_duration = 100000
 
-        if self.training and self.n_epochs < 5000:
-            noise1 = Variable(torch.zeros_like(x_real.detach()).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000))
-            noise2 = Variable(torch.zeros_like(x_fake.detach()).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000))
-            x_real = x_real + noise1
-            x_fake = x_fake + noise2
+        return default_config
 
-        prob_pos = self.network.discriminator(x_real, z_real)
-        prob_neg = self.network.discriminator(x_fake, z_fake)
+    def __init__(self, config=None, **kwargs):
+        VAEModel.__init__(self, config, **kwargs)
 
-        model_outputs["prob_pos"] = prob_pos
-        model_outputs["prob_neg"] = prob_neg
+class BetaTCVAEModel(VAEModel):
+    '''
+    BetaTCVAE Class
+    '''
 
-        return model_outputs
+    @staticmethod
+    def default_config():
+        default_config = VAEModel.default_config()
+
+        # loss parameters
+        default_config.loss.name = "BetaTCVAE"
+        default_config.loss.parameters.reconstruction_dist = "bernoulli"
+        default_config.loss.parameters.alpha = 1.0
+        default_config.loss.parameters.beta = 10.0
+        default_config.loss.parameters.gamma = 1.0
+        default_config.loss.parameters.tc_approximate = 'mss'
+        default_config.loss.parameters.dataset_size = 0
+
+        return default_config
+
+    def __init__(self, config=None, **kwargs):
+        VAEModel.__init__(self, config, **kwargs)
 
     def train_epoch(self, train_loader, logger=None):
         self.train()
         losses = {}
+
+        # update dataset size
+        self.loss_f.dataset_size = len(train_loader.dataset)
+
         for data in train_loader:
             x = Variable(data['obs'])
             x = self.push_variable_to_device(x)
-            ## forward
+            # forward
             model_outputs = self.forward(x)
             loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
             batch_losses = self.loss_f(loss_inputs)
-
-            # (1) Train the discriminator
-            loss_d = batch_losses['discriminator']
-            self.optimizer_discriminator.zero_grad()
-            loss_d.backward(retain_graph=True)
-            self.optimizer_discriminator.step()
-
-            # (2) Train the generator
-            ## (2) (a) with reconstruction loss
-            loss_vae = batch_losses['vae']
-            self.optimizer_generator.zero_grad()
-            loss_vae.backward()
-            self.optimizer_generator.step()
-
-            ## (2) (b) with generator loss
-            ### redo forward as graph has been freed
-            model_outputs = self.forward(x)
-            loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
-            batch_losses = self.loss_f(loss_inputs)
-            ### backward
-            loss_g = batch_losses['generator']
-            self.optimizer_generator.zero_grad()
-            loss_g.backward()
-            self.optimizer_generator.step()
-
+            # backward
+            loss = batch_losses['total']
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
             # save losses
             for k, v in batch_losses.items():
                 if k not in losses:
@@ -421,10 +368,3 @@ class VAEGANModel(BiGANModel):
         self.n_epochs += 1
 
         return losses
-
-
-'''
-def adjust_learning_rate(optimizer, decay):
-for param_group in optimizer.param_groups:
-    param_group['lr'] *= decay
-'''

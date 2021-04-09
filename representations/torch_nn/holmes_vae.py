@@ -90,9 +90,9 @@ class Node(nn.Module):
         scale[np.where(scale == 0)] = 1.0  # trick when some some latents are the same for every point (no scale and divide by 1)
         X = X / scale
 
-        default_boundary_config = gr.Config()
+        default_boundary_config = Dict()
         default_boundary_config.algo = 'svm.SVC'
-        default_boundary_config.kwargs = gr.Config()
+        default_boundary_config.kwargs = Dict()
         if boundary_config is not None:
             boundary_config = gr.config.update_config(boundary_config, default_boundary_config)
         boundary_algo = eval(boundary_config.algo)
@@ -107,7 +107,6 @@ class Node(nn.Module):
                 center0 = np.median(X[y <= np.percentile(y, 20), :], axis=0)
                 center1 = np.median(X[y > np.percentile(y, 80), :], axis=0)
                 center = np.stack([center0, center1])
-                center = np.nan_to_num(center)
                 boundary_config.kwargs.init = center
                 boundary_config.kwargs.n_clusters = 2
                 self.boundary = boundary_algo(**boundary_config.kwargs).fit(X)
@@ -118,17 +117,18 @@ class Node(nn.Module):
         return
 
     def depth_first_forward(self, x, tree_path_taken=None, x_ids=None, parent_lf=None, parent_gf=None,
-                            parent_proj_z=None):
+                            parent_gfi=None, parent_lfi=None, parent_recon_x=None):
         if self.depth == 0:
             tree_path_taken = ["0"] * len(x)  # all the paths start with "O"
             x_ids = list(range(len(x)))
 
-        node_outputs = self.node_forward(x, parent_lf, parent_gf, parent_proj_z)
+        node_outputs = self.node_forward(x, parent_lf, parent_gf, parent_gfi, parent_lfi, parent_recon_x)
 
         parent_lf = node_outputs["lf"].detach()
         parent_gf = node_outputs["gf"].detach()
-        if "proj_z" in node_outputs:
-            parent_proj_z = node_outputs["proj_z"].detach()
+        parent_gfi = node_outputs["gfi"].detach()
+        parent_lfi = node_outputs["lfi"].detach()
+        parent_recon_x = node_outputs["recon_x"].detach()
 
         if self.leaf:
             # return path_taken, x_ids, leaf_outputs
@@ -138,10 +138,6 @@ class Node(nn.Module):
             z = node_outputs["z"]
             x_side = self.get_children_node(z)
             x_ids_left = np.where(x_side == 0)[0]
-            if parent_proj_z is None:
-                parent_proj_z_left = None
-            else:
-                parent_proj_z_left = parent_proj_z[x_ids_left]
             if len(x_ids_left) > 0:
                 left_leaf_accumulator = self.left.depth_first_forward(x[x_ids_left], [path + "0" for path in
                                                                                       [tree_path_taken[x_idx] for x_idx
@@ -149,14 +145,12 @@ class Node(nn.Module):
                                                                       [x_ids[x_idx] for x_idx in x_ids_left],
                                                                       parent_lf[x_ids_left],
                                                                       parent_gf[x_ids_left],
-                                                                      parent_proj_z_left)
+                                                                      parent_gfi[x_ids_left],
+                                                                      parent_lfi[x_ids_left],
+                                                                      parent_recon_x[x_ids_left])
                 self.leaf_accumulator.extend(left_leaf_accumulator)
 
             x_ids_right = np.where(x_side == 1)[0]
-            if parent_proj_z is None:
-                parent_proj_z_right = None
-            else:
-                parent_proj_z_right = parent_proj_z[x_ids_right]
             if len(x_ids_right) > 0:
                 right_leaf_accumulator = self.right.depth_first_forward(x[x_ids_right], [path + "1" for path in
                                                                                          [tree_path_taken[x_idx] for
@@ -164,63 +158,9 @@ class Node(nn.Module):
                                                                         [x_ids[x_idx] for x_idx in x_ids_right],
                                                                         parent_lf[x_ids_right],
                                                                         parent_gf[x_ids_right],
-                                                                        parent_proj_z_right)
-                self.leaf_accumulator.extend(right_leaf_accumulator)
-
-            leaf_accumulator = self.leaf_accumulator
-            self.reset_accumulator()
-
-        return leaf_accumulator
-
-    def depth_first_forward_through_given_path(self, x, tree_path_desired, tree_path_taken=None, x_ids=None, parent_lf=None, parent_gf=None, parent_proj_z=None):
-
-        if self.depth == 0:
-            tree_path_taken = ["0"] * len(x)  # all the paths start with "O"
-            x_ids = list(range(len(x)))
-
-        assert len(tree_path_desired) == len(x)
-
-        node_outputs = self.node_forward(x, parent_lf, parent_gf, parent_proj_z)
-
-        parent_lf = node_outputs["lf"].detach()
-        parent_gf = node_outputs["gf"].detach()
-        if "proj_z" in node_outputs:
-            parent_proj_z = node_outputs["proj_z"].detach()
-
-        if self.leaf:
-            # return path_taken, x_ids, leaf_outputs
-            return ([[tree_path_taken, x_ids, node_outputs]])
-
-        else:
-            x_side = np.array([int(path[1]) for path in tree_path_desired])
-            x_ids_left = np.where(x_side == 0)[0]
-            if parent_proj_z is None:
-                parent_proj_z_left = None
-            else:
-                parent_proj_z_left = parent_proj_z[x_ids_left]
-            if len(x_ids_left) > 0:
-                left_leaf_accumulator = self.left.depth_first_forward_through_given_path(x[x_ids_left],
-                                                                      [path[1:] for path in [tree_path_desired[x_idx] for x_idx in x_ids_left]],
-                                                                      [path + "0" for path in [tree_path_taken[x_idx] for x_idx in x_ids_left]],
-                                                                      [x_ids[x_idx] for x_idx in x_ids_left],
-                                                                      parent_lf[x_ids_left],
-                                                                      parent_gf[x_ids_left],
-                                                                      parent_proj_z_left)
-                self.leaf_accumulator.extend(left_leaf_accumulator)
-
-            x_ids_right = np.where(x_side == 1)[0]
-            if parent_proj_z is None:
-                parent_proj_z_right = None
-            else:
-                parent_proj_z_right = parent_proj_z[x_ids_right]
-            if len(x_ids_right) > 0:
-                right_leaf_accumulator = self.right.depth_first_forward_through_given_path(x[x_ids_right],
-                                                                        [path[1:] for path in [tree_path_desired[x_idx] for x_idx in x_ids_right]],
-                                                                        [path + "1" for path in [tree_path_taken[x_idx] for x_idx in x_ids_right]],
-                                                                        [x_ids[x_idx] for x_idx in x_ids_right],
-                                                                        parent_lf[x_ids_right],
-                                                                        parent_gf[x_ids_right],
-                                                                        parent_proj_z_right)
+                                                                        parent_gfi[x_ids_right],
+                                                                        parent_lfi[x_ids_right],
+                                                                        parent_recon_x[x_ids_right])
                 self.leaf_accumulator.extend(right_leaf_accumulator)
 
             leaf_accumulator = self.leaf_accumulator
@@ -229,17 +169,18 @@ class Node(nn.Module):
         return leaf_accumulator
 
     def depth_first_forward_whole_branch_preorder(self, x, tree_path_taken=None, x_ids=None, parent_lf=None, parent_gf=None,
-                            parent_proj_z=None):
+                            parent_gfi=None, parent_lfi=None, parent_recon_x=None):
         if self.depth == 0:
             tree_path_taken = ["0"] * len(x)  # all the paths start with "O"
             x_ids = list(range(len(x)))
 
-        node_outputs = self.node_forward(x, parent_lf, parent_gf, parent_proj_z)
+        node_outputs = self.node_forward(x, parent_lf, parent_gf, parent_gfi, parent_lfi, parent_recon_x)
 
         parent_lf = node_outputs["lf"].detach()
         parent_gf = node_outputs["gf"].detach()
-        if "proj_z" in node_outputs:
-            parent_proj_z = node_outputs["proj_z"].detach()
+        parent_gfi = node_outputs["gfi"].detach()
+        parent_lfi = node_outputs["lfi"].detach()
+        parent_recon_x = node_outputs["recon_x"].detach()
 
         if self.leaf:
             # return path_taken, x_ids, leaf_outputs
@@ -251,10 +192,6 @@ class Node(nn.Module):
             z = node_outputs["z"]
             x_side = self.get_children_node(z)
             x_ids_left = np.where(x_side == 0)[0]
-            if parent_proj_z is None:
-                parent_proj_z_left = None
-            else:
-                parent_proj_z_left = parent_proj_z[x_ids_left]
             if len(x_ids_left) > 0:
                 left_leaf_accumulator = self.left.depth_first_forward_whole_branch_preorder(x[x_ids_left], [path + "0" for path in
                                                                                       [tree_path_taken[x_idx] for x_idx
@@ -262,14 +199,12 @@ class Node(nn.Module):
                                                                       [x_ids[x_idx] for x_idx in x_ids_left],
                                                                       parent_lf[x_ids_left],
                                                                       parent_gf[x_ids_left],
-                                                                      parent_proj_z_left)
+                                                                      parent_gfi[x_ids_left],
+                                                                      parent_lfi[x_ids_left],
+                                                                      parent_recon_x[x_ids_left])
                 self.leaf_accumulator.extend(left_leaf_accumulator)
 
             x_ids_right = np.where(x_side == 1)[0]
-            if parent_proj_z is None:
-                parent_proj_z_right = None
-            else:
-                parent_proj_z_right = parent_proj_z[x_ids_right]
             if len(x_ids_right) > 0:
                 right_leaf_accumulator = self.right.depth_first_forward_whole_branch_preorder(x[x_ids_right], [path + "1" for path in
                                                                                          [tree_path_taken[x_idx] for
@@ -277,7 +212,9 @@ class Node(nn.Module):
                                                                         [x_ids[x_idx] for x_idx in x_ids_right],
                                                                         parent_lf[x_ids_right],
                                                                         parent_gf[x_ids_right],
-                                                                        parent_proj_z_right)
+                                                                        parent_gfi[x_ids_right],
+                                                                        parent_lfi[x_ids_right],
+                                                                        parent_recon_x[x_ids_right])
                 self.leaf_accumulator.extend(right_leaf_accumulator)
 
             leaf_accumulator = self.leaf_accumulator
@@ -285,19 +222,18 @@ class Node(nn.Module):
 
         return leaf_accumulator
 
-
     def depth_first_forward_whole_tree_preorder(self, x, tree_path_taken=None, parent_lf=None, parent_gf=None,
-                            parent_proj_z=None):
+                            parent_gfi=None, parent_lfi=None, parent_recon_x=None):
         if self.depth == 0:
             tree_path_taken = ["0"] * len(x)  # all the paths start with "O"
 
-        node_outputs = self.node_forward(x, parent_lf, parent_gf, parent_proj_z)
+        node_outputs = self.node_forward(x, parent_lf, parent_gf, parent_gfi, parent_lfi, parent_recon_x)
 
         parent_lf = node_outputs["lf"].detach()
         parent_gf = node_outputs["gf"].detach()
-        if "proj_z" in node_outputs:
-            parent_proj_z = node_outputs["proj_z"].detach()
-
+        parent_gfi = node_outputs["gfi"].detach()
+        parent_lfi = node_outputs["lfi"].detach()
+        parent_recon_x = node_outputs["recon_x"].detach()
 
         if self.leaf:
             # return path_taken, x_ids, leaf_outputs
@@ -307,12 +243,12 @@ class Node(nn.Module):
             self.leaf_accumulator.extend([[tree_path_taken, node_outputs]])
             #send everything left
             left_leaf_accumulator = self.left.depth_first_forward_whole_tree_preorder(x, [path+"0" for path in tree_path_taken],
-                                                                  parent_lf, parent_gf, parent_proj_z)
+                                                                  parent_lf, parent_gf, parent_gfi, parent_lfi, parent_recon_x)
             self.leaf_accumulator.extend(left_leaf_accumulator)
 
             #send everything right
             right_leaf_accumulator = self.right.depth_first_forward_whole_tree_preorder(x, [path+"1" for path in tree_path_taken],
-                                                                    parent_lf, parent_gf, parent_proj_z)
+                                                                    parent_lf, parent_gf, parent_gfi, parent_lfi, parent_recon_x)
             self.leaf_accumulator.extend(right_leaf_accumulator)
 
             leaf_accumulator = self.leaf_accumulator
@@ -320,14 +256,16 @@ class Node(nn.Module):
 
         return leaf_accumulator
 
-    def node_forward(self, x, parent_lf=None, parent_gf=None, parent_proj_z=None):
+    def node_forward(self, x, parent_lf=None, parent_gf=None, parent_gfi=None, parent_lfi=None,
+                     parent_recon_x=None):
         if torch._C._get_tracing_state():
-            return self.forward_for_graph_tracing(x, parent_lf, parent_gf, parent_proj_z)
+            return self.forward_for_graph_tracing(x, parent_lf, parent_gf, parent_gfi, parent_lfi,
+                                                  parent_recon_x)
         if self.depth == 0:
             encoder_outputs = self.network.encoder(x)
         else:
             encoder_outputs = self.network.encoder(x, parent_lf, parent_gf)
-        model_outputs = self.node_forward_from_encoder(encoder_outputs, parent_proj_z)
+        model_outputs = self.node_forward_from_encoder(encoder_outputs, parent_gfi, parent_lfi, parent_recon_x)
         return model_outputs
 
     def get_boundary_side(self, z):
@@ -355,6 +293,87 @@ class Node(nn.Module):
         else:
             return self.get_boundary_side(z)
 
+    def generate_images(self, n_images, from_node_path='', from_side = None, parent_gfi=None, parent_lfi=None, parent_recon_x=None):
+        self.eval()
+        with torch.no_grad():
+
+            if len(from_node_path) == 0:
+                if from_side is None or self.boundary is None:
+                    z_gen = torch.randn((n_images, self.config.network.parameters.n_latents))
+                else:
+                    desired_side = int(from_side)
+                    z_gen = []
+                    remaining = n_images
+                    max_trials = n_images
+                    trials = 0
+                    while remaining > 0:
+                        cur_z_gen = torch.randn((remaining, self.config.network.parameters.n_latents))
+                        if trials == max_trials:
+                            z_gen.append(cur_z_gen)
+                            remaining = 0
+                            break;
+                        cur_z_gen_side = self.get_children_node(cur_z_gen)
+                        if desired_side == 0:
+                            left_side_ids = np.where(cur_z_gen_side == 0)[0]
+                            if len(left_side_ids) > 0:
+                                z_gen.append(cur_z_gen[left_side_ids[:remaining]])
+                                remaining -= len(left_side_ids)
+                        elif desired_side == 1:
+                            right_side_ids = np.where(cur_z_gen_side == 1)[0]
+                            if len(right_side_ids) > 0:
+                                z_gen.append(cur_z_gen[right_side_ids[:remaining]])
+                                remaining -= len(right_side_ids)
+                        else:
+                            raise ValueError("wrong path")
+                        trials += 1
+                    z_gen = torch.cat(z_gen)
+
+            else:
+                desired_side = int(from_node_path[0])
+                z_gen = []
+                remaining = n_images
+                max_trials = n_images
+                trials = 0
+                while remaining > 0:
+                    cur_z_gen = torch.randn((remaining, self.config.network.parameters.n_latents))
+                    if trials == max_trials:
+                        z_gen.append(cur_z_gen)
+                        remaining = 0
+                        break;
+                    cur_z_gen_side = self.get_children_node(cur_z_gen)
+                    if desired_side == 0:
+                        left_side_ids = np.where(cur_z_gen_side == 0)[0]
+                        if len(left_side_ids) > 0:
+                            z_gen.append(cur_z_gen[left_side_ids[:remaining]])
+                            remaining -= len(left_side_ids)
+                    elif desired_side == 1:
+                        right_side_ids = np.where(cur_z_gen_side == 1)[0]
+                        if len(right_side_ids) > 0:
+                            z_gen.append(cur_z_gen[right_side_ids[:remaining]])
+                            remaining -= len(right_side_ids)
+                    else:
+                        raise ValueError("wrong path")
+                    trials += 1
+                z_gen = torch.cat(z_gen)
+
+            z_gen = self.push_variable_to_device(z_gen)
+            node_outputs = self.node_forward_from_encoder({'z': z_gen}, parent_gfi, parent_lfi, parent_recon_x)
+            gfi = node_outputs["gfi"].detach()
+            lfi = node_outputs["lfi"].detach()
+            recon_x = node_outputs["recon_x"].detach()
+
+            if len(from_node_path) == 0:
+                if self.config.loss.parameters.reconstruction_dist == "bernoulli":
+                    recon_x = torch.sigmoid(recon_x)
+                recon_x = recon_x.detach()
+                return recon_x
+
+            else:
+                if desired_side == 0:
+                    return self.left.generate_images(n_images, from_node_path=from_node_path[1:], from_side = from_side, parent_gfi=gfi, parent_lfi=lfi, parent_recon_x=recon_x)
+                elif desired_side == 1:
+                    return self.right.generate_images(n_images, from_node_path=from_node_path[1:], from_side = from_side, parent_gfi=gfi, parent_lfi=lfi, parent_recon_x=recon_x)
+
 
 def get_node_class(base_class):
 
@@ -367,33 +386,40 @@ def get_node_class(base_class):
             if self.depth > 0:
                 self.network.encoder = ConnectedEncoder(parent_network.encoder, depth, connect_lf=config.create_connections["lf"],
                                                         connect_gf=config.create_connections["gf"])
-                if "Sim" in base_class.__name__:
-                    self.network.projection_head = ConnectedProjectionHead(parent_network.projection_head, depth, connect_proj=config.create_connections["proj"])
+                self.network.decoder = ConnectedDecoder(parent_network.decoder, depth, connect_gfi=config.create_connections["gfi"],
+                                                        connect_lfi=config.create_connections["lfi"],
+                                                        connect_recon=config.create_connections["recon"])
 
             self.set_device(self.config.device.use_gpu)
 
-        def node_forward_from_encoder(self, encoder_outputs, parent_proj_z=None):
-            if not "Sim" in base_class.__name__:
-                return encoder_outputs
+        def node_forward_from_encoder(self, encoder_outputs, parent_gfi=None, parent_lfi=None,
+                                      parent_recon_x=None):
+            if self.depth == 0:
+                decoder_outputs = self.network.decoder(encoder_outputs["z"])
             else:
-                if self.depth == 0:
-                    proj_z = self.network.projection_head(encoder_outputs["z"])
-                else:
-                    proj_z = self.network.projection_head(encoder_outputs["z"], parent_proj_z)
-                model_outputs = encoder_outputs
-                model_outputs['proj_z'] = proj_z
-                return model_outputs
+                decoder_outputs = self.network.decoder(encoder_outputs["z"], parent_gfi, parent_lfi,
+                                                       parent_recon_x)
+            model_outputs = encoder_outputs
+            model_outputs.update(decoder_outputs)
+            return model_outputs
 
     return NodeClass
 
 # possible node classes:
-SimCLRNode_local = get_node_class(models.SimCLRModel)
-SimCLRNode = type('SimCLRNode', (Node, models.SimCLRModel), dict(SimCLRNode_local.__dict__))
+VAENode_local = get_node_class(models.VAEModel)
+VAENode = type('VAENode', (Node, models.VAEModel), dict(VAENode_local.__dict__))
 
-TripletCLRNode_local = get_node_class(models.TripletCLRModel)
-TripletCLRNode = type('TripletCLRNode', (Node, models.TripletCLRModel), dict(TripletCLRNode_local.__dict__))
+BetaVAENode_local = get_node_class(models.BetaVAEModel)
+BetaVAENode = type('BetaVAENode', (Node, models.BetaVAEModel), dict(BetaVAENode_local.__dict__))
 
-class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
+AnnealedVAENode_local = get_node_class(models.AnnealedVAEModel)
+AnnealedVAENode = type('AnnealedVAENode', (Node, models.AnnealedVAEModel), dict(AnnealedVAENode_local.__dict__))
+
+BetaTCVAENode_local = get_node_class(models.BetaTCVAEModel)
+BetaTCVAENode = type('BetaTCVAENode', (Node, models.BetaTCVAEModel), dict(BetaTCVAENode_local.__dict__))
+
+
+class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
     """
     dnn with tree network, loss which is based on leaf's losses, optimizer from that loss
     """
@@ -403,15 +429,15 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
         default_config = dnn.BaseDNN.default_config()
 
         # tree config
-        default_config.tree = gr.Config()
+        default_config.tree = Dict()
 
         # node config
-        default_config.node_classname = "SimCLR"
+        default_config.node_classname = "VAE"
         default_config.node = eval("gr.models.{}Model.default_config()".format(default_config.node_classname))
-        default_config.node.create_connections = {"lf": True, "gf": False, "proj": False}
+        default_config.node.create_connections = {"lf": True, "gf": False, "gfi": True, "lfi": True, "recon": True}
 
         # loss parameters
-        default_config.loss.name = "SimCLR"
+        default_config.loss.name = "VAE"
 
         # optimizer
         default_config.optimizer.name = "Adam"
@@ -421,7 +447,9 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        self.config = gr.config.update_config(kwargs, config, self.__class__.default_config())
+        self.config = self.__class__.default_config()
+        self.config.update(config)
+        self.config.update(kwargs)
         self.NodeClass = eval("{}Node".format(self.config.node_classname))
         self.split_history = {}  # dictionary with node path keys and boundary values
 
@@ -462,44 +490,6 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
             self.network.train()
         else:
             depth_first_traversal_outputs = self.network.depth_first_forward(x)
-
-        model_outputs = {}
-        x_order_ids = []
-        for leaf_idx in range(len(depth_first_traversal_outputs)):
-            cur_node_path = depth_first_traversal_outputs[leaf_idx][0]
-            cur_node_x_ids = depth_first_traversal_outputs[leaf_idx][1]
-            cur_node_outputs = depth_first_traversal_outputs[leaf_idx][2]
-            # stack results
-            if not model_outputs:
-                model_outputs["path_taken"] = cur_node_path
-                for k, v in cur_node_outputs.items():
-                    model_outputs[k] = v
-            else:
-                model_outputs["path_taken"] += cur_node_path
-                for k, v in cur_node_outputs.items():
-                    model_outputs[k] = torch.cat([model_outputs[k], v], dim=0)
-            # save the sampled ids to reorder as in the input batch at the end
-            x_order_ids += list(cur_node_x_ids)
-
-        # reorder points
-        sort_order = tuple(np.argsort(x_order_ids))
-        for k, v in model_outputs.items():
-            if isinstance(v, list):
-                model_outputs[k] = [v[i] for i in sort_order]
-            else:
-                model_outputs[k] = v[sort_order, :]
-
-        return model_outputs
-
-    def forward_through_given_path(self, x, tree_desired_path):
-        x = self.push_variable_to_device(x)
-        is_train = self.network.training
-        if len(x) == 1 and is_train:
-            self.network.eval()
-            depth_first_traversal_outputs = self.network.depth_first_forward_through_given_path(x, tree_desired_path)
-            self.network.train()
-        else:
-            depth_first_traversal_outputs = self.network.depth_first_forward_through_given_path(x, tree_desired_path)
 
         model_outputs = {}
         x_order_ids = []
@@ -580,17 +570,13 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
                 if split_trigger.boundary_config.z_fitness is None:
                     z_fitness = None
                 else:
-                    z_fitness = np.nan_to_num(x_fitness)
+                    z_fitness = x_fitness
                 if np.isnan(z_library).any():
                     keep_ids = ~(np.isnan(z_library.sum(1)))
                     z_library = z_library[keep_ids]
                     if z_fitness is not None:
                         x_fitness = x_fitness[keep_ids]
                         z_fitness = x_fitness
-                if z_library.shape[0] == 0:
-                    z_library = np.zeros((2, self.config.network.parameters.n_latents))
-                    if z_fitness is not None:
-                        z_fitness = np.zeros(2)
                 node.create_boundary(z_library, z_fitness, boundary_config=split_trigger.boundary_config)
 
         # Instanciate childrens
@@ -628,13 +614,9 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
 
         # save split history
         self.split_history[node_path] = {"depth": node.depth, "leaf": node.leaf, "boundary": node.boundary,
-                                             "feature_range": node.feature_range, "epoch": self.n_epochs}
-
+                                         "feature_range": node.feature_range, "epoch": self.n_epochs}
         if x_loader is not None:
-            try:
-                self.save_split_history(node_path, x_loader, z_library, x_fitness, split_trigger)
-            except:
-                pass
+            self.save_split_history(node_path, x_loader, z_library, x_fitness, split_trigger)
 
 
         # save model
@@ -670,7 +652,7 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
             plt.close()
 
         ## c) left/right samples from which boundary is fitted
-        if split_trigger.boundary_config.z_fitness is not None:
+        if split_trigger.boundary_config.z_fitness == "recon_loss":
             y_fit = z_fitness > np.percentile(z_fitness, 80)
             samples_left_fit_ids = np.where(y_fit == 0)[0]
             samples_left_fit_ids = np.random.choice(samples_left_fit_ids, min(100, len(samples_left_fit_ids)))
@@ -723,6 +705,28 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
                 plt.savefig(output_filename)
                 plt.close()
 
+
+        ## d) left and right side generated samples
+        output_filename = os.path.join(split_output_folder, "samples_gen_sent_left.png")
+        samples_left_gen_buffer = self.network.generate_images(100, from_node_path=node_path[1:], from_side='0')
+        img = np.transpose(
+            make_grid(samples_left_gen_buffer, nrow=int(np.sqrt(samples_left_gen_buffer.shape[0])),
+                      padding=0).cpu().numpy(), (1, 2, 0))
+        plt.figure()
+        plt.imshow(img)
+        plt.savefig(output_filename)
+        plt.close()
+
+        output_filename = os.path.join(split_output_folder, "samples_gen_sent_right.png")
+        samples_right_gen_buffer = self.network.generate_images(100, from_node_path=node_path[1:], from_side='1')
+        img = np.transpose(
+            make_grid(samples_right_gen_buffer, nrow=int(np.sqrt(samples_right_gen_buffer.shape[0])),
+                      padding=0).cpu().numpy(), (1, 2, 0))
+        plt.figure()
+        plt.imshow(img)
+        plt.savefig(output_filename)
+        plt.close()
+
         return
 
 
@@ -753,9 +757,9 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
         ## split trigger settings
         split_trigger = gr.config.update_config(training_config.split_trigger, gr.Config({"active": False}))
         if split_trigger["active"]:
-            default_split_trigger = gr.Config()
+            default_split_trigger = Dict()
             ## conditions
-            default_split_trigger.conditions = gr.Config()
+            default_split_trigger.conditions = Dict()
             default_split_trigger.conditions.min_init_n_epochs = 1
             default_split_trigger.conditions.n_epochs_min_between_splits = 1
             default_split_trigger.conditions.n_min_points = 0
@@ -764,11 +768,11 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
             default_split_trigger.fitness_key = "total"
             ## type
             default_split_trigger.type = "plateau"
-            default_split_trigger.parameters = gr.Config()
+            default_split_trigger.parameters = Dict()
             ## train before split
             default_split_trigger.n_epochs_before_split = 0
             ## boundary config
-            default_split_trigger.boundary_config = gr.Config()
+            default_split_trigger.boundary_config = Dict()
             default_split_trigger.boundary_config.z_fitness = None
             default_split_trigger.boundary_config.algo = "cluster.KMeans"
             ## save
@@ -902,9 +906,9 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
         ## split trigger settings
         split_trigger = gr.config.update_config(training_config.split_trigger, gr.Config({"active": False}))
         if split_trigger["active"]:
-            default_split_trigger = gr.Config()
+            default_split_trigger = Dict()
             ## conditions
-            default_split_trigger.conditions = gr.Config()
+            default_split_trigger.conditions = Dict()
             default_split_trigger.conditions.min_init_n_epochs = 1
             default_split_trigger.conditions.n_epochs_min_between_splits = 1
             default_split_trigger.conditions.n_min_points = 0
@@ -913,11 +917,11 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
             default_split_trigger.fitness_key = "total"
             ## type
             default_split_trigger.type = "plateau"
-            default_split_trigger.parameters = gr.Config()
+            default_split_trigger.parameters = Dict()
             ## train before split
             default_split_trigger.n_epochs_before_split = 0
             ## boundary config
-            default_split_trigger.boundary_config = gr.Config()
+            default_split_trigger.boundary_config = Dict()
             default_split_trigger.boundary_config.z_fitness =  None
             default_split_trigger.boundary_config.algo =  "cluster.KMeans"
             ## save
@@ -1177,7 +1181,7 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
                     # 5) Perform evaluation/test epoch
                     if self.n_epochs % self.config.evaluation.save_results_every == 0:
                         save_results_per_node = (self.n_epochs == n_epochs_total)
-                        #self.evaluation_epoch(valid_loader, save_results_per_node=save_results_per_node)
+                        self.evaluation_epoch(valid_loader, save_results_per_node=save_results_per_node)
 
                 # 6) Stop splitting when close to the end
                 if self.n_epochs >= (n_epochs_total - split_trigger.conditions.n_epochs_min_between_splits):
@@ -1202,46 +1206,15 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
 
         with torch.no_grad():
             for data in train_loader:
-                x = data['obs']
+                x = data["obs"]
                 x = self.push_variable_to_device(x)
-                x_aug = train_loader.dataset.get_augmented_batch(data['index'], augment=True)
-                x_aug = self.push_variable_to_device(x_aug)
                 x_ids.append(data["index"])
                 labels.append(data["label"])
                 # forward
                 model_outputs = self.forward(x)
-                cur_taken_pathes = model_outputs["path_taken"]
-                model_outputs_aug = self.forward_through_given_path(x_aug, cur_taken_pathes)
-                model_outputs.update({k + '_aug': v for k, v in model_outputs_aug.items()})
                 loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
-                # separate batch per NODE as images in a batch are constrasted between eachother!
-                batch_losses = dict()
-                batch_size = x.shape[0]
-                for leaf_path in list(set(cur_taken_pathes)):
-                    leaf_x_ids = np.where(np.array(cur_taken_pathes, copy=False) == leaf_path)[0]
-                    leaf_loss_inputs = dict()
-                    for k,v in loss_inputs.items():
-                        leaf_loss_inputs[k] = v[leaf_x_ids]
-                    leaf_losses = self.loss_f(leaf_loss_inputs, reduction="none")
-                    for k, v in leaf_losses.items():
-                        if "Sim" in self.network.__class__.__name__:
-                            cur_leaf_batch_size = v.shape[0] // 2
-                            if k in batch_losses:
-                                batch_losses[k][leaf_x_ids] = v[:cur_leaf_batch_size]
-                                batch_losses[k][batch_size//2 + leaf_x_ids] = v[cur_leaf_batch_size:]
-                            else:
-                                batch_losses[k] = torch.zeros(2*batch_size).to(x.device)
-                                batch_losses[k][leaf_x_ids] = v[:cur_leaf_batch_size]
-                                batch_losses[k][batch_size // 2 + leaf_x_ids] = v[cur_leaf_batch_size:]
-                        elif "Triplet" in self.network.__class__.__name__:
-                            if k in batch_losses:
-                                batch_losses[k][leaf_x_ids] = v
-                            else:
-                                batch_losses[k] = torch.zeros(batch_size).to(x.device)
-                                batch_losses[k][leaf_x_ids] = v
-
-
-                cur_train_fitness = batch_losses[split_trigger.fitness_key][:x.shape[0]]
+                batch_losses = self.loss_f(loss_inputs, reduction="none")
+                cur_train_fitness = batch_losses[split_trigger.fitness_key]
                 # save losses
                 if train_fitness is None:
                     train_fitness = np.expand_dims(cur_train_fitness.detach().cpu().numpy(), axis=-1)
@@ -1249,7 +1222,7 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
                     train_fitness = np.vstack(
                         [train_fitness, np.expand_dims(cur_train_fitness.detach().cpu().numpy(), axis=-1)])
                 # save taken pathes
-                taken_pathes += cur_taken_pathes
+                taken_pathes += model_outputs["path_taken"]
 
             x_ids = torch.cat(x_ids)
             labels = torch.cat(labels)
@@ -1321,39 +1294,12 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
         for data in train_loader:
             x = data['obs']
             x = self.push_variable_to_device(x)
-            x_aug = train_loader.dataset.get_augmented_batch(data['index'], augment=True)
-            x_aug = self.push_variable_to_device(x_aug)
             # forward
             model_outputs = self.forward(x)
-            cur_taken_pathes = model_outputs["path_taken"]
-            model_outputs_aug = self.forward_through_given_path(x_aug, cur_taken_pathes)
-            model_outputs.update({k + '_aug': v for k, v in model_outputs_aug.items()})
+            # g = make_dot(model_outputs, params=dict(self.network.named_parameters()))
+            # g.view()
             loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
-            # separate batch per NODE as images in a batch are constrasted between eachother!
-            batch_losses = dict()
-            batch_size = x.shape[0]
-            for leaf_path in list(set(cur_taken_pathes)):
-                leaf_x_ids = np.where(np.array(cur_taken_pathes, copy=False) == leaf_path)[0]
-                leaf_loss_inputs = dict()
-                for k, v in loss_inputs.items():
-                    leaf_loss_inputs[k] = v[leaf_x_ids]
-                leaf_losses = self.loss_f(leaf_loss_inputs, reduction="none")
-                for k, v in leaf_losses.items():
-                    if "Sim" in self.network.__class__.__name__:
-                        cur_leaf_batch_size = v.shape[0] // 2
-                        if k in batch_losses:
-                            batch_losses[k][leaf_x_ids] = v[:cur_leaf_batch_size]
-                            batch_losses[k][batch_size // 2 + leaf_x_ids] = v[cur_leaf_batch_size:]
-                        else:
-                            batch_losses[k] = torch.zeros(2 * batch_size).to(x.device)
-                            batch_losses[k][leaf_x_ids] = v[:cur_leaf_batch_size]
-                            batch_losses[k][batch_size // 2 + leaf_x_ids] = v[cur_leaf_batch_size:]
-                    elif "Triplet" in self.network.__class__.__name__:
-                        if k in batch_losses:
-                            batch_losses[k][leaf_x_ids] = v
-                        else:
-                            batch_losses[k] = torch.zeros(batch_size).to(x.device)
-                            batch_losses[k][leaf_x_ids] = v
+            batch_losses = self.loss_f(loss_inputs, reduction="none")
             # backward
             loss = batch_losses['total'].mean()
             self.optimizer.zero_grad()
@@ -1366,7 +1312,7 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
                 else:
                     losses[k] = np.vstack([losses[k], np.expand_dims(v.detach().cpu().numpy(), axis=-1)])
             # save taken path
-            taken_pathes += cur_taken_pathes
+            taken_pathes += model_outputs["path_taken"]
 
 
         # Logger save results per leaf
@@ -1390,16 +1336,23 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
         losses = {}
 
         # Prepare logging
+        record_valid_images = False
         record_embeddings = False
         images = None
+        recon_images = None
         embeddings = None
         labels = None
         if logger is not None:
+            if self.n_epochs % self.config.logging.record_valid_images_every == 0:
+                record_valid_images = True
+                images = []
+                recon_images = []
             if self.n_epochs % self.config.logging.record_embeddings_every == 0:
                 record_embeddings = True
                 embeddings = []
                 labels = []
-                images = []
+                if images is None:
+                    images = []
 
 
         taken_pathes = []
@@ -1408,39 +1361,12 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
             for data in valid_loader:
                 x = data['obs']
                 x = self.push_variable_to_device(x)
-                x_aug = valid_loader.dataset.get_augmented_batch(data['index'], augment=True)
-                x_aug = self.push_variable_to_device(x_aug)
+                y = data['label'].squeeze()
+                y = self.push_variable_to_device(y)
                 # forward
                 model_outputs = self.forward(x)
-                cur_taken_pathes = model_outputs["path_taken"]
-                model_outputs_aug = self.forward_through_given_path(x_aug, cur_taken_pathes)
-                model_outputs.update({k + '_aug': v for k, v in model_outputs_aug.items()})
                 loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
-                # separate batch per NODE as images in a batch are constrasted between eachother!
-                batch_losses = dict()
-                batch_size = x.shape[0]
-                for leaf_path in list(set(cur_taken_pathes)):
-                    leaf_x_ids = np.where(np.array(cur_taken_pathes, copy=False) == leaf_path)[0]
-                    leaf_loss_inputs = dict()
-                    for k, v in loss_inputs.items():
-                        leaf_loss_inputs[k] = v[leaf_x_ids]
-                    leaf_losses = self.loss_f(leaf_loss_inputs, reduction="none")
-                    for k, v in leaf_losses.items():
-                        if "Sim" in self.network.__class__.__name__:
-                            cur_leaf_batch_size = v.shape[0] // 2
-                            if k in batch_losses:
-                                batch_losses[k][leaf_x_ids] = v[:cur_leaf_batch_size]
-                                batch_losses[k][batch_size // 2 + leaf_x_ids] = v[cur_leaf_batch_size:]
-                            else:
-                                batch_losses[k] = torch.zeros(2 * batch_size).to(x.device)
-                                batch_losses[k][leaf_x_ids] = v[:cur_leaf_batch_size]
-                                batch_losses[k][batch_size // 2 + leaf_x_ids] = v[cur_leaf_batch_size:]
-                        elif "Triplet" in self.network.__class__.__name__:
-                            if k in batch_losses:
-                                batch_losses[k][leaf_x_ids] = v
-                            else:
-                                batch_losses[k] = torch.zeros(batch_size).to(x.device)
-                                batch_losses[k][leaf_x_ids] = v
+                batch_losses = self.loss_f(loss_inputs, reduction="none")
                 # save losses
                 for k, v in batch_losses.items():
                     if k not in losses:
@@ -1448,13 +1374,20 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
                     else:
                         losses[k] = np.vstack([losses[k], np.expand_dims(v.detach().cpu().numpy(), axis=-1)])
                 # record embeddings
+                if record_valid_images:
+                    for i in range(len(x)):
+                        images.append(x[i].unsqueeze(0))
+                    for i in range(len(x)):
+                        recon_images.append(model_outputs["recon_x"][i].unsqueeze(0))
                 if record_embeddings:
                     for i in range(len(x)):
                         embeddings.append(model_outputs["z"][i].unsqueeze(0))
                         labels.append(data['label'][i].unsqueeze(0))
-                        images.append(x[i].unsqueeze(0))
+                    if not record_valid_images:
+                        for i in range(len(x)):
+                            images.append(x[i].unsqueeze(0))
 
-                taken_pathes += cur_taken_pathes
+                taken_pathes += model_outputs["path_taken"]
 
 
         # 2) LOGGER SAVE RESULT PER LEAF
@@ -1476,134 +1409,159 @@ class ProgressiveTreeCLRModel(dnn.BaseDNN, gr.BaseModel):
                 except:
                     pass
 
+            if record_valid_images:
+                n_images = min(len(leaf_x_ids), 40)
+                sampled_ids = np.random.choice(len(leaf_x_ids), n_images, replace=False)
+                input_images = torch.cat([images[i] for i in leaf_x_ids[sampled_ids]]).cpu()
+                output_images = torch.cat([recon_images[i] for i in leaf_x_ids[sampled_ids]]).cpu()
+                if self.config.loss.parameters.reconstruction_dist == "bernoulli":
+                    output_images = torch.sigmoid(output_images)
+                vizu_tensor_list = [None] * (2 * n_images)
+                vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]
+                vizu_tensor_list[1::2] = [output_images[n] for n in range(n_images)]
+                img = make_grid(vizu_tensor_list, nrow=2, padding=0)
+                try:
+                    logger.add_image("leaf_{}".format(leaf_path), img, self.n_epochs)
+                except:
+                    pass
+
         # 4) AVERAGE LOSS ON WHOLE TREE AND RETURN
         for k, v in losses.items():
             losses[k] = np.mean(v)
 
         return losses
 
-    # def evaluation_epoch(self, test_loader, save_results_per_node=False):
-    #     self.eval()
-    #     losses = {}
-    #
-    #     n_images = len(test_loader.dataset)
-    #     if "RandomSampler" in test_loader.sampler.__class__.__name__:
-    #         warnings.warn("WARNING: evaluation is performed on shuffled test dataloader")
-    #     tree_depth = 1
-    #     for split_k, split in self.split_history.items():
-    #         if (split["depth"]+2) > tree_depth:
-    #             tree_depth = (split["depth"]+2)
-    #
-    #     test_results = {}
-    #     test_results["taken_pathes"] = [None] * n_images
-    #     test_results["labels"] = np.empty(n_images, dtype=np.int)
-    #     test_results["clr_loss"] = np.empty(n_images, dtype=np.float)
-    #     test_results["cluster_classification_pred"] = np.empty(n_images, dtype=np.int)
-    #     test_results["cluster_classification_acc"] = np.empty(n_images, dtype=np.bool)
-    #     test_results["5NN_classification_pred"] = np.empty(n_images, dtype=np.int)
-    #     test_results["5NN_classification_err"] = np.empty(n_images, dtype=np.bool)
-    #     test_results["10NN_classification_pred"] = np.empty(n_images, dtype=np.int)
-    #     test_results["10NN_classification_err"] = np.empty(n_images, dtype=np.bool)
-    #     test_results["20NN_classification_pred"] = np.empty(n_images, dtype=np.int)
-    #     test_results["20NN_classification_err"] = np.empty(n_images, dtype=np.bool)
-    #     #TODO: "spread" kNN
-    #
-    #     test_results_per_node = {}
-    #     for node_path in self.network.get_node_pathes():
-    #         test_results_per_node[node_path] = dict()
-    #         test_results_per_node[node_path]["x_ids"] = []
-    #         test_results_per_node[node_path]["z"] = []
-    #         test_results_per_node[node_path]["clr_loss"] = []
-    #         test_results_per_node[node_path]["cluster_classification_pred"] = []
-    #         test_results_per_node[node_path]["cluster_classification_acc"] = []
-    #         test_results_per_node[node_path]["5NN_classification_pred"] = []
-    #         test_results_per_node[node_path]["5NN_classification_err"] = []
-    #         test_results_per_node[node_path]["10NN_classification_pred"] = []
-    #         test_results_per_node[node_path]["10NN_classification_err"] = []
-    #         test_results_per_node[node_path]["20NN_classification_pred"] = []
-    #         test_results_per_node[node_path]["20NN_classification_err"] = []
-    #
-    #     with torch.no_grad():
-    #         # Compute results per image
-    #         idx_offset = 0
-    #         for data in test_loader:
-    #             x = data['obs']
-    #             x = self.push_variable_to_device(x)
-    #             cur_x_ids = np.asarray(data["index"], dtype=np.int)
-    #             y = data['label'].squeeze()
-    #             test_results["labels"][cur_x_ids] = y.detach().cpu().numpy()
-    #
-    #             # forward
-    #             all_nodes_outputs = self.network.depth_first_forward_whole_branch_preorder(x)
-    #             for node_idx in range(len(all_nodes_outputs)):
-    #                 cur_node_path = all_nodes_outputs[node_idx][0][0]
-    #                 cur_node_x_ids = np.asarray(all_nodes_outputs[node_idx][1], dtype=np.int)
-    #                 cur_node_outputs = all_nodes_outputs[node_idx][2]
-    #                 loss_inputs = {key: cur_node_outputs[key] for key in self.loss_f.input_keys_list}
-    #                 cur_losses = self.loss_f(loss_inputs, reduction="none")
-    #                 test_results_per_node[cur_node_path]["x_ids"] += list(cur_x_ids[cur_node_x_ids])
-    #                 test_results_per_node[cur_node_path]["z"] += list(cur_node_outputs["z"].detach().cpu().numpy())
-    #                 test_results_per_node[cur_node_path]["clr_loss"] += list(cur_losses["total"].detach().cpu().numpy())
-    #
-    #                 cur_node = self.network.get_child_node(cur_node_path)
-    #                 if cur_node.leaf:
-    #                     for x_idx in cur_node_x_ids:
-    #                         test_results["taken_pathes"][cur_x_ids[x_idx]] = cur_node_path
-    #                     test_results["clr_loss"][cur_x_ids[cur_node_x_ids]] = cur_losses["total"].detach().cpu().numpy()
-    #
-    #     # compute results for classification
-    #     for node_path in self.network.get_node_pathes():
-    #         # update lists to numpy
-    #         test_results_per_node[node_path]["x_ids"] = np.asarray(test_results_per_node[node_path]["x_ids"], dtype = np.int)
-    #         test_results_per_node[node_path]["z"] = np.asarray(test_results_per_node[node_path]["z"], dtype = np.float)
-    #         test_results_per_node[node_path]["clr_loss"] = np.asarray(test_results_per_node[node_path]["clr_loss"],
-    #                                                                  dtype=np.float)
-    #
-    #         # cluster classification accuracy
-    #         labels_in_node = test_results["labels"][test_results_per_node[node_path]["x_ids"]]
-    #         majority_voted_class = -1
-    #         max_n_votes = 0
-    #         for label in list(set(labels_in_node)):
-    #             label_count = (labels_in_node == label).sum()
-    #             if label_count > max_n_votes:
-    #                 max_n_votes = label_count
-    #                 majority_voted_class = label
-    #         cur_node_x_ids = test_results_per_node[node_path]["x_ids"]
-    #         test_results_per_node[node_path]["cluster_classification_pred"] = np.asarray([majority_voted_class] * len(cur_node_x_ids), dtype=np.int)
-    #         test_results_per_node[node_path]["cluster_classification_acc"] = (test_results["labels"][cur_node_x_ids] == majority_voted_class)
-    #
-    #         # k-NN classification accuracy
-    #         for x_idx in range(len(cur_node_x_ids)):
-    #             distances_to_point_in_node = np.linalg.norm(test_results_per_node[node_path]["z"][x_idx] - test_results_per_node[node_path]["z"], axis=1)
-    #             closest_point_ids = np.argpartition(distances_to_point_in_node, min(20, len(distances_to_point_in_node)-1))
-    #             # remove curr_idx from closest point
-    #             closest_point_ids = np.delete(closest_point_ids, np.where(closest_point_ids == x_idx)[0])
-    #             for k_idx, k in enumerate([5,10,20]):
-    #                 voting_labels = test_results["labels"][closest_point_ids[:k]]
-    #                 majority_voted_class = -1
-    #                 max_n_votes = 0
-    #                 for label in list(set(voting_labels)):
-    #                     label_count = (voting_labels == label).sum()
-    #                     if label_count > max_n_votes:
-    #                         max_n_votes = label_count
-    #                         majority_voted_class = label
-    #                 test_results_per_node[node_path]["{}NN_classification_pred".format(k)].append(majority_voted_class)
-    #                 test_results_per_node[node_path]["{}NN_classification_err".format(k)].append(test_results["labels"][x_idx] != majority_voted_class)
-    #
-    #         for k_idx, k in enumerate([5, 10, 20]):
-    #             test_results_per_node[node_path]["{}NN_classification_pred".format(k)] = np.asarray(test_results_per_node[node_path]["{}NN_classification_pred".format(k)], dtype=np.int)
-    #             test_results_per_node[node_path]["{}NN_classification_err".format(k)] = np.asarray(test_results_per_node[node_path]["{}NN_classification_err".format(k)], dtype=np.bool)
-    #
-    #         node = self.network.get_child_node(node_path)
-    #         if node.leaf:
-    #             test_results["cluster_classification_pred"][cur_node_x_ids] = test_results_per_node[node_path]["cluster_classification_pred"]
-    #             test_results["cluster_classification_acc"][cur_node_x_ids] = test_results_per_node[node_path]["cluster_classification_acc"]
-    #             test_results["5NN_classification_pred"][cur_node_x_ids] = test_results_per_node[node_path]["5NN_classification_pred"]
-    #             test_results["5NN_classification_err"][cur_node_x_ids] = test_results_per_node[node_path]["5NN_classification_err"]
-    #             test_results["10NN_classification_pred"][cur_node_x_ids] = test_results_per_node[node_path]["10NN_classification_pred"]
-    #             test_results["10NN_classification_err"][cur_node_x_ids] = test_results_per_node[node_path]["10NN_classification_err"]
-    #             test_results["20NN_classification_pred"][cur_node_x_ids] = test_results_per_node[node_path]["20NN_classification_pred"]
-    #             test_results["20NN_classification_err"][cur_node_x_ids] = test_results_per_node[node_path]["20NN_classification_err"]
+    def evaluation_epoch(self, test_loader, save_results_per_node=False):
+        self.eval()
+        losses = {}
+
+        n_images = len(test_loader.dataset)
+        if "RandomSampler" in test_loader.sampler.__class__.__name__:
+            warnings.warn("WARNING: evaluation is performed on shuffled test dataloader")
+        tree_depth = 1
+        for split_k, split in self.split_history.items():
+            if (split["depth"]+2) > tree_depth:
+                tree_depth = (split["depth"]+2)
+
+        test_results = {}
+        test_results["taken_pathes"] = [None] * n_images
+        test_results["labels"] = np.empty(n_images, dtype=np.int)
+        test_results["nll"] = np.empty(n_images, dtype=np.float)
+        test_results["recon_loss"] = np.empty(n_images, dtype=np.float)
+        test_results["cluster_classification_pred"] = np.empty(n_images, dtype=np.int)
+        test_results["cluster_classification_acc"] = np.empty(n_images, dtype=np.bool)
+        test_results["5NN_classification_pred"] = np.empty(n_images, dtype=np.int)
+        test_results["5NN_classification_err"] = np.empty(n_images, dtype=np.bool)
+        test_results["10NN_classification_pred"] = np.empty(n_images, dtype=np.int)
+        test_results["10NN_classification_err"] = np.empty(n_images, dtype=np.bool)
+        test_results["20NN_classification_pred"] = np.empty(n_images, dtype=np.int)
+        test_results["20NN_classification_err"] = np.empty(n_images, dtype=np.bool)
+        #TODO: "spread" kNN
+
+        test_results_per_node = {}
+        for node_path in self.network.get_node_pathes():
+            test_results_per_node[node_path] = dict()
+            test_results_per_node[node_path]["x_ids"] = []
+            test_results_per_node[node_path]["z"] = []
+            test_results_per_node[node_path]["recon_x"] = []
+            test_results_per_node[node_path]["nll"] = []
+            test_results_per_node[node_path]["recon_loss"] = []
+            test_results_per_node[node_path]["cluster_classification_pred"] = []
+            test_results_per_node[node_path]["cluster_classification_acc"] = []
+            test_results_per_node[node_path]["5NN_classification_pred"] = []
+            test_results_per_node[node_path]["5NN_classification_err"] = []
+            test_results_per_node[node_path]["10NN_classification_pred"] = []
+            test_results_per_node[node_path]["10NN_classification_err"] = []
+            test_results_per_node[node_path]["20NN_classification_pred"] = []
+            test_results_per_node[node_path]["20NN_classification_err"] = []
+
+        with torch.no_grad():
+            # Compute results per image
+            idx_offset = 0
+            for data in test_loader:
+                x = data['obs']
+                x = self.push_variable_to_device(x)
+                cur_x_ids = np.asarray(data["index"], dtype=np.int)
+                y = data['label'].squeeze()
+                test_results["labels"][cur_x_ids] = y.detach().cpu().numpy()
+
+                # forward
+                all_nodes_outputs = self.network.depth_first_forward_whole_branch_preorder(x)
+                for node_idx in range(len(all_nodes_outputs)):
+                    cur_node_path = all_nodes_outputs[node_idx][0][0]
+                    cur_node_x_ids = np.asarray(all_nodes_outputs[node_idx][1], dtype=np.int)
+                    cur_node_outputs = all_nodes_outputs[node_idx][2]
+                    loss_inputs = {key: cur_node_outputs[key] for key in self.loss_f.input_keys_list}
+                    cur_losses = self.loss_f(loss_inputs, reduction="none")
+                    test_results_per_node[cur_node_path]["x_ids"] += list(cur_x_ids[cur_node_x_ids])
+                    test_results_per_node[cur_node_path]["z"] += list(cur_node_outputs["z"].detach().cpu().numpy())
+                    test_results_per_node[cur_node_path]["recon_x"] += list(cur_node_outputs["recon_x"].detach().cpu().numpy())
+                    test_results_per_node[cur_node_path]["nll"] += list(cur_losses["total"].detach().cpu().numpy())
+                    test_results_per_node[cur_node_path]["recon_loss"] += list(cur_losses["recon"].detach().cpu().numpy())
+
+                    cur_node = self.network.get_child_node(cur_node_path)
+                    if cur_node.leaf:
+                        for x_idx in cur_node_x_ids:
+                            test_results["taken_pathes"][cur_x_ids[x_idx]] = cur_node_path
+                        test_results["nll"][cur_x_ids[cur_node_x_ids]] = cur_losses["total"].detach().cpu().numpy()
+                        test_results["recon_loss"][cur_x_ids[cur_node_x_ids]] = cur_losses["recon"].detach().cpu().numpy()
+
+        # compute results for classification
+        for node_path in self.network.get_node_pathes():
+            # update lists to numpy
+            test_results_per_node[node_path]["x_ids"] = np.asarray(test_results_per_node[node_path]["x_ids"], dtype = np.int)
+            test_results_per_node[node_path]["z"] = np.asarray(test_results_per_node[node_path]["z"], dtype = np.float)
+            test_results_per_node[node_path]["recon_x"] = np.asarray(test_results_per_node[node_path]["recon_x"], dtype=np.float)
+            test_results_per_node[node_path]["nll"] = np.asarray(test_results_per_node[node_path]["nll"],
+                                                                     dtype=np.float)
+            test_results_per_node[node_path]["recon_loss"] = np.asarray(test_results_per_node[node_path]["recon_loss"],
+                                                                     dtype=np.float)
+
+            # cluster classification accuracy
+            labels_in_node = test_results["labels"][test_results_per_node[node_path]["x_ids"]]
+            majority_voted_class = -1
+            max_n_votes = 0
+            for label in list(set(labels_in_node)):
+                label_count = (labels_in_node == label).sum()
+                if label_count > max_n_votes:
+                    max_n_votes = label_count
+                    majority_voted_class = label
+            cur_node_x_ids = test_results_per_node[node_path]["x_ids"]
+            test_results_per_node[node_path]["cluster_classification_pred"] = np.asarray([majority_voted_class] * len(cur_node_x_ids), dtype=np.int)
+            test_results_per_node[node_path]["cluster_classification_acc"] = (test_results["labels"][cur_node_x_ids] == majority_voted_class)
+
+            # k-NN classification accuracy
+            for x_idx in range(len(cur_node_x_ids)):
+                distances_to_point_in_node = np.linalg.norm(test_results_per_node[node_path]["z"][x_idx] - test_results_per_node[node_path]["z"], axis=1)
+                closest_point_ids = np.argpartition(distances_to_point_in_node, min(20, len(distances_to_point_in_node)-1))
+                # remove curr_idx from closest point
+                closest_point_ids = np.delete(closest_point_ids, np.where(closest_point_ids == x_idx)[0])
+                for k_idx, k in enumerate([5,10,20]):
+                    voting_labels = test_results["labels"][closest_point_ids[:k]]
+                    majority_voted_class = -1
+                    max_n_votes = 0
+                    for label in list(set(voting_labels)):
+                        label_count = (voting_labels == label).sum()
+                        if label_count > max_n_votes:
+                            max_n_votes = label_count
+                            majority_voted_class = label
+                    test_results_per_node[node_path]["{}NN_classification_pred".format(k)].append(majority_voted_class)
+                    test_results_per_node[node_path]["{}NN_classification_err".format(k)].append(test_results["labels"][x_idx] != majority_voted_class)
+
+            for k_idx, k in enumerate([5, 10, 20]):
+                test_results_per_node[node_path]["{}NN_classification_pred".format(k)] = np.asarray(test_results_per_node[node_path]["{}NN_classification_pred".format(k)], dtype=np.int)
+                test_results_per_node[node_path]["{}NN_classification_err".format(k)] = np.asarray(test_results_per_node[node_path]["{}NN_classification_err".format(k)], dtype=np.bool)
+
+            node = self.network.get_child_node(node_path)
+            if node.leaf:
+                test_results["cluster_classification_pred"][cur_node_x_ids] = test_results_per_node[node_path]["cluster_classification_pred"]
+                test_results["cluster_classification_acc"][cur_node_x_ids] = test_results_per_node[node_path]["cluster_classification_acc"]
+                test_results["5NN_classification_pred"][cur_node_x_ids] = test_results_per_node[node_path]["5NN_classification_pred"]
+                test_results["5NN_classification_err"][cur_node_x_ids] = test_results_per_node[node_path]["5NN_classification_err"]
+                test_results["10NN_classification_pred"][cur_node_x_ids] = test_results_per_node[node_path]["10NN_classification_pred"]
+                test_results["10NN_classification_err"][cur_node_x_ids] = test_results_per_node[node_path]["10NN_classification_err"]
+                test_results["20NN_classification_pred"][cur_node_x_ids] = test_results_per_node[node_path]["20NN_classification_pred"]
+                test_results["20NN_classification_err"][cur_node_x_ids] = test_results_per_node[node_path]["20NN_classification_err"]
 
 
 
@@ -1660,23 +1618,19 @@ class ConnectedEncoder(gr.dnn.networks.encoders.BaseDNNEncoder):
         if self.connect_lf:
             if self.lf.out_connection_type[0] == "conv":
                 connection_channels = self.lf.out_connection_type[1]
-                for ancestor_depth in range(self.depth):
-                    self.lf_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
+                self.lf_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
             elif self.lf.out_connection_type[0] == "lin":
                 connection_dim = self.lf.out_connection_type[1]
-                for ancestor_depth in range(self.depth):
-                    self.lf_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
+                self.lf_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
 
         ## gf
         if self.connect_gf:
             if self.gf.out_connection_type[0] == "conv":
                 connection_channels = self.gf.out_connection_type[1]
-                for ancestor_depth in range(self.depth):
-                    self.gf_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
+                self.gf_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
             elif self.gf.out_connection_type[0] == "lin":
                 connection_dim = self.gf.out_connection_type[1]
-                for ancestor_depth in range(self.depth):
-                    self.gf_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
+                self.gf_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
 
         initialization_net = initialization.get_initialization("kaiming_uniform")
         self.gf.apply(initialization_net)
@@ -1753,34 +1707,77 @@ class ConnectedEncoder(gr.dnn.networks.encoders.BaseDNNEncoder):
         return z, lf
 
 
-class ConnectedProjectionHead(nn.Module):
-    def __init__(self, projection_head_instance, depth, connect_proj=False, **kwargs):
-        nn.Module.__init__(self)
-        self.config = projection_head_instance.config
+class ConnectedDecoder(gr.dnn.networks.decoders.BaseDNNDecoder):
+    def __init__(self, decoder_instance, depth, connect_gfi=False, connect_lfi=False, connect_recon=False, **kwargs):
+        gr.dnn.networks.decoders.BaseDNNDecoder.__init__(self, config=decoder_instance.config)
 
         # connections and depth in the tree (number of connections)
-        self.connect_proj = connect_proj
+        self.connect_gfi = connect_gfi
+        self.connect_lfi = connect_lfi
+        self.connect_recon = connect_recon
         self.depth = depth
 
         # copy parent network layers
-        self.network = projection_head_instance.network
+        self.efi = decoder_instance.efi
+        self.gfi = decoder_instance.gfi
+        self.lfi = decoder_instance.lfi
 
+        # add lateral connections
+        ## gfi
+        if self.connect_gfi:
+            if self.efi.out_connection_type[0] == "conv":
+                connection_channels = self.efi.out_connection_type[1]
+                self.gfi_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
+            elif self.efi.out_connection_type[0] == "lin":
+                connection_dim = self.efi.out_connection_type[1]
+                self.gfi_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
+        ## lfi
+        if self.connect_lfi:
+            if self.gfi.out_connection_type[0] == "conv":
+                connection_channels = self.gfi.out_connection_type[1]
+                self.lfi_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
+            elif self.gfi.out_connection_type[0] == "lin":
+                connection_dim = self.gfi.out_connection_type[1]
+                self.lfi_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
 
-        # add lateral connections (linear layer projection head)
-        if self.connect_proj:
-            connection_dim = self.config.n_latents
-            self.network_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
-
+        ## lfi
+        if self.connect_recon:
+            if self.lfi.out_connection_type[0] == "conv":
+                connection_channels = self.lfi.out_connection_type[1]
+                self.recon_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False))
+            elif self.lfi.out_connection_type[0] == "lin":
+                connection_dim = self.lfi.out_connection_type[1]
+                self.recon_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
 
 
         initialization_net = initialization.get_initialization("kaiming_uniform")
-        self.network.apply(initialization_net)
+        self.efi.apply(initialization_net)
+        self.gfi.apply(initialization_net)
+        self.lfi.apply(initialization_net)
         initialization_c = initialization.get_initialization("uniform")
-        if self.connect_proj:
-            self.network_c.apply(initialization_c)
+        if self.connect_gfi:
+            self.gfi_c.apply(initialization_c)
+        if self.connect_lfi:
+            self.lfi_c.apply(initialization_c)
+        if self.connect_recon:
+            self.recon_c.apply(initialization_c)
 
+        """
+        #initialization_net = initialization.get_initialization("null")
+        #self.efi.apply(initialization_net)
+        #self.gfi.apply(initialization_net)
+        #self.lfi.apply(initialization_net)
+        #initialization_c = initialization.get_initialization("connections_identity")
+        initialization_c = initialization.get_initialization("null")
+        if self.connect_gfi:
+            self.gfi_c.apply(initialization_c)
+        if self.connect_lfi:
+            self.lfi_c.apply(initialization_c)
+        if self.connect_recon:
+            self.recon_c.apply(initialization_c)
+        """
 
-    def forward(self, z, parent_proj_z=None):
+    def forward(self, z, parent_gfi=None, parent_lfi=None, parent_recon_x=None):
         if torch._C._get_tracing_state():
             return self.forward_for_graph_tracing(z)
 
@@ -1788,21 +1785,48 @@ class ConnectedProjectionHead(nn.Module):
             z = z.unsqueeze(dim=-1).unsqueeze(dim=-1)
 
         # global feature map
-        proj_z = self.network(z)
+        gfi = self.efi(z)
         # add the connections
-        if self.connect_proj:
-            proj_z += self.network_c(parent_proj_z)
+        if self.connect_gfi:
+            gfi += self.gfi_c(parent_gfi)
 
-        return proj_z
+        # local feature map
+        lfi = self.gfi(gfi)
+        # add the connections
+        if self.connect_lfi:
+            lfi += self.lfi_c(parent_lfi)
 
-    def forward_for_graph_tracing(self, z, parent_proj_z=None):
-        if z.dim() == 2 and type(self).__name__ == "DumoulinDecoder":  # B*n_latents -> B*n_latents*1*1
+        # recon_x
+        recon_x = self.lfi(lfi)
+        # add the connections
+        if self.connect_recon:
+            recon_x += self.recon_c(parent_recon_x)
+
+        # decoder output
+        decoder_outputs = {"z": z, "gfi": gfi, "lfi": lfi, "recon_x": recon_x}
+
+        return decoder_outputs
+
+    def forward_for_graph_tracing(self, z,  parent_gfi=None, parent_lfi=None, parent_recon_x=None):
+        if z.dim() == 2:  # B*n_latents -> B*n_latents*1*1
             z = z.unsqueeze(dim=-1).unsqueeze(dim=-1)
 
         # global feature map
-        proj_z = self.network(z)
+        gfi = self.efi(z)
         # add the connections
-        if self.connect_proj:
-            proj_z += self.network_c(parent_proj_z)
+        if self.connect_gfi:
+            gfi += self.gfi_c(parent_gfi)
 
-        return proj_z
+        # local feature map
+        lfi = self.gfi(gfi)
+        # add the connections
+        if self.connect_lfi:
+            lfi += self.lfi_c(parent_lfi)
+
+        # recon_x
+        recon_x = self.lfi(lfi)
+        # add the connections
+        if self.connect_recon:
+            recon_x += self.recon_c(parent_recon_x)
+
+        return recon_x
