@@ -1,6 +1,5 @@
-from copy import deepcopy
 from addict import Dict
-from image_representation.representations.torch_nn import TorchNNRepresentation, VAE, BetaVAE, AnnealedVAE, BetaTCVAE
+from image_representation import TorchNNRepresentation, VAE, BetaVAE, AnnealedVAE, BetaTCVAE
 from image_representation.utils.tensorboard import resize_embeddings
 import numpy as np
 import os
@@ -90,7 +89,7 @@ def get_combined_triplet_class(base_class):
 
         def __reduce__(self):
             base_class_str = base_class.__name__[:-5]
-            cur_class = eval("gr.models.{}Triplet".format(base_class_str))
+            cur_class = eval("image_representation.representations.torch_nn.{}Triplet".format(base_class_str))
             self.__class__ = cur_class
             return (self.__class__, (self.config,))
 
@@ -148,7 +147,7 @@ class Triplet(TorchNNRepresentation):
             self.network.fc_cast = nn.Linear(self.config.network.parameters.n_latents * 4,
                                              self.config.network.parameters.n_latents)
     def calc_embedding(self, x):
-        x = self.push_variable_to_device(x)
+        x = x.to(self.config.device)
         self.eval()
         with torch.no_grad():
             z = self.network.encoder.calc_embedding(x)
@@ -189,14 +188,10 @@ class Triplet(TorchNNRepresentation):
         if logger is not None:
             dummy_x_ref = torch.FloatTensor(1, self.config.network.parameters.n_channels,
                                             self.config.network.parameters.input_size[0],
-                                            self.config.network.parameters.input_size[1]).uniform_(0, 1)
-            dummy_x_a = dummy_x_ref
-            dummy_x_b = dummy_x_ref
-            dummy_x_c = dummy_x_ref
-            dummy_x_ref = self.push_variable_to_device(dummy_x_ref)
-            dummy_x_a = self.push_variable_to_device(dummy_x_a)
-            dummy_x_b = self.push_variable_to_device(dummy_x_b)
-            dummy_x_c = self.push_variable_to_device(dummy_x_c)
+                                            self.config.network.parameters.input_size[1]).uniform_(0, 1).to(self.config.device)
+            dummy_x_a = dummy_x_ref.to(self.config.device)
+            dummy_x_b = dummy_x_ref.to(self.config.device)
+            dummy_x_c = dummy_x_ref.to(self.config.device)
             self.eval()
             with torch.no_grad():
                 logger.add_graph(self, (dummy_x_ref, dummy_x_a, dummy_x_b, dummy_x_c), verbose=False)
@@ -251,10 +246,10 @@ class Triplet(TorchNNRepresentation):
         losses = {}
         for data in train_loader:
             data_ref, data_a, data_b, data_c = data
-            x_ref = self.push_variable_to_device(data_ref["obs"])
-            x_a = self.push_variable_to_device(data_a["obs"])
-            x_b = self.push_variable_to_device(data_b["obs"])
-            x_c = self.push_variable_to_device(data_c["obs"])
+            x_ref = data_ref["obs"].to(self.config.device)
+            x_a = data_a["obs"].to(self.config.device)
+            x_b = data_b["obs"].to(self.config.device)
+            x_c = data_c["obs"].to(self.config.device)
             # forward
             model_outputs = self.forward(x_ref, x_a, x_b, x_c)
             loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
@@ -300,10 +295,10 @@ class Triplet(TorchNNRepresentation):
         with torch.no_grad():
             for data in valid_loader:
                 data_ref, data_a, data_b, data_c = data
-                x_ref = self.push_variable_to_device(data_ref["obs"])
-                x_a = self.push_variable_to_device(data_a["obs"])
-                x_b = self.push_variable_to_device(data_b["obs"])
-                x_c = self.push_variable_to_device(data_c["obs"])
+                x_ref = data_ref["obs"].to(self.config.device)
+                x_a = data_a["obs"].to(self.config.device)
+                x_b = data_b["obs"].to(self.config.device)
+                x_c = data_c["obs"].to(self.config.device)
                 # forward
                 model_outputs = self.forward(x_ref, x_a, x_b, x_c)
                 loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
@@ -374,10 +369,10 @@ class Triplet(TorchNNRepresentation):
             train_quadruplets = train_loader.dataset.annotated_quadruplets
             train_acc = 0
             for quadruplet in train_quadruplets:
-                x_ref = self.push_variable_to_device(train_loader.dataset.get_image(quadruplet[0])).unsqueeze(0)
-                x_a = self.push_variable_to_device(train_loader.dataset.get_image(quadruplet[1])).unsqueeze(0)
-                x_b = self.push_variable_to_device(train_loader.dataset.get_image(quadruplet[2])).unsqueeze(0)
-                x_c = self.push_variable_to_device(train_loader.dataset.get_image(quadruplet[3])).unsqueeze(0)
+                x_ref = train_loader.dataset.get_image(quadruplet[0]).unsqueeze(0).to(self.config.device)
+                x_a = train_loader.dataset.get_image(quadruplet[1]).unsqueeze(0).to(self.config.device)
+                x_b = train_loader.dataset.get_image(quadruplet[2]).unsqueeze(0).to(self.config.device)
+                x_c = train_loader.dataset.get_image(quadruplet[3]).unsqueeze(0).to(self.config.device)
                 model_outputs = self.forward(x_ref, x_a, x_b, x_c)
                 quadruplet_z = [model_outputs['x_ref_outputs']['z'], model_outputs['x_a_outputs']['z'],
                                 model_outputs['x_b_outputs']['z'], model_outputs['x_c_outputs']['z']]
@@ -409,10 +404,10 @@ class Triplet(TorchNNRepresentation):
             test_quadruplets = test_loader.dataset.annotated_quadruplets
             test_acc = 0
             for quadruplet in test_quadruplets:
-                x_ref = self.push_variable_to_device(test_loader.dataset.get_image(quadruplet[0])).unsqueeze(0)
-                x_a = self.push_variable_to_device(test_loader.dataset.get_image(quadruplet[1])).unsqueeze(0)
-                x_b = self.push_variable_to_device(test_loader.dataset.get_image(quadruplet[2])).unsqueeze(0)
-                x_c = self.push_variable_to_device(test_loader.dataset.get_image(quadruplet[3])).unsqueeze(0)
+                x_ref = test_loader.dataset.get_image(quadruplet[0]).unsqueeze(0).to(self.config.device)
+                x_a = test_loader.dataset.get_image(quadruplet[1]).unsqueeze(0).to(self.config.device)
+                x_b = test_loader.dataset.get_image(quadruplet[2]).unsqueeze(0).to(self.config.device)
+                x_c = test_loader.dataset.get_image(quadruplet[3]).unsqueeze(0).to(self.config.device)
                 model_outputs = self.forward(x_ref, x_a, x_b, x_c)
                 quadruplet_z = [model_outputs['x_ref_outputs']['z'], model_outputs['x_a_outputs']['z'],
                                 model_outputs['x_b_outputs']['z'], model_outputs['x_c_outputs']['z']]
@@ -459,12 +454,6 @@ class Triplet(TorchNNRepresentation):
             dist = ((z_a - z_b).abs() * attention).max(dim=1)[0].pow(2).item()
 
         return dist
-
-    def get_encoder(self):
-        return deepcopy(self.network.encoder)
-
-    def get_decoder(self):
-        return None
 
 
 VAETriplet_local = get_combined_triplet_class(VAE)

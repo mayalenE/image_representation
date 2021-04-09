@@ -1,4 +1,4 @@
-from goalrepresent.helper.nnmodulehelper import Roll, SphericPad
+from image_representation.utils.torch_nn_module import Roll, SphericPad
 import numpy as np
 import random
 import math

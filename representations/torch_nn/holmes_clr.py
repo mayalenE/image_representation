@@ -1,7 +1,8 @@
 from copy import deepcopy
 from addict import Dict
 import image_representation
-from image_representation.representations.torch_nn import TorchNNRepresentation, encoders, TripletCLR, SimCLR
+from image_representation import TorchNNRepresentation, TripletCLR, SimCLR
+from image_representation.representations.torch_nn import encoders
 from image_representation.utils.tensorboard import resize_embeddings
 from image_representation.datasets.torch_dataset import MIXEDDataset
 from image_representation.utils.torch_nn_init import get_weights_init
@@ -409,7 +410,7 @@ class HOLMES_CLR(TorchNNRepresentation):
 
         # node config
         default_config.node_classname = "SimCLR"
-        default_config.node = eval("gr.models.{}Model.default_config()".format(default_config.node_classname))
+        default_config.node = eval("image_representation.representations.torch_nn.{}.default_config()".format(default_config.node_classname))
         default_config.node.create_connections = {"lf": True, "gf": False, "proj": False}
 
         # loss parameters

@@ -49,9 +49,9 @@ Base class of representations that are also torch neural modules. Inherits from 
 	- **config.network**:
 		- *config.network.name*:
 		- *config.network.parameters*:
-		- *config.network.initialization*:
-		- *config.network.initialization.name*:
-		- *config.network.initialization.parameters*:
+		- *config.network.weights_init*:
+		- *config.network.weights_init.name*:
+		- *config.network.weights_init.parameters*:
 	- **config.device**: 'cpu', 'cuda'
 	- **config.loss**:
 		- *config.loss.name*
@@ -70,7 +70,7 @@ Base class of representations that are also torch neural modules. Inherits from 
 
 Aditionnally to Representation's main API methods, the following main API methods must be implemented:
 - **set_network(network_name, network_parameters)**:
-- **init_network(initialization_name, initialization_parameters)**:
+- **init_network(weights_init_name, weights_init_parameters)**:
 - **set_loss(loss_name, loss_parameters)**:
 - **set_optimizer (optimizer_name, optimizer_parameters)**:
 - **run_training (train_loader, n_epochs, valid_loader = None, training_logger=None)**:

@@ -1,6 +1,6 @@
 from copy import deepcopy
 from addict import Dict
-from image_representation.representations.torch_nn import TorchNNRepresentation
+from image_representation import TorchNNRepresentation
 from image_representation.representations.torch_nn import decoders, discriminators
 from image_representation.utils.tensorboard import resize_embeddings
 from itertools import chain

@@ -1,6 +1,4 @@
-from copy import deepcopy
-from addict import Dict
-from image_representation.representations.torch_nn import TorchNNRepresentation, VAE, BetaVAE, AnnealedVAE, BetaTCVAE
+from image_representation import TorchNNRepresentation, VAE, BetaVAE, AnnealedVAE, BetaTCVAE
 from image_representation.utils.tensorboard import resize_embeddings
 import numpy as np
 import os

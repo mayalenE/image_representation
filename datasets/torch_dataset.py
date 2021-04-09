@@ -1,11 +1,10 @@
-import goalrepresent as gr
-from goalrepresent.datasets.image.preprocess import RandomCenterCrop, RandomRoll,  RandomSphericalRotation, RandomGaussianBlur
 import h5py
 import numpy as np
 import os
 import torch
 from torch.utils.data import Dataset
 import torchvision
+from image_representation.datasets.preprocess import RandomCenterCrop, RandomRoll,  RandomSphericalRotation, RandomGaussianBlur
 from torchvision.transforms import CenterCrop, Compose, ToTensor, ToPILImage, RandomHorizontalFlip, RandomVerticalFlip, RandomRotation, ColorJitter, Pad, RandomApply, RandomResizedCrop
 import warnings
 from PIL import Image
@@ -21,7 +20,7 @@ def get_dataset(dataset_name):
     """
     dataset_name: string such that the model called is <dataset_name>Dataset
     """
-    return eval("gr.datasets.{}Dataset".format(dataset_name.upper()))
+    return eval("image_representation.datasets.{}Dataset".format(dataset_name.upper()))
 
 # ===========================
 # Mixed Datasets

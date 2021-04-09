@@ -1,7 +1,8 @@
 from copy import deepcopy
 from addict import Dict
 import image_representation
-from image_representation.representations.torch_nn import TorchNNRepresentation, encoders, decoders, VAE, BetaVAE, AnnealedVAE, BetaTCVAE
+from image_representation import TorchNNRepresentation, VAE, BetaVAE, AnnealedVAE, BetaTCVAE
+from image_representation.representations.torch_nn import encoders, decoders
 from image_representation.utils.tensorboard import resize_embeddings
 from image_representation.datasets.torch_dataset import MIXEDDataset
 from image_representation.utils.torch_nn_init import get_weights_init
@@ -434,7 +435,7 @@ class HOLMES_VAE(TorchNNRepresentation):
 
         # node config
         default_config.node_classname = "VAE"
-        default_config.node = eval("gr.models.{}Model.default_config()".format(default_config.node_classname))
+        default_config.node = eval("image_representation.representations.torch_nn.default_config()".format(default_config.node_classname))
         default_config.node.create_connections = {"lf": True, "gf": False, "gfi": True, "lfi": True, "recon": True}
 
         # loss parameters
