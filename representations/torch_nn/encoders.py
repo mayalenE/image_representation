@@ -1,14 +1,12 @@
 from abc import ABCMeta
-import goalrepresent as gr
-from goalrepresent.helper.nnmodulehelper import Flatten, conv2d_output_sizes
+from addict import Dict
+from image_representation.utils.torch_nn_module import Flatten, conv2d_output_sizes
 import math
 import torch
 from torch import nn
 import torch.nn.functional as F
-import warnings
 
-
-class BaseDNNEncoder(nn.Module, gr.BaseEncoder, metaclass=ABCMeta):
+class Encoder(nn.Module, metaclass=ABCMeta):
     """
     Base Encoder class
     User can specify variable number of convolutional layers to deal with images of different sizes (eg: 3 layers for 32*32, 6 layers for 256*256 images)
@@ -123,7 +121,7 @@ Encoder Modules
 ========================================================================================================================="""
 
 
-class BurgessEncoder(BaseDNNEncoder):
+class BurgessEncoder(Encoder):
     """ 
     Extended Encoder of the model proposed in Burgess et al. "Understanding disentangling in $\beta$-VAE"
     
@@ -136,7 +134,7 @@ class BurgessEncoder(BaseDNNEncoder):
     """
 
     def __init__(self, config=None, **kwargs):
-        BaseDNNEncoder.__init__(self, config=config, **kwargs)
+        Encoder.__init__(self, config=config, **kwargs)
 
         # need square image input
         assert self.config.input_size[0] == self.config.input_size[1], "BurgessEncoder needs a square image input size"
@@ -202,7 +200,7 @@ class BurgessEncoder(BaseDNNEncoder):
             self.add_module("af", nn.Linear(hidden_dim, 4 * self.config.n_latents))
 
 
-class HjelmEncoder(BaseDNNEncoder):
+class HjelmEncoder(Encoder):
     """ 
     Extended Encoder of the model proposed in Hjelm et al. "Learning deep representations by mutual information estimation and maximization"
     
@@ -215,7 +213,7 @@ class HjelmEncoder(BaseDNNEncoder):
     """
 
     def __init__(self, config=None, **kwargs):
-        BaseDNNEncoder.__init__(self, config=config, **kwargs)
+        Encoder.__init__(self, config=config, **kwargs)
 
         # need square image input
         assert self.config.input_size[0] == self.config.input_size[1], "HjlemEncoder needs a square image input size"
@@ -288,14 +286,14 @@ class HjelmEncoder(BaseDNNEncoder):
         # batch norm cannot deal with batch_size 1 in train mode
         if self.training and x.size(0) == 1:
             self.eval()
-            encoder_outputs = BaseDNNEncoder.forward(self, x)
+            encoder_outputs = Encoder.forward(self, x)
             self.train()
         else:
-            encoder_outputs = BaseDNNEncoder.forward(self, x)
+            encoder_outputs = Encoder.forward(self, x)
         return encoder_outputs
 
 
-class DumoulinEncoder(BaseDNNEncoder):
+class DumoulinEncoder(Encoder):
     """ 
     Some Alexnet-inspired encoder with BatchNorm and LeakyReLU as proposed in Dumoulin et al. "Adversarially learned inference"
     
@@ -316,7 +314,7 @@ class DumoulinEncoder(BaseDNNEncoder):
     """
 
     def __init__(self, config=None, **kwargs):
-        BaseDNNEncoder.__init__(self, config=config, **kwargs)
+        Encoder.__init__(self, config=config, **kwargs)
 
         # need square and power of 2 image size input
         power = math.log(self.config.input_size[0], 2)
@@ -408,23 +406,23 @@ class DumoulinEncoder(BaseDNNEncoder):
 
         # attention feature
         if self.config.use_attention:
-            self.add_module("af", nn.Linear(hidden_dim, 4 * self.config.n_latents))
+            self.add_module("af", nn.Linear(self.config.hidden_dim, 4 * self.config.n_latents))
 
     def forward(self, x):
         # batch norm cannot deal with batch_size 1 in train mode
         if self.training and x.size(0) == 1:
             self.eval()
-            encoder_outputs = BaseDNNEncoder.forward(x)
+            encoder_outputs = Encoder.forward(x)
             self.train()
         else:
-            encoder_outputs = BaseDNNEncoder.forward(x)
+            encoder_outputs = Encoder.forward(x)
         return encoder_outputs
 
 
-class MNISTEncoder(BaseDNNEncoder):
+class MNISTEncoder(Encoder):
 
     def __init__(self, config=None, **kwargs):
-        BaseDNNEncoder.__init__(self, config=config, **kwargs)
+        Encoder.__init__(self, config=config, **kwargs)
 
         # need square image input
         assert self.config.input_size[0] == self.config.input_size[1], "MNISTEncoder needs a square image input size"
@@ -469,13 +467,13 @@ class MNISTEncoder(BaseDNNEncoder):
 
         # attention feature
         if self.config.use_attention:
-            self.add_module("af", nn.Linear(hidden_dim, 4 * self.config.n_latents))
+            self.add_module("af", nn.Linear(self.config.hidden_dim, 4 * self.config.n_latents))
 
 
-class CedricEncoder(BaseDNNEncoder):
+class CedricEncoder(Encoder):
 
     def __init__(self, config=None, **kwargs):
-        BaseDNNEncoder.__init__(self, config=config, **kwargs)
+        Encoder.__init__(self, config=config, **kwargs)
 
         # need square image input
         assert self.config.input_size[0] == self.config.input_size[1], "CedricEncoder needs a square image input size"

@@ -1,12 +1,12 @@
 from abc import ABCMeta
-import goalrepresent as gr
-from goalrepresent.helper.nnmodulehelper import Channelize, conv2d_output_sizes, convtranspose2d_get_output_padding
+from addict import Dict
+from image_representation.utils.torch_nn_module import Channelize, conv2d_output_sizes, convtranspose2d_get_output_padding
 import math
 import torch
 from torch import nn
 
 
-class BaseDNNDecoder(nn.Module, metaclass=ABCMeta):
+class Decoder(nn.Module, metaclass=ABCMeta):
     """
     Base Decoder class
     User can specify variable number of convolutional layers to deal with images of different sizes (eg: 3 layers for 32*32 images3 layers for 32*32 images, 6 layers for 256*256 images)
@@ -86,10 +86,10 @@ Decoder Modules
 ========================================================================================================================="""
 
 
-class BurgessDecoder(BaseDNNDecoder):
+class BurgessDecoder(Decoder):
 
     def __init__(self, config=None, **kwargs):
-        BaseDNNDecoder.__init__(self, config=config, **kwargs)
+        Decoder.__init__(self, config=config, **kwargs)
 
         # network architecture
         # WARNING: incrementation order follow the encoder top-down order
@@ -150,10 +150,10 @@ class BurgessDecoder(BaseDNNDecoder):
         self.lfi.out_connection_type = ("conv", self.config.n_channels)
 
 
-class HjelmDecoder(BaseDNNDecoder):
+class HjelmDecoder(Decoder):
 
     def __init__(self, config=None, **kwargs):
-        BaseDNNDecoder.__init__(self, config=config, **kwargs)
+        Decoder.__init__(self, config=config, **kwargs)
 
         # network architecture
         # WARNING: incrementation order follow the encoder top-down order
@@ -218,10 +218,10 @@ class HjelmDecoder(BaseDNNDecoder):
         self.lfi.out_connection_type = ("conv", self.config.n_channels)
 
 
-class DumoulinDecoder(BaseDNNDecoder):
+class DumoulinDecoder(Decoder):
 
     def __init__(self, config=None, **kwargs):
-        BaseDNNDecoder.__init__(self, config=config, **kwargs)
+        Decoder.__init__(self, config=config, **kwargs)
 
         # need square and power of 2 image size input
         power = math.log(self.config.input_size[0], 2)
@@ -319,10 +319,10 @@ class DumoulinDecoder(BaseDNNDecoder):
         self.lfi.out_connection_type = ("conv", self.config.n_channels)
 
 
-class MNISTDecoder(BaseDNNDecoder):
+class MNISTDecoder(Decoder):
 
     def __init__(self, config=None, **kwargs):
-        BaseDNNDecoder.__init__(self, config=config, **kwargs)
+        Decoder.__init__(self, config=config, **kwargs)
 
         # network architecture
         if ("linear_layers_dim" not in self.config) or (self.config.linear_layers_dim is None):
@@ -357,10 +357,10 @@ class MNISTDecoder(BaseDNNDecoder):
         self.lfi.out_connection_type = ("conv", self.config.n_channels)
 
 
-class CedricDecoder(BaseDNNDecoder):
+class CedricDecoder(Decoder):
 
     def __init__(self, config=None, **kwargs):
-        BaseDNNDecoder.__init__(self, config=config, **kwargs)
+        Decoder.__init__(self, config=config, **kwargs)
 
         # network architecture
         # WARNING: incrementation order follow the encoder top-down order

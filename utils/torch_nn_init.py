@@ -4,7 +4,7 @@ import torch
 from torch.nn.init import kaiming_normal_, kaiming_uniform_, xavier_normal_, xavier_uniform_, uniform_, eye_
         
 
-def get_initialization(initialization_name):
+def get_weights_init(initialization_name):
     '''
     initialization_name: string such that the function called is weights_init_<initialization_name>
     '''

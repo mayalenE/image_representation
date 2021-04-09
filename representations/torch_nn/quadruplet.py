@@ -1,6 +1,7 @@
-import goalrepresent as gr
-from goalrepresent import models
-from goalrepresent.helper import tensorboardhelper
+from copy import deepcopy
+from addict import Dict
+from image_representation.representations.torch_nn import TorchNNRepresentation, VAE, BetaVAE, AnnealedVAE, BetaTCVAE
+from image_representation.utils.tensorboard import resize_embeddings
 import numpy as np
 import os
 import sys
@@ -208,7 +209,7 @@ class QuadrupletNet(nn.Module):
             logger.add_image("reconstructions", img, self.n_epochs)
 
         if record_embeddings:
-            images = tensorboardhelper.resize_embeddings(images)
+            images = resize_embeddings(images)
             logger.add_embedding(
                 embeddings,
                 metadata=labels,
@@ -296,10 +297,10 @@ class QuadrupletNet(nn.Module):
         return train_acc, test_acc
 
 
-class VAEQuadrupletModel(models.VAEModel, QuadrupletNet):
+class VAEQuadruplet(VAE, QuadrupletNet):
     @staticmethod
     def default_config():
-        default_config = models.VAEModel.default_config()
+        default_config = VAE.default_config()
 
         # loss parameters
         default_config.loss.name = "Quadruplet"
@@ -313,10 +314,10 @@ class VAEQuadrupletModel(models.VAEModel, QuadrupletNet):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        models.VAEModel.__init__(self, config=config, **kwargs)
+        VAE.__init__(self, config=config, **kwargs)
 
         if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
-            model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
+            model = TorchNNRepresentation.load(config.pretrained_model_filepath, map_location=self.config.device)
             if hasattr(model, "config"):
                 self.config = model.config
                 self.config.update(self.config)
@@ -330,7 +331,7 @@ class VAEQuadrupletModel(models.VAEModel, QuadrupletNet):
                     self.network.load_state_dict(model.network.state_dict())
 
     def set_network(self, network_name, network_parameters):
-        models.VAEModel.set_network(self, network_name, network_parameters)
+        VAE.set_network(self, network_name, network_parameters)
         if self.network.encoder.config.use_attention:
             self.network.fc_cast = nn.Linear(self.config.network.parameters.n_latents * 4,
                                              self.config.network.parameters.n_latents)
@@ -339,7 +340,7 @@ class VAEQuadrupletModel(models.VAEModel, QuadrupletNet):
     def forward(self, *args):
         if len(args) == 1:
             x = args[0]
-            return models.VAEModel.forward(self, x)
+            return VAE.forward(self, x)
         elif len(args) == 4:
             x_pos_a = args[0]
             x_pos_b = args[1]
@@ -348,7 +349,7 @@ class VAEQuadrupletModel(models.VAEModel, QuadrupletNet):
             return QuadrupletNet.forward(self, x_pos_a, x_pos_b, x_neg_a, x_neg_b)
         else:
             raise ValueError(
-                "VAEQuadrupletModel can take either one input image (VAE) or four input images (Quadruplet), not {}".format(
+                "VAEQuadruplet can take either one input image (VAE) or four input images (Quadruplet), not {}".format(
                     len(args)))
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
@@ -361,10 +362,10 @@ class VAEQuadrupletModel(models.VAEModel, QuadrupletNet):
         return QuadrupletNet.valid_epoch(self, valid_loader, logger=logger)
 
 
-class BetaVAEQuadrupletModel(models.BetaVAEModel, QuadrupletNet):
+class BetaVAEQuadruplet(BetaVAE, QuadrupletNet):
     @staticmethod
     def default_config():
-        default_config = models.BetaVAEModel.default_config()
+        default_config = BetaVAE.default_config()
 
         # loss parameters
         default_config.loss.name = "Quadruplet"
@@ -378,10 +379,10 @@ class BetaVAEQuadrupletModel(models.BetaVAEModel, QuadrupletNet):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        models.BetaVAEModel.__init__(self, config=config, **kwargs)
+        BetaVAE.__init__(self, config=config, **kwargs)
 
         if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
-            model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
+            model = TorchNNRepresentation.load(config.pretrained_model_filepath, map_location=self.config.device)
             if hasattr(model, "config"):
                 self.config = model.config
                 self.config.update(self.config)
@@ -395,7 +396,7 @@ class BetaVAEQuadrupletModel(models.BetaVAEModel, QuadrupletNet):
                     self.network.load_state_dict(model.network.state_dict())
 
     def set_network(self, network_name, network_parameters):
-        models.BetaVAEModel.set_network(self, network_name, network_parameters)
+        BetaVAE.set_network(self, network_name, network_parameters)
         if self.network.encoder.config.use_attention:
             self.network.fc_cast = nn.Linear(self.config.network.parameters.n_latents * 4,
                                              self.config.network.parameters.n_latents)
@@ -404,7 +405,7 @@ class BetaVAEQuadrupletModel(models.BetaVAEModel, QuadrupletNet):
     def forward(self, *args):
         if len(args) == 1:
             x = args[0]
-            return models.BetaVAEModel.forward(self, x)
+            return BetaVAE.forward(self, x)
         elif len(args) == 4:
             x_pos_a = args[0]
             x_pos_b = args[1]
@@ -413,7 +414,7 @@ class BetaVAEQuadrupletModel(models.BetaVAEModel, QuadrupletNet):
             return QuadrupletNet.forward(self, x_pos_a, x_pos_b, x_neg_a, x_neg_b)
         else:
             raise ValueError(
-                "BetaVAEQuadrupletModel can take either one input image (BetaVAE) or four input images (Quadruplet), not {}".format(
+                "BetaVAEQuadruplet can take either one input image (BetaVAE) or four input images (Quadruplet), not {}".format(
                     len(args)))
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
@@ -427,10 +428,10 @@ class BetaVAEQuadrupletModel(models.BetaVAEModel, QuadrupletNet):
         return QuadrupletNet.valid_epoch(self, valid_loader, logger=logger)
 
 
-class AnnealedVAEQuadrupletModel(models.AnnealedVAEModel, QuadrupletNet):
+class AnnealedVAEQuadruplet(AnnealedVAE, QuadrupletNet):
     @staticmethod
     def default_config():
-        default_config = models.AnnealedVAEModel.default_config()
+        default_config = AnnealedVAE.default_config()
 
         # loss parameters
         default_config.loss.name = "Quadruplet"
@@ -444,10 +445,10 @@ class AnnealedVAEQuadrupletModel(models.AnnealedVAEModel, QuadrupletNet):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        models.AnnealedVAEModel.__init__(self, config=config, **kwargs)
+        AnnealedVAE.__init__(self, config=config, **kwargs)
 
         if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
-            model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
+            model = TorchNNRepresentation.load(config.pretrained_model_filepath, map_location=self.config.device)
             if hasattr(model, "config"):
                 self.config = model.config
                 self.config.update(self.config)
@@ -461,7 +462,7 @@ class AnnealedVAEQuadrupletModel(models.AnnealedVAEModel, QuadrupletNet):
                     self.network.load_state_dict(model.network.state_dict())
 
     def set_network(self, network_name, network_parameters):
-        models.AnnealedVAEModel.set_network(self, network_name, network_parameters)
+        AnnealedVAE.set_network(self, network_name, network_parameters)
         if self.network.encoder.config.use_attention:
             self.network.fc_cast = nn.Linear(self.config.network.parameters.n_latents * 4,
                                              self.config.network.parameters.n_latents)
@@ -470,7 +471,7 @@ class AnnealedVAEQuadrupletModel(models.AnnealedVAEModel, QuadrupletNet):
     def forward(self, *args):
         if len(args) == 1:
             x = args[0]
-            return models.AnnealedVAEModel.forward(self, x)
+            return AnnealedVAE.forward(self, x)
         elif len(args) == 4:
             x_pos_a = args[0]
             x_pos_b = args[1]
@@ -479,7 +480,7 @@ class AnnealedVAEQuadrupletModel(models.AnnealedVAEModel, QuadrupletNet):
             return QuadrupletNet.forward(self, x_pos_a, x_pos_b, x_neg_a, x_neg_b)
         else:
             raise ValueError(
-                "AnnealedVAEQuadrupletModel can take either one input image (AnnealedVAE) or four input images (Quadruplet), not {}".format(
+                "AnnealedVAEQuadruplet can take either one input image (AnnealedVAE) or four input images (Quadruplet), not {}".format(
                     len(args)))
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
@@ -493,10 +494,10 @@ class AnnealedVAEQuadrupletModel(models.AnnealedVAEModel, QuadrupletNet):
         return QuadrupletNet.valid_epoch(self, valid_loader, logger=logger)
 
 
-class BetaTCVAEQuadrupletModel(models.BetaTCVAEModel, QuadrupletNet):
+class BetaTCVAEQuadruplet(BetaTCVAE, QuadrupletNet):
     @staticmethod
     def default_config():
-        default_config = models.BetaTCVAEModel.default_config()
+        default_config = BetaTCVAE.default_config()
 
         # loss parameters
         default_config.loss.name = "Quadruplet"
@@ -510,10 +511,10 @@ class BetaTCVAEQuadrupletModel(models.BetaTCVAEModel, QuadrupletNet):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        models.BetaTCVAEModel.__init__(self, config=config, **kwargs)
+        BetaTCVAE.__init__(self, config=config, **kwargs)
 
         if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
-            model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
+            model = TorchNNRepresentation.load(config.pretrained_model_filepath, map_location=self.config.device)
             if hasattr(model, "config"):
                 self.config = model.config
                 self.config.update(self.config)
@@ -527,7 +528,7 @@ class BetaTCVAEQuadrupletModel(models.BetaTCVAEModel, QuadrupletNet):
                     self.network.load_state_dict(model.network.state_dict())
 
     def set_network(self, network_name, network_parameters):
-        models.BetaTCVAEModel.set_network(self, network_name, network_parameters)
+        BetaTCVAE.set_network(self, network_name, network_parameters)
         if self.network.encoder.config.use_attention:
             self.network.fc_cast = nn.Linear(self.config.network.parameters.n_latents * 4,
                                              self.config.network.parameters.n_latents)
@@ -536,7 +537,7 @@ class BetaTCVAEQuadrupletModel(models.BetaTCVAEModel, QuadrupletNet):
     def forward(self, *args):
         if len(args) == 1:
             x = args[0]
-            return models.BetaTCVAEModel.forward(self, x)
+            return BetaTCVAE.forward(self, x)
         elif len(args) == 4:
             x_pos_a = args[0]
             x_pos_b = args[1]
@@ -545,7 +546,7 @@ class BetaTCVAEQuadrupletModel(models.BetaTCVAEModel, QuadrupletNet):
             return QuadrupletNet.forward(self, x_pos_a, x_pos_b, x_neg_a, x_neg_b)
         else:
             raise ValueError(
-                "BetaTCVAEQuadrupletModel can take either one input image (BetaTCVAE) or four input images (Quadruplet), not {}".format(
+                "BetaTCVAEQuadruplet can take either one input image (BetaTCVAE) or four input images (Quadruplet), not {}".format(
                     len(args)))
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):

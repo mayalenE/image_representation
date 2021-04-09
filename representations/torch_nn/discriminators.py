@@ -1,13 +1,13 @@
 from abc import ABCMeta
-import goalrepresent as gr
-from goalrepresent.dnn.networks import encoders
+from addict import Dict
+from image_representation.representations.torch_nn import encoders
 import torch
 from torch import nn
 
 EPS = 1e-12
 
 
-class BaseDNNDiscriminator(nn.Module, metaclass=ABCMeta):
+class BDiscriminator(nn.Module, metaclass=ABCMeta):
     '''
     Base Discriminator class
     '''
@@ -40,11 +40,11 @@ Discriminator Modules
 ========================================================================================================================="""
 
 
-class BurgessDiscriminator(BaseDNNDiscriminator):
+class BurgessDiscriminator(BDiscriminator):
 
     def __init__(self, config=None, **kwargs):
         encoder = encoders.BurgessEncoder(config=config, **kwargs)
-        BaseDNNDiscriminator.__init__(self, config=config, **kwargs)
+        BDiscriminator.__init__(self, config=config, **kwargs)
 
         # inference x
         self.infer_x = nn.Sequential()
@@ -67,11 +67,11 @@ class BurgessDiscriminator(BaseDNNDiscriminator):
         return output
 
 
-class HjelmDiscriminator(BaseDNNDiscriminator):
+class HjelmDiscriminator(BDiscriminator):
 
     def __init__(self, config=None, **kwargs):
         encoder = encoders.HjelmEncoder(config=config, **kwargs)
-        BaseDNNDiscriminator.__init__(self, config=config, **kwargs)
+        BDiscriminator.__init__(self, config=config, **kwargs)
 
         # inference x
         self.infer_x = nn.Sequential()
@@ -100,11 +100,11 @@ class HjelmDiscriminator(BaseDNNDiscriminator):
         return output
 
 
-class DumoulinDiscriminator(BaseDNNDiscriminator):
+class DumoulinDiscriminator(BDiscriminator):
 
     def __init__(self, config=None, with_dropout=True, **kwargs):
         encoder = encoders.DumoulinEncoder(config=config, **kwargs)
-        BaseDNNDiscriminator.__init__(self, config=config, **kwargs)
+        BDiscriminator.__init__(self, config=config, **kwargs)
 
         # inference x
         self.infer_x = nn.Sequential()

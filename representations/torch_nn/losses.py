@@ -1,11 +1,8 @@
 from abc import ABC, abstractmethod
-from goalrepresent.helper import mathhelper
-import math
-import numpy as np
 import torch
-from torch.autograd import Variable
 from torch.nn import functional as F
-
+from image_representation.utils.torch_functional import logsumexp, PI
+import math
 
 class BaseLoss(ABC):
     @abstractmethod
@@ -75,12 +72,11 @@ class SimCLRLoss(BaseLoss):
         self.input_keys_list = ['proj_z', 'proj_z_aug']
 
     def get_correlated_mask(self, batch_size):
-        diag = np.eye(2 * batch_size)
-        l1 = np.eye((2 * batch_size), 2 * batch_size, k=-batch_size)
-        l2 = np.eye((2 * batch_size), 2 * batch_size, k=batch_size)
-        mask = torch.from_numpy((diag + l1 + l2))
+        diag = torch.eye(2 * batch_size)
+        l1 = torch.diag(torch.ones(batch_size), diagonal=-batch_size)
+        l2 = torch.diag(torch.ones(batch_size), diagonal=batch_size)
+        mask = (diag + l1 + l2)
         mask = (1 - mask).type(torch.bool)
-        mask = mask.type(torch.bool)
         return mask
 
 
@@ -497,36 +493,36 @@ class BetaTCVAELoss(BaseLoss):
 
         # KL LOSS MODIFIED
         ## calculate log q(z|x) (log density of gaussian(mu,sigma2))
-        log_q_zCx = (-0.5 * (math.log(2.0 * np.pi) + logvar) - (sampled_z - mu).pow(2) / (2 * logvar.exp())).sum(
+        log_q_zCx = (-0.5 * (math.log(2.0 * PI) + logvar) - (sampled_z - mu).pow(2) / (2 * logvar.exp())).sum(
             1)  # sum on the latent dimensions (factorized distribution so log of prod is sum of logs)
 
         ## calculate log p(z) (log density of gaussian(0,1))
-        log_pz = (-0.5 * math.log(2.0 * np.pi) - sampled_z.pow(2) / 2).sum(1)
+        log_pz = (-0.5 * math.log(2.0 * PI) - sampled_z.pow(2) / 2).sum(1)
 
         ## calculate log_qz ~= log 1/(NM) sum_m=1^M q(z|x_m) = - log(MN) + logsumexp_m(q(z|x_m)) and log_prod_qzi
         batch_size = sampled_z.size(0)
         n_latents = sampled_z.size(1)
-        _logqz = -0.5 * (math.log(2.0 * np.pi) + logvar.view(1, batch_size, n_latents)) - (
+        _logqz = -0.5 * (math.log(2.0 * PI) + logvar.view(1, batch_size, n_latents)) - (
                 sampled_z.view(batch_size, 1, n_latents) - mu.view(1, batch_size, n_latents)).pow(2) / (
                          2 * logvar.view(1, batch_size, n_latents).exp())
         if self.tc_approximate == 'mws':
             # minibatch weighted sampling
-            log_prod_qzi = (mathhelper.logsumexp(_logqz, dim=1, keepdim=False) - math.log(
+            log_prod_qzi = (logsumexp(_logqz, dim=1, keepdim=False) - math.log(
                 batch_size * self.dataset_size)).sum(1)
-            log_qz = (mathhelper.logsumexp(_logqz.sum(2), dim=1, keepdim=False) - math.log(
+            log_qz = (logsumexp(_logqz.sum(2), dim=1, keepdim=False) - math.log(
                 batch_size * self.dataset_size))
         elif self.tc_approximate == 'mss':
             # minibatch stratified sampling
             N = self.dataset_size
             M = max(batch_size - 1, 1)
             strat_weight = (N - M) / (N * M)
-            W = torch.Tensor(batch_size, batch_size).fill_(1 / M)
+            W = torch.Tensor(batch_size, batch_size, requires_grad=True).fill_(1 / M)
             W.view(-1)[::M + 1] = 1 / N
             W.view(-1)[1::M + 1] = strat_weight
             W[M - 1, 0] = strat_weight
-            logiw_matrix = Variable(W.log().type_as(_logqz.data))
-            log_qz = mathhelper.logsumexp(logiw_matrix + _logqz.sum(2), dim=1, keepdim=False)
-            log_prod_qzi = mathhelper.logsumexp(logiw_matrix.view(batch_size, batch_size, 1) + _logqz, dim=1,
+            logiw_matrix = W.log().type_as(_logqz.data)
+            log_qz = logsumexp(logiw_matrix + _logqz.sum(2), dim=1, keepdim=False)
+            log_prod_qzi = logsumexp(logiw_matrix.view(batch_size, batch_size, 1) + _logqz, dim=1,
                                                 keepdim=False).sum(1)
         else:
             raise ValueError(

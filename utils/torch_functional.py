@@ -2,6 +2,7 @@ import math
 from numbers import Number
 import torch
 
+PI = torch.acos(torch.zeros(1)).item() * 2
 
 def logsumexp(value, dim=None, keepdim=False):
     """Numerically stable implementation of the operation

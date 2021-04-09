@@ -1,8 +1,7 @@
 from copy import deepcopy
-import goalrepresent as gr
-from goalrepresent import dnn
-from goalrepresent.helper import tensorboardhelper
-import numpy as np
+from addict import Dict
+from image_representation.representations.torch_nn import TorchNNRepresentation
+from image_representation.utils.tensorboard import resize_embeddings
 import os
 import sys
 import time
@@ -38,14 +37,14 @@ class ProjectionHead(nn.Module):
         proj_z = self.network(z)
         return proj_z
 
-class SimCLRModel(dnn.BaseDNN, gr.BaseModel):
+class SimCLR(TorchNNRepresentation):
     '''
     Base SimCLR Class
     '''
 
     @staticmethod
     def default_config():
-        default_config = dnn.BaseDNN.default_config()
+        default_config = TorchNNRepresentation.default_config()
 
         # network parameters
         default_config.network = Dict()
@@ -78,12 +77,12 @@ class SimCLRModel(dnn.BaseDNN, gr.BaseModel):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        dnn.BaseDNN.__init__(self, config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
+        TorchNNRepresentation.__init__(self, config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
 
         self.output_keys_list = self.network.encoder.output_keys_list + ["recon_x"]
 
     def set_network(self, network_name, network_parameters):
-        dnn.BaseDNN.set_network(self, network_name, network_parameters)
+        TorchNNRepresentation.set_network(self, network_name, network_parameters)
         # add a decoder to the network for the SimCLR
         self.network.projection_head = ProjectionHead(config=network_parameters)
 
@@ -174,6 +173,7 @@ class SimCLRModel(dnn.BaseDNN, gr.BaseModel):
         losses = {}
         for data in train_loader:
             x = data['obs']
+            x.requires_grad = True
             x = self.push_variable_to_device(x)
             x_aug = train_loader.dataset.get_augmented_batch(data['index'], augment=True)
             x_aug = self.push_variable_to_device(x_aug)
@@ -196,7 +196,7 @@ class SimCLRModel(dnn.BaseDNN, gr.BaseModel):
                     losses[k].append(v.data.item())
 
         for k, v in losses.items():
-            losses[k] = np.mean(v)
+            losses[k] = torch.mean(torch.tensor(v))
 
         self.n_epochs += 1
 
@@ -239,13 +239,13 @@ class SimCLRModel(dnn.BaseDNN, gr.BaseModel):
                     embedding_images.append(x)
 
         for k, v in losses.items():
-            losses[k] = np.mean(v)
+            losses[k] = torch.mean(torch.tensor(v))
 
         if record_embeddings:
             embedding_samples = torch.cat(embedding_samples)
             embedding_metadata = torch.cat(embedding_metadata)
             embedding_images = torch.cat(embedding_images)
-            embedding_images = tensorboardhelper.resize_embeddings(embedding_images)
+            embedding_images = resize_embeddings(embedding_images)
             logger.add_embedding(
                 embedding_samples,
                 metadata=embedding_metadata,
@@ -261,14 +261,14 @@ class SimCLRModel(dnn.BaseDNN, gr.BaseModel):
         return None
 
 
-class TripletCLRModel(SimCLRModel):
+class TripletCLR(SimCLR):
     '''
     TripletCLR Class
     '''
 
     @staticmethod
     def default_config():
-        default_config = SimCLRModel.default_config()
+        default_config = SimCLR.default_config()
 
         # loss parameters
         default_config.loss.name = "TripletCLR"
@@ -278,10 +278,10 @@ class TripletCLRModel(SimCLRModel):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        SimCLRModel.__init__(self, config, **kwargs)
+        SimCLR.__init__(self, config, **kwargs)
 
     def set_network(self, network_name, network_parameters):
-        dnn.BaseDNN.set_network(self, network_name, network_parameters)
+        TorchNNRepresentation.set_network(self, network_name, network_parameters)
         # no projection head here!
 
     def forward_from_encoder(self, encoder_outputs):

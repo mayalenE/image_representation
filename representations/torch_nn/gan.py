@@ -1,29 +1,27 @@
 from copy import deepcopy
-import goalrepresent as gr
-from goalrepresent import dnn
-from goalrepresent.helper import tensorboardhelper
-from goalrepresent.dnn.networks import decoders, discriminators
+from addict import Dict
+from image_representation.representations.torch_nn import TorchNNRepresentation
+from image_representation.representations.torch_nn import decoders, discriminators
+from image_representation.utils.tensorboard import resize_embeddings
 from itertools import chain
-import numpy as np
 import os
 import sys
 import time
 import torch
-from torch.autograd import Variable
 from torchvision.utils import make_grid
 
 """ ========================================================================================================================
 Base BiGAN architecture
 ========================================================================================================================="""
 # TODO: implement FID and early stopped on it
-class BiGANModel(dnn.BaseDNN, gr.BaseModel):
+class BiGAN(TorchNNRepresentation):
     '''
     BiGAN Class
     '''
 
     @staticmethod
     def default_config():
-        default_config = dnn.BaseDNN.default_config()
+        default_config = TorchNNRepresentation.default_config()
 
         # network parameters
         default_config.network = Dict()
@@ -55,12 +53,12 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        dnn.BaseDNN.__init__(self, config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
+        TorchNNRepresentation.__init__(self, config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
 
         self.output_keys_list = self.network.encoder.output_keys_list + ["prob_pos", "prob_neg"]
 
     def set_network(self, network_name, network_parameters):
-        dnn.BaseDNN.set_network(self, network_name, network_parameters)
+        TorchNNRepresentation.set_network(self, network_name, network_parameters)
         # add a decoder to the network for the BiGAN
         decoder_class = decoders.get_decoder(network_name)
         self.network.decoder = decoder_class(config=network_parameters)
@@ -76,20 +74,19 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
 
         # update config
         self.config.optimizer.name = optimizer_name
-        self.config.optimizer.parameters = gr.config.update_config(optimizer_parameters,
-                                                                   self.config.optimizer.parameters)
+        self.config.optimizer.parameters.update(optimizer_parameters)
 
     def forward_from_encoder(self, encoder_outputs):
         x_real = encoder_outputs["x"]
         z_real = encoder_outputs["z"]
         model_outputs = encoder_outputs
 
-        z_fake = Variable(torch.randn_like(z_real))
+        z_fake = torch.randn_like(z_real, requires_grad=True)
         x_fake = self.network.decoder(z_fake)["recon_x"]
 
         if self.training and self.n_epochs < 5000:
-            noise1 = Variable(torch.zeros_like(x_real.detach()).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000))
-            noise2 = Variable(torch.zeros_like(x_fake.detach()).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000))
+            noise1 = torch.zeros_like(x_real.detach(), requires_grad=True).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000)
+            noise2 = torch.zeros_like(x_fake.detach(), requires_grad=True).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000)
             x_real = x_real + noise1
             x_fake = x_fake + noise2
 
@@ -187,7 +184,8 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
         self.train()
         losses = {}
         for data in train_loader:
-            x = Variable(data['obs'])
+            x = data['obs']
+            x.requires_grad = True
             x = self.push_variable_to_device(x)
             # forward
             model_outputs = self.forward(x)
@@ -213,7 +211,7 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
                     losses[k].append(v.data.item())
 
         for k, v in losses.items():
-            losses[k] = np.mean(v)
+            losses[k] = torch.mean(torch.tensor(v))
 
         self.n_epochs += 1
 
@@ -240,7 +238,7 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
                     images = []
         with torch.no_grad():
             for data in valid_loader:
-                x = Variable(data['obs'])
+                x = data['obs']
                 x = self.push_variable_to_device(x)
                 # forward
                 model_outputs = self.forward(x)
@@ -249,9 +247,9 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
                 # save losses
                 for k, v in batch_losses.items():
                     if k not in losses:
-                        losses[k] = np.expand_dims(v.detach().cpu().numpy(), axis=-1)
+                        losses[k] = v.detach().cpu().unsqueeze(-1)
                     else:
-                        losses[k] = np.vstack([losses[k], np.expand_dims(v.detach().cpu().numpy(), axis=-1)])
+                        losses[k] = torch.vstack([losses[k], v.detach().cpu().unsqueeze(-1)])
 
                 if record_valid_images:
                     recon_x = model_outputs["recon_x"]
@@ -276,7 +274,7 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
         # log results
         if record_valid_images:
             n_images = min(len(images), 40)
-            sampled_ids = np.random.choice(len(images), n_images, replace=False)
+            sampled_ids = torch.randperm(len(images))[:n_images]
             input_images = images[sampled_ids].detach().cpu()
             output_images = recon_images[sampled_ids].detach().cpu()
             if self.config.loss.parameters.reconstruction_dist == "bernoulli":
@@ -288,7 +286,7 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
             logger.add_image("reconstructions", img, self.n_epochs)
 
         if record_embeddings:
-            images = tensorboardhelper.resize_embeddings(images)
+            images = resize_embeddings(images)
             logger.add_embedding(
                 embeddings,
                 metadata=labels,
@@ -297,7 +295,7 @@ class BiGANModel(dnn.BaseDNN, gr.BaseModel):
 
         # average loss and return
         for k, v in losses.items():
-            losses[k] = np.mean(v)
+            losses[k] = torch.mean(torch.tensor(v))
 
         return losses
 
@@ -326,14 +324,14 @@ Modified versions of BiGAN architecture
 ========================================================================================================================="""
 
 
-class VAEGANModel(BiGANModel):
+class VAEGAN(BiGAN):
     '''
     VAEGAN Class, see https://github.com/seangal/dcgan_vae_pytorch/blob/master/main.py
     '''
 
     @staticmethod
     def default_config():
-        default_config = BiGANModel.default_config()
+        default_config = BiGAN.default_config()
 
         # loss parameters
         default_config.loss.name = "VAEGAN"
@@ -343,7 +341,7 @@ class VAEGANModel(BiGANModel):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        BiGANModel.__init__(self, config, **kwargs)
+        BiGAN.__init__(self, config, **kwargs)
 
     def forward_from_encoder(self, encoder_outputs):
         x_real = encoder_outputs["x"]
@@ -356,12 +354,12 @@ class VAEGANModel(BiGANModel):
 
         # discriminator probabilities
 
-        z_fake = Variable(torch.randn_like(z_real))
+        z_fake = torch.randn_like(z_real, requires_grad=True)
         x_fake = self.network.decoder(z_fake)["recon_x"]
 
         if self.training and self.n_epochs < 5000:
-            noise1 = Variable(torch.zeros_like(x_real.detach()).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000))
-            noise2 = Variable(torch.zeros_like(x_fake.detach()).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000))
+            noise1 = torch.zeros_like(x_real.detach(), requires_grad=True).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000)
+            noise2 = torch.zeros_like(x_fake.detach(), requires_grad=True).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000)
             x_real = x_real + noise1
             x_fake = x_fake + noise2
 
@@ -377,7 +375,8 @@ class VAEGANModel(BiGANModel):
         self.train()
         losses = {}
         for data in train_loader:
-            x = Variable(data['obs'])
+            x = data['obs']
+            x.requires_grad = True
             x = self.push_variable_to_device(x)
             ## forward
             model_outputs = self.forward(x)
@@ -416,7 +415,7 @@ class VAEGANModel(BiGANModel):
                     losses[k].append(v.data.item())
 
         for k, v in losses.items():
-            losses[k] = np.mean(v)
+            losses[k] = torch.mean(torch.tensor(v))
 
         self.n_epochs += 1
 

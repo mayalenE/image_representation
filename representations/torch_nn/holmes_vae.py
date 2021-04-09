@@ -1,10 +1,11 @@
 from copy import deepcopy
-import goalrepresent as gr
-from goalrepresent import dnn, models
-from goalrepresent.dnn.solvers import initialization
-from goalrepresent.helper import tensorboardhelper
-from goalrepresent.helper.misc import do_filter_boolean
-from goalrepresent.datasets.image.imagedataset import MIXEDDataset
+from addict import Dict
+import image_representation
+from image_representation.representations.torch_nn import TorchNNRepresentation, encoders, decoders, VAE, BetaVAE, AnnealedVAE, BetaTCVAE
+from image_representation.utils.tensorboard import resize_embeddings
+from image_representation.datasets.torch_dataset import MIXEDDataset
+from image_representation.utils.torch_nn_init import get_weights_init
+from image_representation.utils.misc import do_filter_boolean
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -16,9 +17,8 @@ from torch import nn
 from torchvision.utils import make_grid
 from torch.utils.data import DataLoader
 import warnings
-
-
 # from torchviz import make_dot
+
 
 class Node(nn.Module):
     """
@@ -87,14 +87,14 @@ class Node(nn.Module):
         self.feature_range = (z_library.min(axis=0), z_library.max(axis=0))
         X = z_library - self.feature_range[0]
         scale = self.feature_range[1] - self.feature_range[0]
-        scale[np.where(scale == 0)] = 1.0  # trick when some some latents are the same for every point (no scale and divide by 1)
+        scale[torch.where(scale == 0)] = 1.0  # trick when some some latents are the same for every point (no scale and divide by 1)
         X = X / scale
 
         default_boundary_config = Dict()
         default_boundary_config.algo = 'svm.SVC'
         default_boundary_config.kwargs = Dict()
         if boundary_config is not None:
-            boundary_config = gr.config.update_config(boundary_config, default_boundary_config)
+            boundary_config.update(default_boundary_config)
         boundary_algo = eval(boundary_config.algo)
 
         if z_fitness is None:
@@ -107,6 +107,7 @@ class Node(nn.Module):
                 center0 = np.median(X[y <= np.percentile(y, 20), :], axis=0)
                 center1 = np.median(X[y > np.percentile(y, 80), :], axis=0)
                 center = np.stack([center0, center1])
+                center = np.nan_to_num(center)
                 boundary_config.kwargs.init = center
                 boundary_config.kwargs.n_clusters = 2
                 self.boundary = boundary_algo(**boundary_config.kwargs).fit(X)
@@ -137,7 +138,7 @@ class Node(nn.Module):
         else:
             z = node_outputs["z"]
             x_side = self.get_children_node(z)
-            x_ids_left = np.where(x_side == 0)[0]
+            x_ids_left = torch.where(x_side == 0)[0]
             if len(x_ids_left) > 0:
                 left_leaf_accumulator = self.left.depth_first_forward(x[x_ids_left], [path + "0" for path in
                                                                                       [tree_path_taken[x_idx] for x_idx
@@ -150,7 +151,7 @@ class Node(nn.Module):
                                                                       parent_recon_x[x_ids_left])
                 self.leaf_accumulator.extend(left_leaf_accumulator)
 
-            x_ids_right = np.where(x_side == 1)[0]
+            x_ids_right = torch.where(x_side == 1)[0]
             if len(x_ids_right) > 0:
                 right_leaf_accumulator = self.right.depth_first_forward(x[x_ids_right], [path + "1" for path in
                                                                                          [tree_path_taken[x_idx] for
@@ -191,7 +192,7 @@ class Node(nn.Module):
 
             z = node_outputs["z"]
             x_side = self.get_children_node(z)
-            x_ids_left = np.where(x_side == 0)[0]
+            x_ids_left = torch.where(x_side == 0)[0]
             if len(x_ids_left) > 0:
                 left_leaf_accumulator = self.left.depth_first_forward_whole_branch_preorder(x[x_ids_left], [path + "0" for path in
                                                                                       [tree_path_taken[x_idx] for x_idx
@@ -204,7 +205,7 @@ class Node(nn.Module):
                                                                       parent_recon_x[x_ids_left])
                 self.leaf_accumulator.extend(left_leaf_accumulator)
 
-            x_ids_right = np.where(x_side == 1)[0]
+            x_ids_right = torch.where(x_side == 1)[0]
             if len(x_ids_right) > 0:
                 right_leaf_accumulator = self.right.depth_first_forward_whole_branch_preorder(x[x_ids_right], [path + "1" for path in
                                                                                          [tree_path_taken[x_idx] for
@@ -221,6 +222,7 @@ class Node(nn.Module):
             self.reset_accumulator()
 
         return leaf_accumulator
+
 
     def depth_first_forward_whole_tree_preorder(self, x, tree_path_taken=None, parent_lf=None, parent_gf=None,
                             parent_gfi=None, parent_lfi=None, parent_recon_x=None):
@@ -277,8 +279,7 @@ class Node(nn.Module):
                 z = z.detach().cpu().numpy()
             z = z - self.feature_range[0]
             scale = self.feature_range[1] - self.feature_range[0]
-            scale[np.where(
-                scale == 0)] = 1.0  # trick when some some latents are the same for every point (no scale and divide by 1)
+            scale[torch.where(scale == 0)] = 1.0  # trick when some some latents are the same for every point (no scale and divide by 1)
             z = z / scale
             # compute boundary side
             side = self.boundary.predict(z)  # returns 0: left, 1: right
@@ -311,15 +312,15 @@ class Node(nn.Module):
                         if trials == max_trials:
                             z_gen.append(cur_z_gen)
                             remaining = 0
-                            break;
+                            break
                         cur_z_gen_side = self.get_children_node(cur_z_gen)
                         if desired_side == 0:
-                            left_side_ids = np.where(cur_z_gen_side == 0)[0]
+                            left_side_ids = torch.where(cur_z_gen_side == 0)[0]
                             if len(left_side_ids) > 0:
                                 z_gen.append(cur_z_gen[left_side_ids[:remaining]])
                                 remaining -= len(left_side_ids)
                         elif desired_side == 1:
-                            right_side_ids = np.where(cur_z_gen_side == 1)[0]
+                            right_side_ids = torch.where(cur_z_gen_side == 1)[0]
                             if len(right_side_ids) > 0:
                                 z_gen.append(cur_z_gen[right_side_ids[:remaining]])
                                 remaining -= len(right_side_ids)
@@ -339,15 +340,15 @@ class Node(nn.Module):
                     if trials == max_trials:
                         z_gen.append(cur_z_gen)
                         remaining = 0
-                        break;
+                        break
                     cur_z_gen_side = self.get_children_node(cur_z_gen)
                     if desired_side == 0:
-                        left_side_ids = np.where(cur_z_gen_side == 0)[0]
+                        left_side_ids = torch.where(cur_z_gen_side == 0)[0]
                         if len(left_side_ids) > 0:
                             z_gen.append(cur_z_gen[left_side_ids[:remaining]])
                             remaining -= len(left_side_ids)
                     elif desired_side == 1:
-                        right_side_ids = np.where(cur_z_gen_side == 1)[0]
+                        right_side_ids = torch.where(cur_z_gen_side == 1)[0]
                         if len(right_side_ids) > 0:
                             z_gen.append(cur_z_gen[right_side_ids[:remaining]])
                             remaining -= len(right_side_ids)
@@ -406,27 +407,27 @@ def get_node_class(base_class):
     return NodeClass
 
 # possible node classes:
-VAENode_local = get_node_class(models.VAEModel)
-VAENode = type('VAENode', (Node, models.VAEModel), dict(VAENode_local.__dict__))
+VAENode_local = get_node_class(VAE)
+VAENode = type('VAENode', (Node, VAE), dict(VAENode_local.__dict__))
 
-BetaVAENode_local = get_node_class(models.BetaVAEModel)
-BetaVAENode = type('BetaVAENode', (Node, models.BetaVAEModel), dict(BetaVAENode_local.__dict__))
+BetaVAENode_local = get_node_class(BetaVAE)
+BetaVAENode = type('BetaVAENode', (Node, BetaVAE), dict(BetaVAENode_local.__dict__))
 
-AnnealedVAENode_local = get_node_class(models.AnnealedVAEModel)
-AnnealedVAENode = type('AnnealedVAENode', (Node, models.AnnealedVAEModel), dict(AnnealedVAENode_local.__dict__))
+AnnealedVAENode_local = get_node_class(AnnealedVAE)
+AnnealedVAENode = type('AnnealedVAENode', (Node, AnnealedVAE), dict(AnnealedVAENode_local.__dict__))
 
-BetaTCVAENode_local = get_node_class(models.BetaTCVAEModel)
-BetaTCVAENode = type('BetaTCVAENode', (Node, models.BetaTCVAEModel), dict(BetaTCVAENode_local.__dict__))
+BetaTCVAENode_local = get_node_class(BetaTCVAE)
+BetaTCVAENode = type('BetaTCVAENode', (Node, BetaTCVAE), dict(BetaTCVAENode_local.__dict__))
 
 
-class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
+class HOLMES_VAE(TorchNNRepresentation):
     """
     dnn with tree network, loss which is based on leaf's losses, optimizer from that loss
     """
 
     @staticmethod
     def default_config():
-        default_config = dnn.BaseDNN.default_config()
+        default_config = TorchNNRepresentation.default_config()
 
         # tree config
         default_config.tree = Dict()
@@ -453,7 +454,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
         self.NodeClass = eval("{}Node".format(self.config.node_classname))
         self.split_history = {}  # dictionary with node path keys and boundary values
 
-        dnn.BaseDNN.__init__(self, config=config, **kwargs)
+        TorchNNRepresentation.__init__(self, config=config, **kwargs)
 
     def set_network(self, network_name, network_parameters):
         depth = 0
@@ -463,7 +464,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
 
         # update config
         self.config.network.name = network_name
-        self.config.network.parameters = gr.config.update_config(network_parameters, self.config.network.parameters)
+        self.config.network.parameters.update(network_parameters)
 
     def set_optimizer(self, optimizer_name, optimizer_parameters):
         # give only trainable parameters
@@ -473,8 +474,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
         self.network.optimizer_group_id = 0
         # update config
         self.config.optimizer.name = optimizer_name
-        self.config.optimizer.parameters = gr.config.update_config(optimizer_parameters,
-                                                                   self.config.optimizer.parameters)
+        self.config.optimizer.parameters.update(optimizer_parameters)
 
     def forward_for_graph_tracing(self, x):
         pass
@@ -519,6 +519,44 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
 
         return model_outputs
 
+    def forward_through_given_path(self, x, tree_desired_path):
+        x = self.push_variable_to_device(x)
+        is_train = self.network.training
+        if len(x) == 1 and is_train:
+            self.network.eval()
+            depth_first_traversal_outputs = self.network.depth_first_forward_through_given_path(x, tree_desired_path)
+            self.network.train()
+        else:
+            depth_first_traversal_outputs = self.network.depth_first_forward_through_given_path(x, tree_desired_path)
+
+        model_outputs = {}
+        x_order_ids = []
+        for leaf_idx in range(len(depth_first_traversal_outputs)):
+            cur_node_path = depth_first_traversal_outputs[leaf_idx][0]
+            cur_node_x_ids = depth_first_traversal_outputs[leaf_idx][1]
+            cur_node_outputs = depth_first_traversal_outputs[leaf_idx][2]
+            # stack results
+            if not model_outputs:
+                model_outputs["path_taken"] = cur_node_path
+                for k, v in cur_node_outputs.items():
+                    model_outputs[k] = v
+            else:
+                model_outputs["path_taken"] += cur_node_path
+                for k, v in cur_node_outputs.items():
+                    model_outputs[k] = torch.cat([model_outputs[k], v], dim=0)
+            # save the sampled ids to reorder as in the input batch at the end
+            x_order_ids += list(cur_node_x_ids)
+
+        # reorder points
+        sort_order = tuple(np.argsort(x_order_ids))
+        for k, v in model_outputs.items():
+            if isinstance(v, list):
+                model_outputs[k] = [v[i] for i in sort_order]
+            else:
+                model_outputs[k] = v[sort_order, :]
+
+        return model_outputs
+
     def calc_embedding(self, x, node_path=None, **kwargs):
         ''' the function calc outputs a representation vector of size batch_size*n_latents'''
         if node_path is None:
@@ -533,13 +571,13 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
             for node_idx in range(len(all_nodes_outputs)):
                 cur_node_path = all_nodes_outputs[node_idx][0][0]
                 if cur_node_path != node_path:
-                    continue;
+                    continue
                 else:
                     cur_node_x_ids = all_nodes_outputs[node_idx][1]
                     cur_node_outputs = all_nodes_outputs[node_idx][2]
                     for idx in range(len(cur_node_x_ids)):
                         z[cur_node_x_ids[idx]] = cur_node_outputs["z"][idx]
-                    break;
+                    break
         return z
 
     def split_node(self, node_path, split_trigger=None, x_loader=None, x_fitness=None):
@@ -566,17 +604,21 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
         # Create boundary
         if x_loader is not None:
             with torch.no_grad():
-                z_library = self.calc_embedding(x_loader.dataset.images, node_path=node_path).detach().cpu().numpy()
+                z_library = self.calc_embedding(x_loader.dataset.images, node_path=node_path).detach()
                 if split_trigger.boundary_config.z_fitness is None:
                     z_fitness = None
                 else:
                     z_fitness = x_fitness
-                if np.isnan(z_library).any():
-                    keep_ids = ~(np.isnan(z_library.sum(1)))
+                if torch.isnan(z_library).any():
+                    keep_ids = ~(torch.isnan(z_library.sum(1)))
                     z_library = z_library[keep_ids]
                     if z_fitness is not None:
                         x_fitness = x_fitness[keep_ids]
                         z_fitness = x_fitness
+                if z_library.shape[0] == 0:
+                    z_library = torch.zeros((2, self.config.network.parameters.n_latents))
+                    if z_fitness is not None:
+                        z_fitness = np.zeros(2)
                 node.create_boundary(z_library, z_fitness, boundary_config=split_trigger.boundary_config)
 
         # Instanciate childrens
@@ -644,7 +686,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
         ## b) poor data make grid
         if split_trigger.type == "threshold":
             output_filename = os.path.join(split_output_folder, "poor_data_buffer.png")
-            poor_data_buffer = x_loader.dataset.images[np.where(z_fitness > split_trigger.parameters.threshold)[0]]
+            poor_data_buffer = x_loader.dataset.images[torch.where(z_fitness > split_trigger.parameters.threshold)[0]]
             img = np.transpose(make_grid(poor_data_buffer, nrow=int(np.sqrt(poor_data_buffer.shape[0])), padding=0).cpu().numpy(), (1, 2, 0))
             plt.figure()
             plt.imshow(img)
@@ -652,9 +694,9 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
             plt.close()
 
         ## c) left/right samples from which boundary is fitted
-        if split_trigger.boundary_config.z_fitness == "recon_loss":
+        if split_trigger.boundary_config.z_fitness is not None:
             y_fit = z_fitness > np.percentile(z_fitness, 80)
-            samples_left_fit_ids = np.where(y_fit == 0)[0]
+            samples_left_fit_ids = torch.where(y_fit == 0)[0]
             samples_left_fit_ids = np.random.choice(samples_left_fit_ids, min(100, len(samples_left_fit_ids)))
             output_filename = os.path.join(split_output_folder, "samples_left_fit.png")
             samples_left_fit_buffer = x_loader.dataset.images[samples_left_fit_ids]
@@ -666,7 +708,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
             plt.savefig(output_filename)
             plt.close()
 
-            samples_right_fit_ids = np.where(y_fit == 1)[0]
+            samples_right_fit_ids = torch.where(y_fit == 1)[0]
             samples_right_fit_ids = np.random.choice(samples_right_fit_ids, min(100, len(samples_right_fit_ids)))
             output_filename = os.path.join(split_output_folder, "samples_right_fit.png")
             samples_right_fit_buffer = x_loader.dataset.images[samples_right_fit_ids]
@@ -679,7 +721,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
             plt.close()
 
             ## d) wrongly classified buffer make grid
-            wrongly_sent_left_ids = np.where((y_predicted == 0) & (y_predicted != y_fit))[0]
+            wrongly_sent_left_ids = torch.where((y_predicted == 0) & (y_predicted != y_fit))[0]
             if len(wrongly_sent_left_ids) > 0:
                 wrongly_sent_left_ids = np.random.choice(wrongly_sent_left_ids, min(100, len(wrongly_sent_left_ids)))
                 output_filename = os.path.join(split_output_folder, "wrongly_sent_left.png")
@@ -692,7 +734,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 plt.savefig(output_filename)
                 plt.close()
 
-            wrongly_sent_right_ids = np.where((y_predicted == 1) & (y_predicted != y_fit))[0]
+            wrongly_sent_right_ids = torch.where((y_predicted == 1) & (y_predicted != y_fit))[0]
             if len(wrongly_sent_right_ids) > 0:
                 wrongly_sent_right_ids = np.random.choice(wrongly_sent_right_ids, min(100, len(wrongly_sent_right_ids)))
                 output_filename = os.path.join(split_output_folder, "wrongly_sent_right.png")
@@ -755,7 +797,9 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
 
         # Prepare settings for the training of HOLMES
         ## split trigger settings
-        split_trigger = gr.config.update_config(training_config.split_trigger, gr.Config({"active": False}))
+        split_trigger = Dict()
+        split_trigger.active = False
+        split_trigger.update(training_config.split_trigger)
         if split_trigger["active"]:
             default_split_trigger = Dict()
             ## conditions
@@ -768,7 +812,12 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
             default_split_trigger.fitness_key = "total"
             ## type
             default_split_trigger.type = "plateau"
-            default_split_trigger.parameters = Dict()
+            if default_split_trigger.type == "plateau":
+                default_split_trigger.parameters.epsilon = 1
+                default_split_trigger.parameters.n_steps_average = 5
+            elif default_split_trigger.type == "threshold":
+                default_split_trigger.parameters.threshold = 200
+                default_split_trigger.parameters.n_max_bad_points = 100
             ## train before split
             default_split_trigger.n_epochs_before_split = 0
             ## boundary config
@@ -778,22 +827,18 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
             ## save
             default_split_trigger.save_model_before_after = False
 
-            split_trigger = gr.config.update_config(split_trigger, default_split_trigger)
+            default_split_trigger.update(split_trigger)
+            split_trigger = default_split_trigger
 
-            ## parameters
-            if split_trigger.type == "plateau":
-                default_split_trigger.parameters.epsilon = 1
-                default_split_trigger.parameters.n_steps_average = 5
-            elif split_trigger.type == "threshold":
-                default_split_trigger.parameters.threshold = 200
-                default_split_trigger.parameters.n_max_bad_points = 100
-            split_trigger.parameters = gr.config.update_config(split_trigger.parameters,
-                                                               default_split_trigger.parameters)
 
         ## alternated training
-        alternated_backward = gr.config.update_config(training_config.alternated_backward, gr.Config({"active": False}))
+        alternated_backward = Dict()
+        alternated_backward.active = False
+        alternated_backward.update(training_config.alternated_backward)
         if alternated_backward["active"]:
-            alternated_backward.ratio_epochs = gr.config.update_config(alternated_backward.ratio_epochs, gr.Config({"connections": 1, "core": 9}))
+            default_ratio_epochs = Dict({"connections": 1, "core": 9})
+            default_ratio_epochs.update(alternated_backward.ratio_epochs)
+            alternated_backward.ratio_epochs = default_ratio_epochs
 
 
         for epoch in range(training_config.n_epochs):
@@ -904,7 +949,9 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
         n_epochs_total = np.asarray(n_epochs_per_episodes).sum()
 
         ## split trigger settings
-        split_trigger = gr.config.update_config(training_config.split_trigger, gr.Config({"active": False}))
+        split_trigger = Dict()
+        split_trigger.active = False
+        split_trigger.update(training_config.split_trigger)
         if split_trigger["active"]:
             default_split_trigger = Dict()
             ## conditions
@@ -917,36 +964,37 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
             default_split_trigger.fitness_key = "total"
             ## type
             default_split_trigger.type = "plateau"
-            default_split_trigger.parameters = Dict()
+            if default_split_trigger.type == "plateau":
+                default_split_trigger.parameters.epsilon = 1
+                default_split_trigger.parameters.n_steps_average = 5
+            elif default_split_trigger.type == "threshold":
+                default_split_trigger.parameters.threshold = 200
+                default_split_trigger.parameters.n_max_bad_points = 100
             ## train before split
             default_split_trigger.n_epochs_before_split = 0
             ## boundary config
             default_split_trigger.boundary_config = Dict()
-            default_split_trigger.boundary_config.z_fitness =  None
-            default_split_trigger.boundary_config.algo =  "cluster.KMeans"
+            default_split_trigger.boundary_config.z_fitness = None
+            default_split_trigger.boundary_config.algo = "cluster.KMeans"
             ## save
             default_split_trigger.save_model_before_after = False
 
-            split_trigger = gr.config.update_config(split_trigger, default_split_trigger)
-
-            ## parameters
-            if split_trigger.type == "plateau":
-                default_split_trigger.parameters.epsilon = 1
-                default_split_trigger.parameters.n_steps_average = 5
-            elif split_trigger.type == "threshold":
-                default_split_trigger.parameters.threshold = 200
-                default_split_trigger.parameters.n_max_bad_points = 100
-            split_trigger.parameters = gr.config.update_config(split_trigger.parameters, default_split_trigger.parameters)
+            default_split_trigger.update(split_trigger)
+            split_trigger = default_split_trigger
 
         ## alternated training
-        alternated_backward = gr.config.update_config(training_config.alternated_backward,
-                                                      gr.Config({"active": False}))
+        alternated_backward = Dict()
+        alternated_backward.active = False
+        alternated_backward.update(training_config.alternated_backward)
         if alternated_backward["active"]:
-            alternated_backward.ratio_epochs = gr.config.update_config(alternated_backward.ratio_epochs,
-                                                                       gr.Config({"connections": 1, "core": 9}))
-        ## experience replay
-        experience_replay = gr.config.update_config(training_config.experience_replay, gr.Config({"active": False}))
+            default_ratio_epochs = Dict({"connections": 1, "core": 9})
+            default_ratio_epochs.update(alternated_backward.ratio_epochs)
+            alternated_backward.ratio_epochs = default_ratio_epochs
 
+        ## experience replay
+        experience_replay = Dict()
+        experience_replay.active = False
+        experience_replay.update(training_config.experience_replay)
 
         # prepare datasets per episodes
         train_images = [None] * n_episodes
@@ -1237,7 +1285,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
             leaf_node.fitness_last_epochs.append(split_x_fitness[~generated_ids_in_leaf_x_ids].mean())
 
             if (leaf_node.epochs_since_split < split_trigger.conditions.n_epochs_min_between_splits) or (leaf_n_real_points < split_trigger.conditions.n_min_points):
-                continue;
+                continue
 
             trigger_split_in_leaf = False
             if split_trigger.type == "threshold":
@@ -1279,7 +1327,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 splitted_leafs.append(leaf_path)
 
                 # uncomment following line for allowing only one split at the time
-                # break;
+                # break
 
         train_loader.dataset.data_augmentation = old_augment_state
         return splitted_leafs
@@ -1319,7 +1367,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
         if logger is not None:
             for leaf_path in list(set(taken_pathes)):
                 if len(leaf_path) > 1:
-                    leaf_x_ids = np.where(np.array(taken_pathes, copy=False) == leaf_path)[0]
+                    leaf_x_ids = torch.where(np.array(taken_pathes, copy=False) == leaf_path)[0]
                     for k, v in losses.items():
                         leaf_v = v[leaf_x_ids, :]
                         logger.add_scalars('loss/{}'.format(k), {'train-{}'.format(leaf_path): np.mean(leaf_v)},
@@ -1392,13 +1440,13 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
 
         # 2) LOGGER SAVE RESULT PER LEAF
         for leaf_path in list(set(taken_pathes)):
-            leaf_x_ids = np.where(np.array(taken_pathes, copy=False) == leaf_path)[0]
+            leaf_x_ids = torch.where(np.array(taken_pathes, copy=False) == leaf_path)[0]
 
             if record_embeddings:
                 leaf_embeddings = torch.cat([embeddings[i] for i in leaf_x_ids])
                 leaf_labels = torch.cat([labels[i] for i in leaf_x_ids])
                 leaf_images = torch.cat([images[i] for i in leaf_x_ids])
-                leaf_images = tensorboardhelper.resize_embeddings(leaf_images)
+                leaf_images = resize_embeddings(leaf_images)
                 try:
                     logger.add_embedding(
                         leaf_embeddings,
@@ -1535,7 +1583,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                 distances_to_point_in_node = np.linalg.norm(test_results_per_node[node_path]["z"][x_idx] - test_results_per_node[node_path]["z"], axis=1)
                 closest_point_ids = np.argpartition(distances_to_point_in_node, min(20, len(distances_to_point_in_node)-1))
                 # remove curr_idx from closest point
-                closest_point_ids = np.delete(closest_point_ids, np.where(closest_point_ids == x_idx)[0])
+                closest_point_ids = np.delete(closest_point_ids, torch.where(closest_point_ids == x_idx)[0])
                 for k_idx, k in enumerate([5,10,20]):
                     voting_labels = test_results["labels"][closest_point_ids[:k]]
                     majority_voted_class = -1
@@ -1575,13 +1623,7 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
                                   "test_results_per_node_epoch_{}.npz".format((self.n_epochs))), **test_results_per_node)
         return
 
-    def get_encoder(self):
-        pass
-
-    def get_decoder(self):
-        pass
-
-    def save_checkpoint(self, checkpoint_filepath):
+    def save(self, filepath='representation.pickle'):
         # save current epoch weight file with optimizer if we want to relaunch training from that point
         network = {
             "epoch": self.n_epochs,
@@ -1592,7 +1634,31 @@ class ProgressiveTreeModel(dnn.BaseDNN, gr.BaseModel):
             "split_history": self.split_history
         }
 
-        torch.save(network, checkpoint_filepath)
+        torch.save(network, filepath)
+
+    @staticmethod
+    def load(filepath='representation.pickle', map_location='cpu'):
+        saved_representation = torch.load(filepath, map_location=map_location)
+        representation_type = saved_representation['type']
+        representation_cls = getattr(image_representation.representations.torch_nn, representation_type)
+        representation_config = saved_representation['config']
+        representation_config.device = map_location
+        representation = representation_cls(config=representation_config)
+        representation.n_epochs = saved_representation["epoch"]
+
+        split_history = saved_representation['split_history']
+
+        for split_node_path, split_node_attr in split_history.items():
+            representation.split_node(split_node_path)
+            node = representation.network.get_child_node(split_node_path)
+            node.boundary = split_node_attr["boundary"]
+            node.feature_range = split_node_attr["feature_range"]
+
+        representation.set_device(map_location)
+        representation.network.load_state_dict(saved_representation['network_state_dict'])
+        representation.optimizer.load_state_dict(saved_representation['optimizer_state_dict'])
+
+
 
 
 """ =========================================================================================
@@ -1600,9 +1666,9 @@ CONNECTED MODULES
 ==========================================================================================="""
 
 
-class ConnectedEncoder(gr.dnn.networks.encoders.BaseDNNEncoder):
+class ConnectedEncoder(encoders.Encoder):
     def __init__(self, encoder_instance, depth, connect_lf=False, connect_gf=False, **kwargs):
-        gr.dnn.networks.encoders.BaseDNNEncoder.__init__(self, config=encoder_instance.config)
+        encoders.Encoder.__init__(self, config=encoder_instance.config)
         # connections and depth in the tree (number of connections)
         self.connect_lf = connect_lf
         self.connect_gf = connect_gf
@@ -1632,10 +1698,10 @@ class ConnectedEncoder(gr.dnn.networks.encoders.BaseDNNEncoder):
                 connection_dim = self.gf.out_connection_type[1]
                 self.gf_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
 
-        initialization_net = initialization.get_initialization("kaiming_uniform")
+        initialization_net = get_weights_init("kaiming_uniform")
         self.gf.apply(initialization_net)
         self.ef.apply(initialization_net)
-        initialization_c = initialization.get_initialization("uniform")
+        initialization_c = get_weights_init("uniform")
         if self.connect_lf:
             self.lf_c.apply(initialization_c)
         if self.connect_gf:
@@ -1707,9 +1773,9 @@ class ConnectedEncoder(gr.dnn.networks.encoders.BaseDNNEncoder):
         return z, lf
 
 
-class ConnectedDecoder(gr.dnn.networks.decoders.BaseDNNDecoder):
+class ConnectedDecoder(decoders.Decoder):
     def __init__(self, decoder_instance, depth, connect_gfi=False, connect_lfi=False, connect_recon=False, **kwargs):
-        gr.dnn.networks.decoders.BaseDNNDecoder.__init__(self, config=decoder_instance.config)
+        decoders.Decoder.__init__(self, config=decoder_instance.config)
 
         # connections and depth in the tree (number of connections)
         self.connect_gfi = connect_gfi
@@ -1750,11 +1816,11 @@ class ConnectedDecoder(gr.dnn.networks.decoders.BaseDNNDecoder):
                 self.recon_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
 
 
-        initialization_net = initialization.get_initialization("kaiming_uniform")
+        initialization_net = get_weights_init("kaiming_uniform")
         self.efi.apply(initialization_net)
         self.gfi.apply(initialization_net)
         self.lfi.apply(initialization_net)
-        initialization_c = initialization.get_initialization("uniform")
+        initialization_c = get_weights_init("uniform")
         if self.connect_gfi:
             self.gfi_c.apply(initialization_c)
         if self.connect_lfi:

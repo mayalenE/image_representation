@@ -1,16 +1,16 @@
-import goalrepresent as gr
-from goalrepresent.dnn.losses import losses
-from goalrepresent.dnn.networks import encoders
-from goalrepresent.dnn.solvers import initialization
-import os
+import image_representation
+from image_representation import Representation
+from image_representation.representations.torch_nn import encoders, losses
+from image_representation.utils.torch_nn_init import get_weights_init
+from addict import Dict
 import torch
 from torch import nn
 import warnings
 
 
-class BaseDNN(nn.Module):
+class TorchNNRepresentation(Representation, nn.Module):
     """
-    Base DNN Class
+    Base Torch NN Representation Class
     Squeleton to follow for each dnn model, here simple single encoder that is not trained.
     """
 
@@ -27,14 +27,13 @@ class BaseDNN(nn.Module):
         default_config.network.parameters.n_latents = 10
         default_config.network.parameters.n_conv_layers = 4
 
-        # initialization parameters
-        default_config.network.initialization = Dict()
-        default_config.network.initialization.name = "pytorch"
-        default_config.network.initialization.parameters = Dict()
+        # weights_init parameters
+        default_config.network.weights_init = Dict()
+        default_config.network.weights_init.name = "pytorch"
+        default_config.network.weights_init.parameters = Dict()
 
         # device parameters
-        default_config.device = Dict()
-        default_config.device.use_gpu = True
+        default_config.device = 'cuda'
 
         # loss parameters
         default_config.loss = Dict()
@@ -69,20 +68,19 @@ class BaseDNN(nn.Module):
         return default_config
 
     def __init__(self, config=None, **kwargs):
+        Representation.__init__(self, config=config, **kwargs)
         nn.Module.__init__(self)
-        self.config = self.__class__.default_config()
-        self.config.update(config)
-        self.config.update(kwargs)
+
 
         # define the device to use (gpu or cpu)
-        if self.config.device.use_gpu and not torch.cuda.is_available():
-            self.config.device.use_gpu = False
+        if self.config.device == 'cuda' and not torch.cuda.is_available():
+            self.config.device = 'cpu'
             warnings.warn("Cannot set model device as GPU because not available, setting it to CPU")
 
         # network
         self.set_network(self.config.network.name, self.config.network.parameters)
-        self.init_network(self.config.network.initialization.name, self.config.network.initialization.parameters)
-        self.set_device(self.config.device.use_gpu)
+        self.init_network_weights(self.config.network.weights_init.name, self.config.network.weights_init.parameters)
+        self.set_device(self.config.device)
 
         # loss function
         self.set_loss(self.config.loss.name, self.config.loss.parameters)
@@ -103,33 +101,23 @@ class BaseDNN(nn.Module):
 
         # update config
         self.config.network.name = network_name
-        self.config.network.parameters = gr.config.update_config(network_parameters, self.config.network.parameters)
+        self.config.network.parameters.update(network_parameters)
 
-    def init_network(self, initialization_name, initialization_parameters):
-        initialization_function = initialization.get_initialization(initialization_name)
-        if initialization_name == "pretrain":
-            self.network = initialization_function(self.network, initialization_parameters.checkpoint_filepath)
+    def init_network_weights(self, weights_init_name, weights_init_parameters):
+        weights_init_function = get_weights_init(weights_init_name)
+        if weights_init_name == "pretrain":
+            self.network = weights_init_function(self.network, weights_init_parameters.checkpoint_filepath)
         else:
-            self.network.apply(initialization_function)
+            self.network.apply(weights_init_function)
 
         # update config
-        self.config.network.initialization.name = initialization_name
-        self.config.network.initialization.parameters = gr.config.update_config(initialization_parameters,
-                                                                                self.config.network.initialization.parameters)
+        self.config.network.weights_init.name = weights_init_name
+        self.config.network.weights_init.parameters.update(weights_init_parameters)
 
-    def set_device(self, use_gpu):
-        if use_gpu:
-            self.to("cuda:0")
-        else:
-            self.to("cpu")
+    def set_device(self, device):
+        self.to(device) #device="cuda" or "cpu"
+        self.config.device = device
 
-        # update config
-        self.config.device.use_gpu = use_gpu
-
-    def push_variable_to_device(self, x):
-        if next(self.parameters()).is_cuda and not x.is_cuda:
-            x = x.cuda()
-        return x
 
     def set_loss(self, loss_name, loss_parameters):
         loss_class = losses.get_loss(loss_name)
@@ -137,7 +125,7 @@ class BaseDNN(nn.Module):
 
         # update config
         self.config.loss.name = loss_name
-        self.config.loss.parameters = gr.config.update_config(loss_parameters, self.config.loss.parameters)
+        self.config.loss.parameters.update(loss_parameters)
 
     def set_optimizer(self, optimizer_name, optimizer_parameters):
         optimizer_class = eval("torch.optim.{}".format(optimizer_name))
@@ -146,21 +134,20 @@ class BaseDNN(nn.Module):
 
         # update config
         self.config.optimizer.name = optimizer_name
-        self.config.optimizer.parameters = gr.config.update_config(optimizer_parameters,
-                                                                   self.config.optimizer.parameters)
+        self.config.update(optimizer_parameters)
 
     def run_training(self, train_loader, n_epochs, valid_loader=None, training_logger=None):
-        pass
+        raise NotImplementedError
 
     def train_epoch(self, train_loader, logger=None):
         self.train()
-        pass
+        raise NotImplementedError
 
     def valid_epoch(self, valid_loader, logger=None):
         self.eval()
-        pass
+        raise NotImplementedError
 
-    def save_checkpoint(self, checkpoint_filepath):
+    def save(self, filepath='representation.pickle'):
         # save current epoch weight file with optimizer if we want to relaunch training from that point
         network = {
             "epoch": self.n_epochs,
@@ -170,49 +157,35 @@ class BaseDNN(nn.Module):
             "optimizer_state_dict": self.optimizer.state_dict()
         }
 
-        torch.save(network, checkpoint_filepath)
+        torch.save(network, filepath)
 
     @staticmethod
-    def load_checkpoint(checkpoint_filepath, use_gpu=False, representation_model=None):
-        if os.path.exists(checkpoint_filepath):
-            saved_model = torch.load(checkpoint_filepath, map_location='cpu')
-            model_type = saved_model['type']
-            config = saved_model['config']
-            if not use_gpu:
-                config.device.use_gpu = False
-                if "ProgressiveTree" in model_type:
-                    config.node.device.use_gpu = False
-            # the saved dnn can belong to gr.dnn, gr.models, gr.evaluationmodels
-            if hasattr(gr.dnn, model_type):
-                model_cls = getattr(gr.dnn, model_type)
-                model = model_cls(config=config)
-            elif hasattr(gr.models, model_type):
-                model_cls = getattr(gr.models, model_type)
-                model = model_cls(config=config)
-            elif hasattr(gr.evaluationmodels, model_type):
-                model_cls = getattr(gr.evaluationmodels, model_type)
-                model = model_cls(representation_model=representation_model, config=config)
-            else:
-                raise ValueError("the model cannot be load as it does not iherit from the BaseDNN class")
+    def load(filepath='representation.pickle', map_location='cpu'):
+        saved_representation = torch.load(filepath, map_location=map_location)
+        representation_type = saved_representation['type']
+        representation_cls = getattr(image_representation.representations.torch_nn, representation_type)
+        representation_config = saved_representation['config']
+        representation_config.device = map_location
+        representation = representation_cls(config=representation_config)
+        representation.n_epochs = saved_representation["epoch"]
+        representation.set_device(map_location)
+        representation.network.load_state_dict(saved_representation['network_state_dict'])
+        representation.optimizer.load_state_dict(saved_representation['optimizer_state_dict'])
 
-            if "ProgressiveTree" in model_type:
-                split_history = saved_model['split_history']
+        # TODO: ADD IN SUBCLASSES
+        '''
+        if "ProgressiveTree" in model_type:
+            split_history = saved_model['split_history']
 
-                for split_node_path, split_node_attr in split_history.items():
-                    model.split_node(split_node_path)
-                    node = model.network.get_child_node(split_node_path)
-                    node.boundary = split_node_attr["boundary"]
-                    node.feature_range = split_node_attr["feature_range"]
+            for split_node_path, split_node_attr in split_history.items():
+                model.split_node(split_node_path)
+                node = model.network.get_child_node(split_node_path)
+                node.boundary = split_node_attr["boundary"]
+                node.feature_range = split_node_attr["feature_range"]
 
-            model.network.load_state_dict(saved_model['network_state_dict'])
+        model.network.load_state_dict(saved_model['network_state_dict'])
 
-            if "GAN" in model_type:
-                model.optimizer_discriminator.load_state_dict(saved_model['optimizer_discriminator_state_dict'])
-                model.optimizer_generator.load_state_dict(saved_model['optimizer_generator_state_dict'])
-            else:
-                model.optimizer.load_state_dict(saved_model['optimizer_state_dict'])
-            model.n_epochs = saved_model["epoch"]
-            model.set_device(use_gpu)
-            return model
-        else:
-            raise ValueError("checkpoint filepath does not exist")
+        if "GAN" in model_type:
+            model.optimizer_discriminator.load_state_dict(saved_model['optimizer_discriminator_state_dict'])
+            model.optimizer_generator.load_state_dict(saved_model['optimizer_generator_state_dict'])
+        '''

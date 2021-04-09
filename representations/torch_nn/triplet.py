@@ -1,8 +1,7 @@
 from copy import deepcopy
-import goalrepresent as gr
-from goalrepresent import dnn
-from goalrepresent import models
-from goalrepresent.helper import tensorboardhelper
+from addict import Dict
+from image_representation.representations.torch_nn import TorchNNRepresentation, VAE, BetaVAE, AnnealedVAE, BetaTCVAE
+from image_representation.utils.tensorboard import resize_embeddings
 import numpy as np
 import os
 import sys
@@ -15,17 +14,18 @@ from torchvision.utils import make_grid
 
 def get_combined_triplet_class(base_class):
 
-    class CombinedTripletModel(TripletModel, base_class):
+    class CombinedTriplet(Triplet, base_class):
         @staticmethod
         def default_config():
-            default_config = gr.config.update_config(TripletModel.default_config(), base_class.default_config())
+            default_config = Triplet.default_config()
+            default_config.update(base_class.default_config())
             return default_config
 
         def __init__(self, config=None, **kwargs):
             base_class.__init__(self, config=config, **kwargs)
 
             if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
-                model = gr.dnn.BaseDNN.load_checkpoint(config.pretrained_model_filepath)
+                model = TorchNNRepresentation.load(config.pretrained_model_filepath, map_location=self.config.device)
                 if hasattr(model, "config"):
                     self.config = model.config
                     self.config.update(self.config)
@@ -72,38 +72,38 @@ def get_combined_triplet_class(base_class):
                 return self.forward_combined(x_ref, x_a, x_b, x_c)
             else:
                 raise ValueError(
-                    "CombinedTripletModel can take either one input image or four input images (Triplet), not {}".format(
+                    "CombinedTriplet can take either one input image or four input images (Triplet), not {}".format(
                         len(args)))
 
         def forward_for_graph_tracing(self, *args):
             return base_class.forward_for_graph_tracing(self, args[0])
 
         def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
-            return TripletModel.run_training(self, train_loader, training_config, valid_loader=valid_loader,
+            return Triplet.run_training(self, train_loader, training_config, valid_loader=valid_loader,
                                            logger=logger)
 
         def train_epoch(self, train_loader, logger=None):
-            return TripletModel.train_epoch(self, train_loader, logger=logger)
+            return Triplet.train_epoch(self, train_loader, logger=logger)
 
         def valid_epoch(self, valid_loader, logger=None):
-            return TripletModel.valid_epoch(self, valid_loader, logger=logger)
+            return Triplet.valid_epoch(self, valid_loader, logger=logger)
 
         def __reduce__(self):
             base_class_str = base_class.__name__[:-5]
-            cur_class = eval("gr.models.{}TripletModel".format(base_class_str))
+            cur_class = eval("gr.models.{}Triplet".format(base_class_str))
             self.__class__ = cur_class
             return (self.__class__, (self.config,))
 
-    return CombinedTripletModel
+    return CombinedTriplet
 
-class TripletModel(dnn.BaseDNN, gr.BaseModel):
+class Triplet(TorchNNRepresentation):
     '''
     Base Triplet Class
     '''
 
     @staticmethod
     def default_config():
-        default_config = dnn.BaseDNN.default_config()
+        default_config = TorchNNRepresentation.default_config()
 
         # network parameters
         default_config.network = Dict()
@@ -138,11 +138,11 @@ class TripletModel(dnn.BaseDNN, gr.BaseModel):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        dnn.BaseDNN.__init__(self, config=config, **kwargs)
+        TorchNNRepresentation.__init__(self, config=config, **kwargs)
 
 
     def set_network(self, network_name, network_parameters):
-        dnn.BaseDNN.set_network(self, network_name, network_parameters)
+        TorchNNRepresentation.set_network(self, network_name, network_parameters)
         # add attention head
         if self.network.encoder.config.use_attention:
             self.network.fc_cast = nn.Linear(self.config.network.parameters.n_latents * 4,
@@ -354,7 +354,7 @@ class TripletModel(dnn.BaseDNN, gr.BaseModel):
             logger.add_image("reconstructions", img, self.n_epochs)
 
         if record_embeddings:
-            images = tensorboardhelper.resize_embeddings(images)
+            images = resize_embeddings(images)
             logger.add_embedding(
                 embeddings,
                 metadata=labels,
@@ -467,14 +467,14 @@ class TripletModel(dnn.BaseDNN, gr.BaseModel):
         return None
 
 
-VAETripletModel_local = get_combined_triplet_class(models.VAEModel)
-VAETripletModel = type('VAETripletModel', (TripletModel, models.VAEModel), dict(VAETripletModel_local.__dict__))
+VAETriplet_local = get_combined_triplet_class(VAE)
+VAETriplet = type('VAETriplet', (Triplet, VAE), dict(VAETriplet_local.__dict__))
 
-BetaVAETripletModel_local = get_combined_triplet_class(models.BetaVAEModel)
-BetaVAETripletModel = type('BetaVAETripletModel', (TripletModel, models.BetaVAEModel), dict(BetaVAETripletModel_local.__dict__))
+BetaVAETriplet_local = get_combined_triplet_class(BetaVAE)
+BetaVAETriplet = type('BetaVAETriplet', (Triplet, BetaVAE), dict(BetaVAETriplet_local.__dict__))
 
-AnnealedVAETripletModel_local = get_combined_triplet_class(models.AnnealedVAEModel)
-AnnealedVAETripletModel = type('AnnealedVAETripletModel', (TripletModel, models.AnnealedVAEModel), dict(AnnealedVAETripletModel_local.__dict__))
+AnnealedVAETriplet_local = get_combined_triplet_class(AnnealedVAE)
+AnnealedVAETriplet = type('AnnealedVAETriplet', (Triplet, AnnealedVAE), dict(AnnealedVAETriplet_local.__dict__))
 
-BetaTCVAETripletModel_local = get_combined_triplet_class(models.BetaTCVAEModel)
-BetaTCVAETripletModel = type('BetaTCVAETripletModel', (TripletModel, models.BetaTCVAEModel), dict(BetaTCVAETripletModel_local.__dict__))
+BetaTCVAETriplet_local = get_combined_triplet_class(BetaTCVAE)
+BetaTCVAETriplet = type('BetaTCVAETriplet', (Triplet, BetaTCVAE), dict(BetaTCVAETriplet_local.__dict__))

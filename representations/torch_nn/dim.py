@@ -1,7 +1,7 @@
 from copy import deepcopy
-import goalrepresent as gr
-from goalrepresent import dnn
-from goalrepresent.helper import tensorboardhelper
+from addict import Dict
+from image_representation.representations.torch_nn import TorchNNRepresentation
+from image_representation.utils.tensorboard import resize_embeddings
 import numpy as np
 import os
 import random
@@ -9,7 +9,6 @@ import sys
 import time
 import torch
 from torch import nn
-from torch.autograd import Variable
 
 """ ========================================================================================================================
 DIM architecture
@@ -148,14 +147,14 @@ class PriorDiscriminator(nn.Module):
         return output
 
 
-class DIMModel(dnn.BaseDNN, gr.BaseModel):
+class DIM(TorchNNRepresentation):
     '''
     DIM Class
     '''
 
     @staticmethod
     def default_config():
-        default_config = dnn.BaseDNN.default_config()
+        default_config = TorchNNRepresentation.default_config()
 
         # number of negative samples for discriminators
         default_config.num_negative = 2
@@ -171,10 +170,10 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
         default_config.network.parameters.feature_layer = 2
         default_config.network.parameters.encoder_conditional_type = "deterministic"
 
-        # initialization parameters
-        default_config.network.initialization = Dict()
-        default_config.network.initialization.name = "pytorch"
-        default_config.network.initialization.parameters = Dict()
+        # weights_init parameters
+        default_config.network.weights_init = Dict()
+        default_config.network.weights_init.name = "pytorch"
+        default_config.network.weights_init.parameters = Dict()
 
         # loss parameters
         default_config.loss = Dict()
@@ -193,14 +192,14 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        dnn.BaseDNN.__init__(self, config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
+        TorchNNRepresentation.__init__(self, config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
 
         self.output_keys_list = self.network.encoder.output_keys_list + ["global_pos", "global_neg", "local_pos",
                                                                          "local_neg", "prior_pos", "prior_neg"]
 
     def set_network(self, network_name, network_parameters):
         # defines the encoder
-        dnn.BaseDNN.set_network(self, network_name, network_parameters)
+        TorchNNRepresentation.set_network(self, network_name, network_parameters)
         n_latents = self.config.network.parameters.n_latents
         local_feature_shape = self.network.encoder.local_feature_shape
         # add a global discriminator
@@ -331,7 +330,8 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
         self.train()
         losses = {}
         for data in train_loader:
-            x = Variable(data['obs'])
+            x = data['obs']
+            x.requires_grad = True
             x = self.push_variable_to_device(x)
             # forward
             model_outputs = self.forward(x)
@@ -370,7 +370,7 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
 
         with torch.no_grad():
             for data in valid_loader:
-                x = Variable(data['obs'])
+                x = data['obs']
                 x = self.push_variable_to_device(x)
                 # forward
                 model_outputs = self.forward(x)
@@ -395,7 +395,7 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
             embedding_samples = torch.cat(embedding_samples)
             embedding_metadata = torch.cat(embedding_metadata)
             embedding_images = torch.cat(embedding_images)
-            embedding_images = tensorboardhelper.resize_embeddings(embedding_images)
+            embedding_images = resize_embeddings(embedding_images)
             logger.add_embedding(
                 embedding_samples,
                 metadata=embedding_metadata,
@@ -403,9 +403,3 @@ class DIMModel(dnn.BaseDNN, gr.BaseModel):
                 global_step=self.n_epochs)
 
         return losses
-
-    def get_encoder(self):
-        return deepcopy(self.network.encoder)
-
-    def get_decoder(self):
-        return None

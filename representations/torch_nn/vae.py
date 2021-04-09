@@ -1,31 +1,25 @@
 from copy import deepcopy
-from itertools import chain
-import goalrepresent as gr
-from goalrepresent import dnn
-from goalrepresent.dnn import losses
-from goalrepresent.dnn.networks import decoders, discriminators
-from goalrepresent.helper import mathhelper, tensorboardhelper
-import numpy as np
-import math
+from addict import Dict
+from image_representation.representations.torch_nn import TorchNNRepresentation
+from image_representation.representations.torch_nn import decoders
+from image_representation.utils.tensorboard import resize_embeddings
 import os
 import sys
 import time
 import torch
-from torch import nn
-from torch.autograd import Variable
 from torchvision.utils import make_grid
 
 """ ========================================================================================================================
 Base VAE architecture
 ========================================================================================================================="""
-class VAEModel(dnn.BaseDNN, gr.BaseModel):
+class VAE(TorchNNRepresentation):
     '''
     Base VAE Class
     '''
 
     @staticmethod
     def default_config():
-        default_config = dnn.BaseDNN.default_config()
+        default_config = TorchNNRepresentation.default_config()
 
         # network parameters
         default_config.network = Dict()
@@ -38,10 +32,10 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         default_config.network.parameters.feature_layer = 2
         default_config.network.parameters.encoder_conditional_type = "gaussian"
 
-        # initialization parameters
-        default_config.network.initialization = Dict()
-        default_config.network.initialization.name = "pytorch"
-        default_config.network.initialization.parameters = Dict()
+        # weights_init parameters
+        default_config.network.weights_init = Dict()
+        default_config.network.weights_init.name = "pytorch"
+        default_config.network.weights_init.parameters = Dict()
 
         # loss parameters
         default_config.loss = Dict()
@@ -58,12 +52,12 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        dnn.BaseDNN.__init__(self, config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
+        TorchNNRepresentation.__init__(self, config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
 
         self.output_keys_list = self.network.encoder.output_keys_list + ["recon_x"]
 
     def set_network(self, network_name, network_parameters):
-        dnn.BaseDNN.set_network(self, network_name, network_parameters)
+        TorchNNRepresentation.set_network(self, network_name, network_parameters)
         # add a decoder to the network for the VAE
         decoder_class = decoders.get_decoder(network_name)
         self.network.decoder = decoder_class(config=network_parameters)
@@ -153,7 +147,8 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         self.train()
         losses = {}
         for data in train_loader:
-            x = Variable(data['obs'])
+            x = data['obs']
+            x.requires_grad = True
             x = self.push_variable_to_device(x)
             # forward
             model_outputs = self.forward(x)
@@ -172,7 +167,7 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
                     losses[k].append(v.data.item())
 
         for k, v in losses.items():
-            losses[k] = np.mean(v)
+            losses[k] = torch.mean(torch.tensor(v))
 
         self.n_epochs += 1
 
@@ -198,7 +193,7 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
                     images = []
         with torch.no_grad():
             for data in valid_loader:
-                x = Variable(data['obs'])
+                x = data['obs']
                 x = self.push_variable_to_device(x)
                 # forward
                 model_outputs = self.forward(x)
@@ -207,9 +202,9 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
                 # save losses
                 for k, v in batch_losses.items():
                     if k not in losses:
-                        losses[k] = np.expand_dims(v.detach().cpu().numpy(), axis=-1)
+                        losses[k] = v.detach().cpu().unsqueeze(-1)
                     else:
-                        losses[k] = np.vstack([losses[k], np.expand_dims(v.detach().cpu().numpy(), axis=-1)])
+                        losses[k] = torch.vstack([losses[k], v.detach().cpu().unsqueeze(-1)])
 
                 if record_valid_images:
                     recon_x = model_outputs["recon_x"]
@@ -234,7 +229,7 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
         # log results
         if record_valid_images:
             n_images = min(len(images), 40)
-            sampled_ids = np.random.choice(len(images), n_images, replace=False)
+            sampled_ids =  torch.randperm(len(images))[:n_images]
             input_images = images[sampled_ids].detach().cpu()
             output_images = recon_images[sampled_ids].detach().cpu()
             if self.config.loss.parameters.reconstruction_dist == "bernoulli":
@@ -246,7 +241,7 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
             logger.add_image("reconstructions", img, self.n_epochs)
 
         if record_embeddings:
-            images = tensorboardhelper.resize_embeddings(images)
+            images = resize_embeddings(images)
             logger.add_embedding(
                 embeddings,
                 metadata=labels,
@@ -255,7 +250,7 @@ class VAEModel(dnn.BaseDNN, gr.BaseModel):
 
         # average loss and return
         for k, v in losses.items():
-            losses[k] = np.mean(v)
+            losses[k] = torch.mean(torch.tensor(v))
 
         return losses
 
@@ -271,14 +266,14 @@ State-of-the-art modifications of the basic VAE
 ========================================================================================================================="""
 
 
-class BetaVAEModel(VAEModel):
+class BetaVAE(VAE):
     '''
     BetaVAE Class
     '''
 
     @staticmethod
     def default_config():
-        default_config = VAEModel.default_config()
+        default_config = VAE.default_config()
 
         # loss parameters
         default_config.loss.name = "BetaVAE"
@@ -288,17 +283,17 @@ class BetaVAEModel(VAEModel):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        VAEModel.__init__(self, config, **kwargs)
+        VAE.__init__(self, config, **kwargs)
 
 
-class AnnealedVAEModel(VAEModel):
+class AnnealedVAE(VAE):
     '''
     AnnealedVAE Class
     '''
 
     @staticmethod
     def default_config():
-        default_config = VAEModel.default_config()
+        default_config = VAE.default_config()
 
         # loss parameters
         default_config.loss.name = "AnnealedVAE"
@@ -311,16 +306,16 @@ class AnnealedVAEModel(VAEModel):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        VAEModel.__init__(self, config, **kwargs)
+        VAE.__init__(self, config, **kwargs)
 
-class BetaTCVAEModel(VAEModel):
+class BetaTCVAE(VAE):
     '''
     BetaTCVAE Class
     '''
 
     @staticmethod
     def default_config():
-        default_config = VAEModel.default_config()
+        default_config = VAE.default_config()
 
         # loss parameters
         default_config.loss.name = "BetaTCVAE"
@@ -334,7 +329,7 @@ class BetaTCVAEModel(VAEModel):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        VAEModel.__init__(self, config, **kwargs)
+        VAE.__init__(self, config, **kwargs)
 
     def train_epoch(self, train_loader, logger=None):
         self.train()
@@ -344,7 +339,8 @@ class BetaTCVAEModel(VAEModel):
         self.loss_f.dataset_size = len(train_loader.dataset)
 
         for data in train_loader:
-            x = Variable(data['obs'])
+            x = data['obs']
+            x.requires_grad = True
             x = self.push_variable_to_device(x)
             # forward
             model_outputs = self.forward(x)
@@ -363,7 +359,7 @@ class BetaTCVAEModel(VAEModel):
                     losses[k].append(v.data.item())
 
         for k, v in losses.items():
-            losses[k] = np.mean(v)
+            losses[k] = torch.mean(torch.tensor(v))
 
         self.n_epochs += 1
 
