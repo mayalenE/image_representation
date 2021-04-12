@@ -6,6 +6,8 @@ from addict import Dict
 import torch
 from torch import nn
 import warnings
+import os
+from tensorboardX import SummaryWriter
 
 
 class TorchNNRepresentation(Representation, nn.Module):
@@ -47,9 +49,9 @@ class TorchNNRepresentation(Representation, nn.Module):
         default_config.optimizer.parameters.lr = 1e-3
         default_config.optimizer.parameters.weight_decay = 1e-5
 
-        # In training folder:
         ## logging (will save every X epochs)
         default_config.logging = Dict()
+        default_config.logging.folder = None
         default_config.logging.record_loss_every = 1
         default_config.logging.record_valid_images_every = 1
         default_config.logging.record_embeddings_every = 1
@@ -88,6 +90,12 @@ class TorchNNRepresentation(Representation, nn.Module):
 
         # optimizer
         self.set_optimizer(self.config.optimizer.name, self.config.optimizer.parameters)
+
+        # logger
+        self.set_logger(self.config.logging)
+
+        # checkpoint
+        self.set_checkpoint(self.config.checkpoint)
 
         self.n_epochs = 0
 
@@ -137,14 +145,33 @@ class TorchNNRepresentation(Representation, nn.Module):
         self.config.optimizer.name = optimizer_name
         self.config.update(optimizer_parameters)
 
-    def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
+    def set_logger(self, logger_config):
+        if logger_config.folder is not None:
+            if not os.path.exists(logger_config.folder):
+                os.makedirs(logger_config.folder)
+            self.logger = SummaryWriter(logger_config.folder, 'w')
+        else:
+            self.logger = None
+
+        # update config
+        self.config.logger.update(logger_config)
+
+    def set_checkpoint(self, checkpoint_config):
+        if checkpoint_config.folder is not None:
+            if not os.path.exists(checkpoint_config.folder):
+                os.makedirs(checkpoint_config.folder)
+
+        # update config
+        self.config.checkpoint.update(checkpoint_config)
+
+    def run_training(self, train_loader, training_config, valid_loader=None):
         raise NotImplementedError
 
-    def train_epoch(self, train_loader, logger=None):
+    def train_epoch(self, train_loader):
         self.train()
         raise NotImplementedError
 
-    def valid_epoch(self, valid_loader, logger=None):
+    def valid_epoch(self, valid_loader):
         self.eval()
         raise NotImplementedError
 

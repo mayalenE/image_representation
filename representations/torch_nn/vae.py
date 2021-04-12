@@ -90,22 +90,20 @@ class VAE(TorchNNRepresentation):
             z = self.network.encoder.calc_embedding(x)
         return z
 
-    def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
-        """
-        logger: tensorboard X summary writer
-        """
+    def run_training(self, train_loader, training_config, valid_loader=None):
+
         if "n_epochs" not in training_config:
             training_config.n_epochs = 0
 
         # Save the graph in the logger
-        if logger is not None:
+        if self.logger is not None:
             dummy_input = torch.FloatTensor(1, self.config.network.parameters.n_channels,
                                             self.config.network.parameters.input_size[0],
                                             self.config.network.parameters.input_size[1]).uniform_(0, 1)
             dummy_input = dummy_input.to(self.config.device)
             self.eval()
             with torch.no_grad():
-                logger.add_graph(self, dummy_input, verbose=False)
+                self.logger.add_graph(self, dummy_input, verbose=False)
 
         do_validation = False
         if valid_loader is not None:
@@ -114,13 +112,13 @@ class VAE(TorchNNRepresentation):
 
         for epoch in range(training_config.n_epochs):
             t0 = time.time()
-            train_losses = self.train_epoch(train_loader, logger=logger)
+            train_losses = self.train_epoch(train_loader)
             t1 = time.time()
 
-            if logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
+            if self.logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
                 for k, v in train_losses.items():
-                    logger.add_scalars('loss/{}'.format(k), {'train': v}, self.n_epochs)
-                logger.add_text('time/train', 'Train Epoch {}: {:.3f} secs'.format(self.n_epochs, t1 - t0),
+                    self.logger.add_scalars('loss/{}'.format(k), {'train': v}, self.n_epochs)
+                self.logger.add_text('time/train', 'Train Epoch {}: {:.3f} secs'.format(self.n_epochs, t1 - t0),
                                 self.n_epochs)
 
             if self.n_epochs % self.config.checkpoint.save_model_every == 0:
@@ -130,12 +128,12 @@ class VAE(TorchNNRepresentation):
 
             if do_validation:
                 t2 = time.time()
-                valid_losses = self.valid_epoch(valid_loader, logger=logger)
+                valid_losses = self.valid_epoch(valid_loader)
                 t3 = time.time()
-                if logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
+                if self.logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
                     for k, v in valid_losses.items():
-                        logger.add_scalars('loss/{}'.format(k), {'valid': v}, self.n_epochs)
-                    logger.add_text('time/valid', 'Valid Epoch {}: {:.3f} secs'.format(self.n_epochs, t3 - t2),
+                        self.logger.add_scalars('loss/{}'.format(k), {'valid': v}, self.n_epochs)
+                    self.logger.add_text('time/valid', 'Valid Epoch {}: {:.3f} secs'.format(self.n_epochs, t3 - t2),
                                     self.n_epochs)
 
                 valid_loss = valid_losses['total']
@@ -143,7 +141,7 @@ class VAE(TorchNNRepresentation):
                     best_valid_loss = valid_loss
                     self.save(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
 
-    def train_epoch(self, train_loader, logger=None):
+    def train_epoch(self, train_loader):
         self.train()
         losses = {}
         for data in train_loader:
@@ -172,14 +170,14 @@ class VAE(TorchNNRepresentation):
 
         return losses
 
-    def valid_epoch(self, valid_loader, logger=None):
+    def valid_epoch(self, valid_loader):
         self.eval()
         losses = {}
 
         # Prepare logging
         record_valid_images = False
         record_embeddings = False
-        if logger is not None:
+        if self.logger is not None:
             if self.n_epochs % self.config.logging.record_valid_images_every == 0:
                 record_valid_images = True
                 images = []
@@ -236,11 +234,11 @@ class VAE(TorchNNRepresentation):
             vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]
             vizu_tensor_list[1::2] = [output_images[n] for n in range(n_images)]
             img = make_grid(vizu_tensor_list, nrow=2, padding=0)
-            logger.add_image("reconstructions", img, self.n_epochs)
+            self.logger.add_image("reconstructions", img, self.n_epochs)
 
         if record_embeddings:
             images = resize_embeddings(images)
-            logger.add_embedding(
+            self.logger.add_embedding(
                 embeddings,
                 metadata=labels,
                 label_img=images,
@@ -323,7 +321,7 @@ class BetaTCVAE(VAE):
     def __init__(self, config=None, **kwargs):
         VAE.__init__(self, config, **kwargs)
 
-    def train_epoch(self, train_loader, logger=None):
+    def train_epoch(self, train_loader):
         self.train()
         losses = {}
 

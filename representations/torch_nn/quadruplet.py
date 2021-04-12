@@ -37,22 +37,20 @@ class QuadrupletNet(nn.Module):
 
         return z_pos_a, z_pos_b, z_neg_a, z_neg_b
 
-    def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
-        """
-        logger: tensorboard X summary writer
-        """
+    def run_training(self, train_loader, training_config, valid_loader=None):
+
         if "n_epochs" not in training_config:
             training_config.n_epochs = 0
 
         # Save the graph in the logger
-        if logger is not None:
+        if self.logger is not None:
             dummy_input = torch.FloatTensor(1, self.config.network.parameters.n_channels,
                                             self.config.network.parameters.input_size[0],
                                             self.config.network.parameters.input_size[1]).uniform_(0, 1)
             dummy_input = dummy_input.to(self.config.device)
             self.eval()
             with torch.no_grad():
-                logger.add_graph(self, dummy_input, verbose=False)
+                self.logger.add_graph(self, dummy_input, verbose=False)
 
         do_validation = False
         if valid_loader is not None:
@@ -63,19 +61,19 @@ class QuadrupletNet(nn.Module):
             # start with evaluation/test epoch
             if self.n_epochs % self.config.evaluation.save_results_every == 0:
                 train_acc, test_acc = self.evaluation_epoch(train_loader, valid_loader)
-                if logger is not None:
-                    logger.add_scalars('pred_acc', {'train': train_acc}, self.n_epochs)
-                    logger.add_scalars('pred_acc', {'test': test_acc}, self.n_epochs)
+                if self.logger is not None:
+                    self.logger.add_scalars('pred_acc', {'train': train_acc}, self.n_epochs)
+                    self.logger.add_scalars('pred_acc', {'test': test_acc}, self.n_epochs)
 
             # train epoch
             t0 = time.time()
-            train_losses = self.train_epoch(train_loader, logger=logger)
+            train_losses = self.train_epoch(train_loader)
             t1 = time.time()
 
-            if logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
+            if self.logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
                 for k, v in train_losses.items():
-                    logger.add_scalars('loss/{}'.format(k), {'train': v}, self.n_epochs)
-                logger.add_text('time/train', 'Train Epoch {}: {:.3f} secs'.format(self.n_epochs, t1 - t0),
+                    self.logger.add_scalars('loss/{}'.format(k), {'train': v}, self.n_epochs)
+                self.logger.add_text('time/train', 'Train Epoch {}: {:.3f} secs'.format(self.n_epochs, t1 - t0),
                                 self.n_epochs)
 
             if self.n_epochs % self.config.checkpoint.save_model_every == 0:
@@ -86,12 +84,12 @@ class QuadrupletNet(nn.Module):
             # validation epoch
             if do_validation:
                 t2 = time.time()
-                valid_losses = self.valid_epoch(valid_loader, logger=logger)
+                valid_losses = self.valid_epoch(valid_loader)
                 t3 = time.time()
-                if logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
+                if self.logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
                     for k, v in valid_losses.items():
-                        logger.add_scalars('loss/{}'.format(k), {'valid': v}, self.n_epochs)
-                    logger.add_text('time/valid', 'Valid Epoch {}: {:.3f} secs'.format(self.n_epochs, t3 - t2),
+                        self.logger.add_scalars('loss/{}'.format(k), {'valid': v}, self.n_epochs)
+                    self.logger.add_text('time/valid', 'Valid Epoch {}: {:.3f} secs'.format(self.n_epochs, t3 - t2),
                                     self.n_epochs)
 
                 valid_loss = valid_losses['total']
@@ -99,7 +97,7 @@ class QuadrupletNet(nn.Module):
                     best_valid_loss = valid_loss
                     self.save(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
 
-    def train_epoch(self, train_loader, logger=None):
+    def train_epoch(self, train_loader):
         self.train()
         losses = {}
         for data in train_loader:
@@ -131,14 +129,14 @@ class QuadrupletNet(nn.Module):
 
         return losses
 
-    def valid_epoch(self, valid_loader, logger=None):
+    def valid_epoch(self, valid_loader):
         self.eval()
         losses = {}
 
         # Prepare logging
         record_valid_images = False
         record_embeddings = False
-        if logger is not None:
+        if self.logger is not None:
             if self.n_epochs % self.config.logging.record_valid_images_every == 0:
                 record_valid_images = True
                 images = []
@@ -204,11 +202,11 @@ class QuadrupletNet(nn.Module):
             vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]
             vizu_tensor_list[1::2] = [output_images[n] for n in range(n_images)]
             img = make_grid(vizu_tensor_list, nrow=2, padding=0)
-            logger.add_image("reconstructions", img, self.n_epochs)
+            self.logger.add_image("reconstructions", img, self.n_epochs)
 
         if record_embeddings:
             images = resize_embeddings(images)
-            logger.add_embedding(
+            self.logger.add_embedding(
                 embeddings,
                 metadata=labels,
                 label_img=images,
@@ -350,14 +348,14 @@ class VAEQuadruplet(VAE, QuadrupletNet):
                 "VAEQuadruplet can take either one input image (VAE) or four input images (Quadruplet), not {}".format(
                     len(args)))
 
-    def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
-        return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader, logger=logger)
+    def run_training(self, train_loader, training_config, valid_loader=None):
+        return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader)
 
-    def train_epoch(self, train_loader, logger=None):
-        return QuadrupletNet.train_epoch(self, train_loader, logger=logger)
+    def train_epoch(self, train_loader):
+        return QuadrupletNet.train_epoch(self, train_loader)
 
-    def valid_epoch(self, valid_loader, logger=None):
-        return QuadrupletNet.valid_epoch(self, valid_loader, logger=logger)
+    def valid_epoch(self, valid_loader):
+        return QuadrupletNet.valid_epoch(self, valid_loader)
 
 
 class BetaVAEQuadruplet(BetaVAE, QuadrupletNet):
@@ -415,15 +413,14 @@ class BetaVAEQuadruplet(BetaVAE, QuadrupletNet):
                 "BetaVAEQuadruplet can take either one input image (BetaVAE) or four input images (Quadruplet), not {}".format(
                     len(args)))
 
-    def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
-        return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader,
-                                          logger=logger)
+    def run_training(self, train_loader, training_config, valid_loader=None):
+        return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader)
 
-    def train_epoch(self, train_loader, logger=None):
-        return QuadrupletNet.train_epoch(self, train_loader, logger=logger)
+    def train_epoch(self, train_loader):
+        return QuadrupletNet.train_epoch(self, train_loader)
 
-    def valid_epoch(self, valid_loader, logger=None):
-        return QuadrupletNet.valid_epoch(self, valid_loader, logger=logger)
+    def valid_epoch(self, valid_loader):
+        return QuadrupletNet.valid_epoch(self, valid_loader)
 
 
 class AnnealedVAEQuadruplet(AnnealedVAE, QuadrupletNet):
@@ -481,15 +478,14 @@ class AnnealedVAEQuadruplet(AnnealedVAE, QuadrupletNet):
                 "AnnealedVAEQuadruplet can take either one input image (AnnealedVAE) or four input images (Quadruplet), not {}".format(
                     len(args)))
 
-    def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
-        return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader,
-                                          logger=logger)
+    def run_training(self, train_loader, training_config, valid_loader=None):
+        return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader)
 
-    def train_epoch(self, train_loader, logger=None):
-        return QuadrupletNet.train_epoch(self, train_loader, logger=logger)
+    def train_epoch(self, train_loader):
+        return QuadrupletNet.train_epoch(self, train_loader)
 
-    def valid_epoch(self, valid_loader, logger=None):
-        return QuadrupletNet.valid_epoch(self, valid_loader, logger=logger)
+    def valid_epoch(self, valid_loader):
+        return QuadrupletNet.valid_epoch(self, valid_loader)
 
 
 class BetaTCVAEQuadruplet(BetaTCVAE, QuadrupletNet):
@@ -547,12 +543,11 @@ class BetaTCVAEQuadruplet(BetaTCVAE, QuadrupletNet):
                 "BetaTCVAEQuadruplet can take either one input image (BetaTCVAE) or four input images (Quadruplet), not {}".format(
                     len(args)))
 
-    def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
-        return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader,
-                                          logger=logger)
+    def run_training(self, train_loader, training_config, valid_loader=None):
+        return QuadrupletNet.run_training(self, train_loader, training_config, valid_loader=valid_loader)
 
-    def train_epoch(self, train_loader, logger=None):
-        return QuadrupletNet.train_epoch(self, train_loader, logger=logger)
+    def train_epoch(self, train_loader):
+        return QuadrupletNet.train_epoch(self, train_loader)
 
-    def valid_epoch(self, valid_loader, logger=None):
-        return QuadrupletNet.valid_epoch(self, valid_loader, logger=logger)
+    def valid_epoch(self, valid_loader):
+        return QuadrupletNet.valid_epoch(self, valid_loader)

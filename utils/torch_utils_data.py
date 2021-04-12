@@ -1,6 +1,6 @@
-from goalrepresent.helper import randomhelper
 import torch
 from torch.utils.data import DataLoader, Subset
+from exputils.seeding import set_seed
 
 
 def get_dataloader(dataset, dataloader_config):
@@ -21,7 +21,7 @@ def get_dataloader(dataset, dataloader_config):
                             batch_size=dataloader_config.batch_size,
                             shuffle=dataloader_config.shuffle,
                             num_workers=dataloader_config.num_workers,
-                            worker_init_fn=randomhelper.set_seed
+                            worker_init_fn=set_seed
                             )
 
     return dataloader

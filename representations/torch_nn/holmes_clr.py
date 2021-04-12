@@ -571,10 +571,9 @@ class HOLMES_CLR(TorchNNRepresentation):
                                                   len(self.split_history)+1, node_path, self.n_epochs)))
 
         # (optional) Train for X epoch parent with new data (+ replay optional)
-        #TODO: add logger
         if x_loader is not None and split_trigger.n_epochs_before_split > 0:
             for epoch_before_split in range(split_trigger.n_epochs_before_split):
-                _ = self.train_epoch(x_loader, logger=None)
+                _ = self.train_epoch(x_loader)
 
         self.eval()
         # Create boundary
@@ -727,22 +726,20 @@ class HOLMES_CLR(TorchNNRepresentation):
 
 
 
-    def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
-        """
-        logger: tensorboard X summary writer
-        """
+    def run_training(self, train_loader, training_config, valid_loader=None):
+
         if "n_epochs" not in training_config:
             training_config.n_epochs = 0
 
         # Save the graph in the logger
-        if logger is not None:
+        if self.logger is not None:
             root_network_config = self.config.node.network.parameters
             dummy_input = torch.FloatTensor(4, root_network_config.n_channels, root_network_config.input_size[0],
                                             root_network_config.input_size[1]).uniform_(0, 1)
             dummy_input = dummy_input.to(self.config.device)
             self.eval()
-            # with torch.no_grad():
-            #    logger.add_graph(self, dummy_input, verbose = False)
+            with torch.no_grad():
+               self.logger.add_graph(self, dummy_input, verbose = False)
 
         do_validation = False
         if valid_loader is not None:
@@ -822,7 +819,7 @@ class HOLMES_CLR(TorchNNRepresentation):
                                 p.requires_grad = False
 
             t0 = time.time()
-            train_losses = self.train_epoch(train_loader, logger=logger)
+            train_losses = self.train_epoch(train_loader)
             t1 = time.time()
 
             # update epoch counters
@@ -835,10 +832,10 @@ class HOLMES_CLR(TorchNNRepresentation):
                     leaf_node.epochs_since_split = 1
 
             # log
-            if logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
+            if self.logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
                 for k, v in train_losses.items():
-                    logger.add_scalars('loss/{}'.format(k), {'train': v}, self.n_epochs)
-                logger.add_text('time/train', 'Train Epoch {}: {:.3f} secs'.format(self.n_epochs, t1 - t0),
+                    self.logger.add_scalars('loss/{}'.format(k), {'train': v}, self.n_epochs)
+                self.logger.add_text('time/train', 'Train Epoch {}: {:.3f} secs'.format(self.n_epochs, t1 - t0),
                                 self.n_epochs)
 
             # save model
@@ -850,12 +847,12 @@ class HOLMES_CLR(TorchNNRepresentation):
             if do_validation:
                 # 3) Perform evaluation
                 t2 = time.time()
-                valid_losses = self.valid_epoch(valid_loader, logger=logger)
+                valid_losses = self.valid_epoch(valid_loader)
                 t3 = time.time()
-                if logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
+                if self.logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
                     for k, v in valid_losses.items():
-                        logger.add_scalars('loss/{}'.format(k), {'valid': v}, self.n_epochs)
-                    logger.add_text('time/valid', 'Valid Epoch {}: {:.3f} secs'.format(self.n_epochs, t3 - t2),
+                        self.logger.add_scalars('loss/{}'.format(k), {'valid': v}, self.n_epochs)
+                    self.logger.add_text('time/valid', 'Valid Epoch {}: {:.3f} secs'.format(self.n_epochs, t3 - t2),
                                     self.n_epochs)
 
                 if valid_losses:
@@ -875,19 +872,17 @@ class HOLMES_CLR(TorchNNRepresentation):
 
 
 
-    def run_sequential_training(self, train_loader, training_config, valid_loader=None, logger=None):
-        """
-        logger: tensorboard X summary writer
-        """
+    def run_sequential_training(self, train_loader, training_config, valid_loader=None):
+
         # Save the graph in the logger
-        if logger is not None:
+        if self.logger is not None:
             root_network_config = self.config.node.network.parameters
             dummy_input = torch.FloatTensor(4, root_network_config.n_channels, root_network_config.input_size[0],
                                             root_network_config.input_size[1]).uniform_(0, 1)
             dummy_input = dummy_input.to(self.config.device)
             self.eval()
-            # with torch.no_grad():
-            #    logger.add_graph(self, dummy_input, verbose = False)
+            with torch.no_grad():
+               self.logger.add_graph(self, dummy_input, verbose = False)
 
         do_validation = False
         if valid_loader is not None:
@@ -1137,7 +1132,7 @@ class HOLMES_CLR(TorchNNRepresentation):
 
                 # 3) Perform train epoch
                 t0 = time.time()
-                train_losses = self.train_epoch(train_loader, logger=logger)
+                train_losses = self.train_epoch(train_loader)
                 t1 = time.time()
 
                 # update epoch counters
@@ -1150,10 +1145,10 @@ class HOLMES_CLR(TorchNNRepresentation):
                         leaf_node.epochs_since_split = 1
 
                 # logging
-                if logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
+                if self.logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
                     for k, v in train_losses.items():
-                        logger.add_scalars('loss/{}'.format(k), {'train': v}, self.n_epochs)
-                    logger.add_text('time/train', 'Train Epoch {}: {:.3f} secs'.format(self.n_epochs, t1 - t0),
+                        self.logger.add_scalars('loss/{}'.format(k), {'train': v}, self.n_epochs)
+                    self.logger.add_text('time/train', 'Train Epoch {}: {:.3f} secs'.format(self.n_epochs, t1 - t0),
                                     self.n_epochs)
 
                 # save model
@@ -1166,12 +1161,12 @@ class HOLMES_CLR(TorchNNRepresentation):
                 if do_validation:
                     # 4) Perform validation epoch
                     t2 = time.time()
-                    valid_losses = self.valid_epoch(valid_loader, logger=logger)
+                    valid_losses = self.valid_epoch(valid_loader)
                     t3 = time.time()
-                    if logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
+                    if self.logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
                         for k, v in valid_losses.items():
-                            logger.add_scalars('loss/{}'.format(k), {'valid': v}, self.n_epochs)
-                        logger.add_text('time/valid', 'Valid Epoch {}: {:.3f} secs'.format(self.n_epochs, t3 - t2),
+                            self.logger.add_scalars('loss/{}'.format(k), {'valid': v}, self.n_epochs)
+                        self.logger.add_text('time/valid', 'Valid Epoch {}: {:.3f} secs'.format(self.n_epochs, t3 - t2),
                                         self.n_epochs)
 
                     if valid_losses:
@@ -1317,7 +1312,7 @@ class HOLMES_CLR(TorchNNRepresentation):
         return splitted_leafs
 
 
-    def train_epoch(self, train_loader, logger=None):
+    def train_epoch(self, train_loader):
         self.train()
 
         taken_pathes = []
@@ -1374,13 +1369,13 @@ class HOLMES_CLR(TorchNNRepresentation):
 
 
         # Logger save results per leaf
-        if logger is not None:
+        if self.logger is not None:
             for leaf_path in list(set(taken_pathes)):
                 if len(leaf_path) > 1:
                     leaf_x_ids = np.where(np.array(taken_pathes, copy=False) == leaf_path)[0]
                     for k, v in losses.items():
                         leaf_v = v[leaf_x_ids, :]
-                        logger.add_scalars('loss/{}'.format(k), {'train-{}'.format(leaf_path): np.mean(leaf_v)},
+                        self.logger.add_scalars('loss/{}'.format(k), {'train-{}'.format(leaf_path): np.mean(leaf_v)},
                                            self.n_epochs)
 
         # Average loss on all tree
@@ -1389,7 +1384,7 @@ class HOLMES_CLR(TorchNNRepresentation):
 
         return losses
 
-    def valid_epoch(self, valid_loader, logger=None):
+    def valid_epoch(self, valid_loader):
         self.eval()
         losses = {}
 
@@ -1398,7 +1393,7 @@ class HOLMES_CLR(TorchNNRepresentation):
         images = None
         embeddings = None
         labels = None
-        if logger is not None:
+        if self.logger is not None:
             if self.n_epochs % self.config.logging.record_embeddings_every == 0:
                 record_embeddings = True
                 embeddings = []
@@ -1470,7 +1465,7 @@ class HOLMES_CLR(TorchNNRepresentation):
                 leaf_images = torch.cat([images[i] for i in leaf_x_ids])
                 leaf_images = resize_embeddings(leaf_images)
                 try:
-                    logger.add_embedding(
+                    self.logger.add_embedding(
                         leaf_embeddings,
                         metadata=leaf_labels,
                         label_img=leaf_images,
@@ -1511,7 +1506,7 @@ class HOLMES_CLR(TorchNNRepresentation):
     #     test_results["20NN_classification_err"] = np.empty(n_images, dtype=np.bool)
     #     #TODO: "spread" kNN
     #
-    #     test_results_per_node = {}
+        test_results_per_node = {}
     #     for node_path in self.network.get_node_pathes():
     #         test_results_per_node[node_path] = dict()
     #         test_results_per_node[node_path]["x_ids"] = []

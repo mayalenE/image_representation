@@ -223,14 +223,14 @@ class BiGAN(TorchNNRepresentation):
         return losses
 
 
-    def valid_epoch(self, valid_loader, logger=None):
+    def valid_epoch(self, valid_loader):
         self.eval()
         losses = {}
 
         # Prepare logging
         record_valid_images = False
         record_embeddings = False
-        if logger is not None:
+        if self.logger is not None:
             if self.n_epochs % self.config.logging.record_valid_images_every == 0:
                 record_valid_images = True
                 images = []
@@ -288,11 +288,11 @@ class BiGAN(TorchNNRepresentation):
             vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]
             vizu_tensor_list[1::2] = [output_images[n] for n in range(n_images)]
             img = make_grid(vizu_tensor_list, nrow=2, padding=0)
-            logger.add_image("reconstructions", img, self.n_epochs)
+            self.logger.add_image("reconstructions", img, self.n_epochs)
 
         if record_embeddings:
             images = resize_embeddings(images)
-            logger.add_embedding(
+            self.logger.add_embedding(
                 embeddings,
                 metadata=labels,
                 label_img=images,
@@ -384,7 +384,7 @@ class VAEGAN(BiGAN):
 
         return model_outputs
 
-    def train_epoch(self, train_loader, logger=None):
+    def train_epoch(self, train_loader):
         self.train()
         losses = {}
         for data in train_loader:
