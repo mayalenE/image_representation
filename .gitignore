@@ -5,3 +5,6 @@ __pycache__/
 # Don't track pycharm folders
 .idea/
 
+# Don't track example logs
+examples/logs/
+examples/checkpoints/

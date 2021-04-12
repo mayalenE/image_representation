@@ -7,7 +7,7 @@ from torch import nn
 EPS = 1e-12
 
 
-class BDiscriminator(nn.Module, metaclass=ABCMeta):
+class Discriminator(nn.Module, metaclass=ABCMeta):
     '''
     Base Discriminator class
     '''
@@ -40,11 +40,11 @@ Discriminator Modules
 ========================================================================================================================="""
 
 
-class BurgessDiscriminator(BDiscriminator):
+class BurgessDiscriminator(Discriminator):
 
     def __init__(self, config=None, **kwargs):
         encoder = encoders.BurgessEncoder(config=config, **kwargs)
-        BDiscriminator.__init__(self, config=config, **kwargs)
+        Discriminator.__init__(self, config=config, **kwargs)
 
         # inference x
         self.infer_x = nn.Sequential()
@@ -67,11 +67,11 @@ class BurgessDiscriminator(BDiscriminator):
         return output
 
 
-class HjelmDiscriminator(BDiscriminator):
+class HjelmDiscriminator(Discriminator):
 
     def __init__(self, config=None, **kwargs):
         encoder = encoders.HjelmEncoder(config=config, **kwargs)
-        BDiscriminator.__init__(self, config=config, **kwargs)
+        Discriminator.__init__(self, config=config, **kwargs)
 
         # inference x
         self.infer_x = nn.Sequential()
@@ -100,11 +100,11 @@ class HjelmDiscriminator(BDiscriminator):
         return output
 
 
-class DumoulinDiscriminator(BDiscriminator):
+class DumoulinDiscriminator(Discriminator):
 
     def __init__(self, config=None, with_dropout=True, **kwargs):
         encoder = encoders.DumoulinEncoder(config=config, **kwargs)
-        BDiscriminator.__init__(self, config=config, **kwargs)
+        Discriminator.__init__(self, config=config, **kwargs)
 
         # inference x
         self.infer_x = nn.Sequential()

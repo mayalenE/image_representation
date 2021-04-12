@@ -1,6 +1,6 @@
 from addict import Dict
 from image_representation import TorchNNRepresentation, VAE, BetaVAE, AnnealedVAE, BetaTCVAE
-from image_representation.utils.tensorboard import resize_embeddings
+from image_representation.utils.tensorboard_utils import resize_embeddings
 import numpy as np
 import os
 import sys
@@ -221,9 +221,9 @@ class Triplet(TorchNNRepresentation):
                                 self.n_epochs)
 
             if self.n_epochs % self.config.checkpoint.save_model_every == 0:
-                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
+                self.save(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
             if self.n_epochs in self.config.checkpoint.save_model_at_epochs:
-                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, "epoch_{}_weight_model.pth".format(self.n_epochs)))
+                self.save(os.path.join(self.config.checkpoint.folder, "epoch_{}_weight_model.pth".format(self.n_epochs)))
 
             # validation epoch
             if do_validation:
@@ -237,9 +237,9 @@ class Triplet(TorchNNRepresentation):
                                     self.n_epochs)
 
                 valid_loss = valid_losses['total']
-                if valid_loss < best_valid_loss:
+                if valid_loss < best_valid_loss and self.config.checkpoint.save_best_model:
                     best_valid_loss = valid_loss
-                    self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
+                    self.save(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
 
     def train_epoch(self, train_loader, logger=None):
         self.train()

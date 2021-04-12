@@ -91,11 +91,6 @@ class Encoder(nn.Module, metaclass=ABCMeta):
             z = self.ef(gf)
         return z, lf
 
-    def push_variable_to_device(self, x):
-        if next(self.parameters()).is_cuda and not x.is_cuda:
-            x = x.cuda()
-        return x
-
     def reparameterize(self, mu, logvar):
         if self.training:
             std = logvar.mul(0.5).exp_()

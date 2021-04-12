@@ -3,7 +3,7 @@ from addict import Dict
 import image_representation
 from image_representation import TorchNNRepresentation, TripletCLR, SimCLR
 from image_representation.representations.torch_nn import encoders
-from image_representation.utils.tensorboard import resize_embeddings
+from image_representation.utils.tensorboard_utils import resize_embeddings
 from image_representation.datasets.torch_dataset import MIXEDDataset
 from image_representation.utils.torch_nn_init import get_weights_init
 from image_representation.utils.misc import do_filter_boolean
@@ -88,7 +88,7 @@ class Node(nn.Module):
         self.feature_range = (z_library.min(axis=0), z_library.max(axis=0))
         X = z_library - self.feature_range[0]
         scale = self.feature_range[1] - self.feature_range[0]
-        scale[torch.where(scale == 0)] = 1.0  # trick when some some latents are the same for every point (no scale and divide by 1)
+        scale[np.where(scale == 0)] = 1.0  # trick when some some latents are the same for every point (no scale and divide by 1)
         X = X / scale
 
         default_boundary_config = Dict()
@@ -138,7 +138,7 @@ class Node(nn.Module):
         else:
             z = node_outputs["z"]
             x_side = self.get_children_node(z)
-            x_ids_left = torch.where(x_side == 0)[0]
+            x_ids_left = np.where(x_side == 0)[0]
             if parent_proj_z is None:
                 parent_proj_z_left = None
             else:
@@ -153,7 +153,7 @@ class Node(nn.Module):
                                                                       parent_proj_z_left)
                 self.leaf_accumulator.extend(left_leaf_accumulator)
 
-            x_ids_right = torch.where(x_side == 1)[0]
+            x_ids_right = np.where(x_side == 1)[0]
             if parent_proj_z is None:
                 parent_proj_z_right = None
             else:
@@ -194,7 +194,7 @@ class Node(nn.Module):
 
         else:
             x_side = np.array([int(path[1]) for path in tree_path_desired])
-            x_ids_left = torch.where(x_side == 0)[0]
+            x_ids_left = np.where(x_side == 0)[0]
             if parent_proj_z is None:
                 parent_proj_z_left = None
             else:
@@ -209,7 +209,7 @@ class Node(nn.Module):
                                                                       parent_proj_z_left)
                 self.leaf_accumulator.extend(left_leaf_accumulator)
 
-            x_ids_right = torch.where(x_side == 1)[0]
+            x_ids_right = np.where(x_side == 1)[0]
             if parent_proj_z is None:
                 parent_proj_z_right = None
             else:
@@ -251,7 +251,7 @@ class Node(nn.Module):
 
             z = node_outputs["z"]
             x_side = self.get_children_node(z)
-            x_ids_left = torch.where(x_side == 0)[0]
+            x_ids_left = np.where(x_side == 0)[0]
             if parent_proj_z is None:
                 parent_proj_z_left = None
             else:
@@ -266,7 +266,7 @@ class Node(nn.Module):
                                                                       parent_proj_z_left)
                 self.leaf_accumulator.extend(left_leaf_accumulator)
 
-            x_ids_right = torch.where(x_side == 1)[0]
+            x_ids_right = np.where(x_side == 1)[0]
             if parent_proj_z is None:
                 parent_proj_z_right = None
             else:
@@ -340,7 +340,7 @@ class Node(nn.Module):
                 z = z.detach().cpu().numpy()
             z = z - self.feature_range[0]
             scale = self.feature_range[1] - self.feature_range[0]
-            scale[torch.where(
+            scale[np.where(
                 scale == 0)] = 1.0  # trick when some some latents are the same for every point (no scale and divide by 1)
             z = z / scale
             # compute boundary side
@@ -371,7 +371,7 @@ def get_node_class(base_class):
                 if "Sim" in base_class.__name__:
                     self.network.projection_head = ConnectedProjectionHead(parent_network.projection_head, depth, connect_proj=config.create_connections["proj"])
 
-            self.set_device(self.config.device.use_gpu)
+            self.set_device(self.config.device)
 
         def node_forward_from_encoder(self, encoder_outputs, parent_proj_z=None):
             if not "Sim" in base_class.__name__:
@@ -410,7 +410,7 @@ class HOLMES_CLR(TorchNNRepresentation):
 
         # node config
         default_config.node_classname = "SimCLR"
-        default_config.node = eval("image_representation.representations.torch_nn.{}.default_config()".format(default_config.node_classname))
+        default_config.node = eval(f"image_representation.{default_config.node_classname}.default_config()")
         default_config.node.create_connections = {"lf": True, "gf": False, "proj": False}
 
         # loss parameters
@@ -458,7 +458,7 @@ class HOLMES_CLR(TorchNNRepresentation):
     def forward(self, x):
         if torch._C._get_tracing_state():
             return self.forward_for_graph_tracing(x)
-        x = self.push_variable_to_device(x)
+        x = x.to(self.config.device)
         is_train = self.network.training
         if len(x) == 1 and is_train:
             self.network.eval()
@@ -496,7 +496,7 @@ class HOLMES_CLR(TorchNNRepresentation):
         return model_outputs
 
     def forward_through_given_path(self, x, tree_desired_path):
-        x = self.push_variable_to_device(x)
+        x = x.to(self.config.device)
         is_train = self.network.training
         if len(x) == 1 and is_train:
             self.network.eval()
@@ -540,7 +540,7 @@ class HOLMES_CLR(TorchNNRepresentation):
             node_path = "0"
         n_latents = self.config.network.parameters.n_latents
         z = torch.Tensor().new_full((len(x), n_latents), float("nan"))
-        x = self.push_variable_to_device(x)
+        x = x.to(self.config.device)
         self.eval()
         with torch.no_grad():
             all_nodes_outputs = self.network.depth_first_forward_whole_branch_preorder(x)
@@ -566,7 +566,7 @@ class HOLMES_CLR(TorchNNRepresentation):
 
         # save model
         if split_trigger is not None and (split_trigger.save_model_before_after or split_trigger.save_model_before_after == 'before'):
-            self.save_checkpoint(os.path.join(self.config.checkpoint.folder,
+            self.save(os.path.join(self.config.checkpoint.folder,
                                               'weight_model_before_split_{}_node_{}_epoch_{}.pth'.format(
                                                   len(self.split_history)+1, node_path, self.n_epochs)))
 
@@ -639,7 +639,7 @@ class HOLMES_CLR(TorchNNRepresentation):
 
         # save model
         if split_trigger is not None and (split_trigger.save_model_before_after or split_trigger.save_model_before_after == 'after'):
-            self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'weight_model_after_split_{}_node_{}_epoch_{}.pth'.format(len(self.split_history), node_path, self.n_epochs)))
+            self.save(os.path.join(self.config.checkpoint.folder, 'weight_model_after_split_{}_node_{}_epoch_{}.pth'.format(len(self.split_history), node_path, self.n_epochs)))
 
 
         return
@@ -662,7 +662,7 @@ class HOLMES_CLR(TorchNNRepresentation):
         ## b) poor data make grid
         if split_trigger.type == "threshold":
             output_filename = os.path.join(split_output_folder, "poor_data_buffer.png")
-            poor_data_buffer = x_loader.dataset.images[torch.where(z_fitness > split_trigger.parameters.threshold)[0]]
+            poor_data_buffer = x_loader.dataset.images[np.where(z_fitness > split_trigger.parameters.threshold)[0]]
             img = np.transpose(make_grid(poor_data_buffer, nrow=int(np.sqrt(poor_data_buffer.shape[0])), padding=0).cpu().numpy(), (1, 2, 0))
             plt.figure()
             plt.imshow(img)
@@ -672,7 +672,7 @@ class HOLMES_CLR(TorchNNRepresentation):
         ## c) left/right samples from which boundary is fitted
         if split_trigger.boundary_config.z_fitness is not None:
             y_fit = z_fitness > np.percentile(z_fitness, 80)
-            samples_left_fit_ids = torch.where(y_fit == 0)[0]
+            samples_left_fit_ids = np.where(y_fit == 0)[0]
             samples_left_fit_ids = np.random.choice(samples_left_fit_ids, min(100, len(samples_left_fit_ids)))
             output_filename = os.path.join(split_output_folder, "samples_left_fit.png")
             samples_left_fit_buffer = x_loader.dataset.images[samples_left_fit_ids]
@@ -684,7 +684,7 @@ class HOLMES_CLR(TorchNNRepresentation):
             plt.savefig(output_filename)
             plt.close()
 
-            samples_right_fit_ids = torch.where(y_fit == 1)[0]
+            samples_right_fit_ids = np.where(y_fit == 1)[0]
             samples_right_fit_ids = np.random.choice(samples_right_fit_ids, min(100, len(samples_right_fit_ids)))
             output_filename = os.path.join(split_output_folder, "samples_right_fit.png")
             samples_right_fit_buffer = x_loader.dataset.images[samples_right_fit_ids]
@@ -697,7 +697,7 @@ class HOLMES_CLR(TorchNNRepresentation):
             plt.close()
 
             ## d) wrongly classified buffer make grid
-            wrongly_sent_left_ids = torch.where((y_predicted == 0) & (y_predicted != y_fit))[0]
+            wrongly_sent_left_ids = np.where((y_predicted == 0) & (y_predicted != y_fit))[0]
             if len(wrongly_sent_left_ids) > 0:
                 wrongly_sent_left_ids = np.random.choice(wrongly_sent_left_ids, min(100, len(wrongly_sent_left_ids)))
                 output_filename = os.path.join(split_output_folder, "wrongly_sent_left.png")
@@ -710,7 +710,7 @@ class HOLMES_CLR(TorchNNRepresentation):
                 plt.savefig(output_filename)
                 plt.close()
 
-            wrongly_sent_right_ids = torch.where((y_predicted == 1) & (y_predicted != y_fit))[0]
+            wrongly_sent_right_ids = np.where((y_predicted == 1) & (y_predicted != y_fit))[0]
             if len(wrongly_sent_right_ids) > 0:
                 wrongly_sent_right_ids = np.random.choice(wrongly_sent_right_ids, min(100, len(wrongly_sent_right_ids)))
                 output_filename = os.path.join(split_output_folder, "wrongly_sent_right.png")
@@ -739,7 +739,7 @@ class HOLMES_CLR(TorchNNRepresentation):
             root_network_config = self.config.node.network.parameters
             dummy_input = torch.FloatTensor(4, root_network_config.n_channels, root_network_config.input_size[0],
                                             root_network_config.input_size[1]).uniform_(0, 1)
-            dummy_input = self.push_variable_to_device(dummy_input)
+            dummy_input = dummy_input.to(self.config.device)
             self.eval()
             # with torch.no_grad():
             #    logger.add_graph(self, dummy_input, verbose = False)
@@ -843,9 +843,9 @@ class HOLMES_CLR(TorchNNRepresentation):
 
             # save model
             if self.n_epochs % self.config.checkpoint.save_model_every == 0:
-                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
+                self.save(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
             if self.n_epochs in self.config.checkpoint.save_model_at_epochs:
-                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, "epoch_{}_weight_model.pth".format(self.n_epochs)))
+                self.save(os.path.join(self.config.checkpoint.folder, "epoch_{}_weight_model.pth".format(self.n_epochs)))
 
             if do_validation:
                 # 3) Perform evaluation
@@ -860,9 +860,9 @@ class HOLMES_CLR(TorchNNRepresentation):
 
                 if valid_losses:
                     valid_loss = valid_losses['total']
-                    if valid_loss < best_valid_loss:
+                    if valid_loss < best_valid_loss and self.config.checkpoint.save_best_model:
                         best_valid_loss = valid_loss
-                        self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
+                        self.save(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
 
                 # 4) Perform evaluation/test epoch
                 if self.n_epochs % self.config.evaluation.save_results_every == 0:
@@ -884,7 +884,7 @@ class HOLMES_CLR(TorchNNRepresentation):
             root_network_config = self.config.node.network.parameters
             dummy_input = torch.FloatTensor(4, root_network_config.n_channels, root_network_config.input_size[0],
                                             root_network_config.input_size[1]).uniform_(0, 1)
-            dummy_input = self.push_variable_to_device(dummy_input)
+            dummy_input = dummy_input.to(self.config.device)
             self.eval()
             # with torch.no_grad():
             #    logger.add_graph(self, dummy_input, verbose = False)
@@ -1158,9 +1158,9 @@ class HOLMES_CLR(TorchNNRepresentation):
 
                 # save model
                 if self.n_epochs % self.config.checkpoint.save_model_every == 0:
-                    self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'curent_weight_model.pth'))
+                    self.save(os.path.join(self.config.checkpoint.folder, 'curent_weight_model.pth'))
                 if self.n_epochs in self.config.checkpoint.save_model_at_epochs:
-                    self.save_checkpoint(
+                    self.save(
                         os.path.join(self.config.checkpoint.folder, "epoch_{}_weight_model.pth".format(self.n_epochs)))
 
                 if do_validation:
@@ -1176,9 +1176,9 @@ class HOLMES_CLR(TorchNNRepresentation):
 
                     if valid_losses:
                         valid_loss = valid_losses['total']
-                        if valid_loss < best_valid_loss:
+                        if valid_loss < best_valid_loss and self.config.checkpoint.save_best_model:
                             best_valid_loss = valid_loss
-                            self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
+                            self.save(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
 
                     # 5) Perform evaluation/test epoch
                     if self.n_epochs % self.config.evaluation.save_results_every == 0:
@@ -1208,10 +1208,9 @@ class HOLMES_CLR(TorchNNRepresentation):
 
         with torch.no_grad():
             for data in train_loader:
-                x = data["obs"]
-                x = self.push_variable_to_device(x)
+                x = data["obs"].to(self.config.device)
                 x_aug = train_loader.dataset.get_augmented_batch(data['index'], augment=True)
-                x_aug = self.push_variable_to_device(x_aug)
+                x_aug = x_aug.to(self.config.device)
                 x_ids.append(data["index"])
                 labels.append(data["label"])
                 # forward
@@ -1224,7 +1223,7 @@ class HOLMES_CLR(TorchNNRepresentation):
                 batch_losses = dict()
                 batch_size = x.shape[0]
                 for leaf_path in list(set(cur_taken_pathes)):
-                    leaf_x_ids = torch.where(np.array(cur_taken_pathes, copy=False) == leaf_path)[0]
+                    leaf_x_ids = np.where(np.array(cur_taken_pathes, copy=False) == leaf_path)[0]
                     leaf_loss_inputs = dict()
                     for k,v in loss_inputs.items():
                         leaf_loss_inputs[k] = v[leaf_x_ids]
@@ -1325,10 +1324,9 @@ class HOLMES_CLR(TorchNNRepresentation):
         losses = {}
 
         for data in train_loader:
-            x = data['obs']
-            x = self.push_variable_to_device(x)
+            x = data['obs'].to(self.config.device)
             x_aug = train_loader.dataset.get_augmented_batch(data['index'], augment=True)
-            x_aug = self.push_variable_to_device(x_aug)
+            x_aug = x_aug.to(self.config.device)
             # forward
             model_outputs = self.forward(x)
             cur_taken_pathes = model_outputs["path_taken"]
@@ -1339,7 +1337,7 @@ class HOLMES_CLR(TorchNNRepresentation):
             batch_losses = dict()
             batch_size = x.shape[0]
             for leaf_path in list(set(cur_taken_pathes)):
-                leaf_x_ids = torch.where(np.array(cur_taken_pathes, copy=False) == leaf_path)[0]
+                leaf_x_ids = np.where(np.array(cur_taken_pathes, copy=False) == leaf_path)[0]
                 leaf_loss_inputs = dict()
                 for k, v in loss_inputs.items():
                     leaf_loss_inputs[k] = v[leaf_x_ids]
@@ -1379,7 +1377,7 @@ class HOLMES_CLR(TorchNNRepresentation):
         if logger is not None:
             for leaf_path in list(set(taken_pathes)):
                 if len(leaf_path) > 1:
-                    leaf_x_ids = torch.where(np.array(taken_pathes, copy=False) == leaf_path)[0]
+                    leaf_x_ids = np.where(np.array(taken_pathes, copy=False) == leaf_path)[0]
                     for k, v in losses.items():
                         leaf_v = v[leaf_x_ids, :]
                         logger.add_scalars('loss/{}'.format(k), {'train-{}'.format(leaf_path): np.mean(leaf_v)},
@@ -1412,10 +1410,9 @@ class HOLMES_CLR(TorchNNRepresentation):
 
         with torch.no_grad():
             for data in valid_loader:
-                x = data['obs']
-                x = self.push_variable_to_device(x)
+                x = data['obs'].to(self.config.device)
                 x_aug = valid_loader.dataset.get_augmented_batch(data['index'], augment=True)
-                x_aug = self.push_variable_to_device(x_aug)
+                x_aug = x_aug.to(self.config.device)
                 # forward
                 model_outputs = self.forward(x)
                 cur_taken_pathes = model_outputs["path_taken"]
@@ -1426,7 +1423,7 @@ class HOLMES_CLR(TorchNNRepresentation):
                 batch_losses = dict()
                 batch_size = x.shape[0]
                 for leaf_path in list(set(cur_taken_pathes)):
-                    leaf_x_ids = torch.where(np.array(cur_taken_pathes, copy=False) == leaf_path)[0]
+                    leaf_x_ids = np.where(np.array(cur_taken_pathes, copy=False) == leaf_path)[0]
                     leaf_loss_inputs = dict()
                     for k, v in loss_inputs.items():
                         leaf_loss_inputs[k] = v[leaf_x_ids]
@@ -1465,7 +1462,7 @@ class HOLMES_CLR(TorchNNRepresentation):
 
         # 2) LOGGER SAVE RESULT PER LEAF
         for leaf_path in list(set(taken_pathes)):
-            leaf_x_ids = torch.where(np.array(taken_pathes, copy=False) == leaf_path)[0]
+            leaf_x_ids = np.where(np.array(taken_pathes, copy=False) == leaf_path)[0]
 
             if record_embeddings:
                 leaf_embeddings = torch.cat([embeddings[i] for i in leaf_x_ids])
@@ -1488,19 +1485,19 @@ class HOLMES_CLR(TorchNNRepresentation):
 
         return losses
 
-    # def evaluation_epoch(self, test_loader, save_results_per_node=False):
-    #     self.eval()
-    #     losses = {}
-    #
-    #     n_images = len(test_loader.dataset)
-    #     if "RandomSampler" in test_loader.sampler.__class__.__name__:
-    #         warnings.warn("WARNING: evaluation is performed on shuffled test dataloader")
-    #     tree_depth = 1
-    #     for split_k, split in self.split_history.items():
-    #         if (split["depth"]+2) > tree_depth:
-    #             tree_depth = (split["depth"]+2)
-    #
-    #     test_results = {}
+    def evaluation_epoch(self, test_loader, save_results_per_node=False):
+        self.eval()
+        losses = {}
+
+        n_images = len(test_loader.dataset)
+        if "RandomSampler" in test_loader.sampler.__class__.__name__:
+            warnings.warn("WARNING: evaluation is performed on shuffled test dataloader")
+        tree_depth = 1
+        for split_k, split in self.split_history.items():
+            if (split["depth"]+2) > tree_depth:
+                tree_depth = (split["depth"]+2)
+
+        test_results = {}
     #     test_results["taken_pathes"] = [None] * n_images
     #     test_results["labels"] = np.empty(n_images, dtype=np.int)
     #     test_results["clr_loss"] = np.empty(n_images, dtype=np.float)
@@ -1583,7 +1580,7 @@ class HOLMES_CLR(TorchNNRepresentation):
     #             distances_to_point_in_node = np.linalg.norm(test_results_per_node[node_path]["z"][x_idx] - test_results_per_node[node_path]["z"], axis=1)
     #             closest_point_ids = np.argpartition(distances_to_point_in_node, min(20, len(distances_to_point_in_node)-1))
     #             # remove curr_idx from closest point
-    #             closest_point_ids = np.delete(closest_point_ids, torch.where(closest_point_ids == x_idx)[0])
+    #             closest_point_ids = np.delete(closest_point_ids, np.where(closest_point_ids == x_idx)[0])
     #             for k_idx, k in enumerate([5,10,20]):
     #                 voting_labels = test_results["labels"][closest_point_ids[:k]]
     #                 majority_voted_class = -1
@@ -1640,7 +1637,7 @@ class HOLMES_CLR(TorchNNRepresentation):
     def load(filepath='representation.pickle', map_location='cpu'):
         saved_representation = torch.load(filepath, map_location=map_location)
         representation_type = saved_representation['type']
-        representation_cls = getattr(image_representation.representations.torch_nn, representation_type)
+        representation_cls = getattr(image_representation, representation_type)
         representation_config = saved_representation['config']
         representation_config.device = map_location
         representation = representation_cls(config=representation_config)

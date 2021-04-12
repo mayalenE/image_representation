@@ -343,14 +343,14 @@ class BiGANLoss(BaseLoss):
 
     def __call__(self, loss_inputs, reduction="mean", **kwargs):
         try:
-            prob_neg = loss_inputs['prob_pos']
-            prob_pos = loss_inputs['prob_neg']
+            prob_pos = loss_inputs['prob_pos']
+            prob_neg = loss_inputs['prob_neg']
         except:
             raise ValueError("BiGANLoss needs {} inputs".format(self.input_keys_list))
 
         discriminator_loss = _gan_loss(prob_pos, prob_neg)
         generator_loss = _gan_loss(prob_neg, prob_pos)
-        total_loss = discriminator_loss + generator_loss
+        total_loss = discriminator_loss.detach() + generator_loss.detach()
 
         return {'discriminator': discriminator_loss, 'generator': generator_loss, 'total': total_loss}
 

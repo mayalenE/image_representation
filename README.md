@@ -22,8 +22,6 @@
    `while read requirement; do conda install --yes $requirement --channel default --channel anaconda --channel conda-forge --channel pytorch; done < requirements.txt`
 
 # ImageRepresentation: Code Skeleton
-The main classes (***System***, ***OutputRepresentation***, ***OutputFitness*** and ***Explorer***) are implemented in `core.py`.
-
 
 ## addict.Dict
 Class which implements a dictionary that provides attribute-style access.  
@@ -76,8 +74,8 @@ Aditionnally to Representation's main API methods, the following main API method
 - **run_training (train_loader, n_epochs, valid_loader = None, training_logger=None)**:
 - **train_epoch (train_loader, logger = None)**:
 - **valid_epoch (valid_loader, logger = None)**:
-- **load(checkpoint_filepath, map_loaction='cpu')**:
-- **save(checkpoint_filepath, map_loaction='cpu')**:
+- **save(filepath)**:
+- **load(filepath, map_loaction='cpu')**:
 - **calc_embedding (x)**: given an input image x calc the embedding z
 
 # ImageRepresentation: RoadMap

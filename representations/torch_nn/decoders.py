@@ -68,11 +68,6 @@ class Decoder(nn.Module, metaclass=ABCMeta):
         recon_x = self.lfi(lfi)
         return recon_x
 
-    def push_variable_to_device(self, x):
-        if next(self.parameters()).is_cuda and not x.is_cuda:
-            x = x.cuda()
-        return x
-
 
 def get_decoder(model_architecture):
     '''

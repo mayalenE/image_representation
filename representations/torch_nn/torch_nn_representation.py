@@ -57,13 +57,14 @@ class TorchNNRepresentation(Representation, nn.Module):
         ## checkpoints (will save model every X epochs)
         default_config.checkpoint = Dict()
         default_config.checkpoint.folder = None
+        default_config.checkpoint.save_best_model = False
         default_config.checkpoint.save_model_every = 10
         default_config.checkpoint.save_model_at_epochs = []
 
         ## evaluation (when we do testing during training, save every X epochs)
         default_config.evaluation = Dict()
         default_config.evaluation.folder = None
-        default_config.evaluation.save_results_every = 1
+        default_config.evaluation.save_results_every = 10
 
         return default_config
 
@@ -136,7 +137,7 @@ class TorchNNRepresentation(Representation, nn.Module):
         self.config.optimizer.name = optimizer_name
         self.config.update(optimizer_parameters)
 
-    def run_training(self, train_loader, n_epochs, valid_loader=None, training_logger=None):
+    def run_training(self, train_loader, training_config, valid_loader=None, logger=None):
         raise NotImplementedError
 
     def train_epoch(self, train_loader, logger=None):
@@ -163,7 +164,7 @@ class TorchNNRepresentation(Representation, nn.Module):
     def load(filepath='representation.pickle', map_location='cpu'):
         saved_representation = torch.load(filepath, map_location=map_location)
         representation_type = saved_representation['type']
-        representation_cls = getattr(image_representation.representations.torch_nn, representation_type)
+        representation_cls = getattr(image_representation, representation_type)
         representation_config = saved_representation['config']
         representation_config.device = map_location
         representation = representation_cls(config=representation_config)
@@ -171,21 +172,3 @@ class TorchNNRepresentation(Representation, nn.Module):
         representation.set_device(map_location)
         representation.network.load_state_dict(saved_representation['network_state_dict'])
         representation.optimizer.load_state_dict(saved_representation['optimizer_state_dict'])
-
-        # TODO: ADD IN SUBCLASSES
-        '''
-        if "ProgressiveTree" in model_type:
-            split_history = saved_model['split_history']
-
-            for split_node_path, split_node_attr in split_history.items():
-                model.split_node(split_node_path)
-                node = model.network.get_child_node(split_node_path)
-                node.boundary = split_node_attr["boundary"]
-                node.feature_range = split_node_attr["feature_range"]
-
-        model.network.load_state_dict(saved_model['network_state_dict'])
-
-        if "GAN" in model_type:
-            model.optimizer_discriminator.load_state_dict(saved_model['optimizer_discriminator_state_dict'])
-            model.optimizer_generator.load_state_dict(saved_model['optimizer_generator_state_dict'])
-        '''

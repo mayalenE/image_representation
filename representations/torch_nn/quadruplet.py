@@ -1,5 +1,5 @@
 from image_representation import TorchNNRepresentation, VAE, BetaVAE, AnnealedVAE, BetaTCVAE
-from image_representation.utils.tensorboard import resize_embeddings
+from image_representation.utils.tensorboard_utils import resize_embeddings
 import numpy as np
 import os
 import sys
@@ -49,7 +49,7 @@ class QuadrupletNet(nn.Module):
             dummy_input = torch.FloatTensor(1, self.config.network.parameters.n_channels,
                                             self.config.network.parameters.input_size[0],
                                             self.config.network.parameters.input_size[1]).uniform_(0, 1)
-            dummy_input = self.push_variable_to_device(dummy_input)
+            dummy_input = dummy_input.to(self.config.device)
             self.eval()
             with torch.no_grad():
                 logger.add_graph(self, dummy_input, verbose=False)
@@ -79,9 +79,9 @@ class QuadrupletNet(nn.Module):
                                 self.n_epochs)
 
             if self.n_epochs % self.config.checkpoint.save_model_every == 0:
-                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
+                self.save(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
             if self.n_epochs in self.config.checkpoint.save_model_at_epochs:
-                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, "epoch_{}_weight_model.pth".format(self.n_epochs)))
+                self.save(os.path.join(self.config.checkpoint.folder, "epoch_{}_weight_model.pth".format(self.n_epochs)))
 
             # validation epoch
             if do_validation:
@@ -95,19 +95,19 @@ class QuadrupletNet(nn.Module):
                                     self.n_epochs)
 
                 valid_loss = valid_losses['total']
-                if valid_loss < best_valid_loss:
+                if valid_loss < best_valid_loss and self.config.checkpoint.save_best_model:
                     best_valid_loss = valid_loss
-                    self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
+                    self.save(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
 
     def train_epoch(self, train_loader, logger=None):
         self.train()
         losses = {}
         for data in train_loader:
             data_pos_a, data_pos_b, data_neg_a, data_neg_b = data
-            x_pos_a = self.push_variable_to_device(data_pos_a["obs"])
-            x_pos_b = self.push_variable_to_device(data_pos_b["obs"])
-            x_neg_a = self.push_variable_to_device(data_neg_a["obs"])
-            x_neg_b = self.push_variable_to_device(data_neg_b["obs"])
+            x_pos_a = data_pos_a["obs"].to(self.config.device)
+            x_pos_b = data_pos_b["obs"].to(self.config.device)
+            x_neg_a = data_neg_a["obs"].to(self.config.device)
+            x_neg_b = data_neg_b["obs"].to(self.config.device)
             # forward
             model_outputs = self.forward(x_pos_a, x_pos_b, x_neg_a, x_neg_b)
             loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
@@ -153,10 +153,10 @@ class QuadrupletNet(nn.Module):
         with torch.no_grad():
             for data in valid_loader:
                 data_pos_a, data_pos_b, data_neg_a, data_neg_b = data
-                x_pos_a = self.push_variable_to_device(data_pos_a["obs"])
-                x_pos_b = self.push_variable_to_device(data_pos_b["obs"])
-                x_neg_a = self.push_variable_to_device(data_neg_a["obs"])
-                x_neg_b = self.push_variable_to_device(data_neg_b["obs"])
+                x_pos_a = data_pos_a["obs"].to(self.config.device)
+                x_pos_b = data_pos_b["obs"].to(self.config.device)
+                x_neg_a = data_neg_a["obs"].to(self.config.device)
+                x_neg_b = data_neg_b["obs"].to(self.config.device)
                 # forward
                 model_outputs = self.forward(x_pos_a, x_pos_b, x_neg_a, x_neg_b)
                 loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
@@ -227,10 +227,10 @@ class QuadrupletNet(nn.Module):
             train_quadruplets = train_loader.dataset.annotated_quadruplets
             train_acc = 0
             for quadruplet in train_quadruplets:
-                x_ref = self.push_variable_to_device(train_loader.dataset.get_image(quadruplet[0])).unsqueeze(0)
-                x_a = self.push_variable_to_device(train_loader.dataset.get_image(quadruplet[1])).unsqueeze(0)
-                x_b = self.push_variable_to_device(train_loader.dataset.get_image(quadruplet[2])).unsqueeze(0)
-                x_c = self.push_variable_to_device(train_loader.dataset.get_image(quadruplet[3])).unsqueeze(0)
+                x_ref = train_loader.dataset.get_image(quadruplet[0]).unsqueeze(0).to(self.config.device)
+                x_a = train_loader.dataset.get_image(quadruplet[1]).unsqueeze(0).to(self.config.device)
+                x_b = train_loader.dataset.get_image(quadruplet[2]).unsqueeze(0).to(self.config.device)
+                x_c = train_loader.dataset.get_image(quadruplet[3]).unsqueeze(0).to(self.config.device)
                 model_outputs = self.forward(x_ref, x_a, x_b, x_c)
                 quadruplet_z = [model_outputs['x_ref_outputs']['z'], model_outputs['x_a_outputs']['z'], model_outputs['x_b_outputs']['z'], model_outputs['x_c_outputs']['z']]
                 if "attention" in model_outputs:
@@ -261,10 +261,10 @@ class QuadrupletNet(nn.Module):
             test_quadruplets = test_loader.dataset.annotated_quadruplets
             test_acc = 0
             for quadruplet in test_quadruplets:
-                x_ref = self.push_variable_to_device(test_loader.dataset.get_image(quadruplet[0])).unsqueeze(0)
-                x_a = self.push_variable_to_device(test_loader.dataset.get_image(quadruplet[1])).unsqueeze(0)
-                x_b = self.push_variable_to_device(test_loader.dataset.get_image(quadruplet[2])).unsqueeze(0)
-                x_c = self.push_variable_to_device(test_loader.dataset.get_image(quadruplet[3])).unsqueeze(0)
+                x_ref = test_loader.dataset.get_image(quadruplet[0]).unsqueeze(0).to(self.config.device)
+                x_a = test_loader.dataset.get_image(quadruplet[1]).unsqueeze(0).to(self.config.device)
+                x_b = test_loader.dataset.get_image(quadruplet[2]).unsqueeze(0).to(self.config.device)
+                x_c = test_loader.dataset.get_image(quadruplet[3]).unsqueeze(0).to(self.config.device)
                 model_outputs = self.forward(x_ref, x_a, x_b, x_c)
                 quadruplet_z = [model_outputs['x_ref_outputs']['z'], model_outputs['x_a_outputs']['z'],
                                 model_outputs['x_b_outputs']['z'], model_outputs['x_c_outputs']['z']]

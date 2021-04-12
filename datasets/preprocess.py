@@ -1,7 +1,7 @@
 from image_representation.utils.torch_nn_module import Roll, SphericPad
+from image_representation.utils.torch_functional import PI
 import numpy as np
 import random
-import math
 import torch
 import torch.nn.functional as F
 from torchvision import transforms
@@ -35,7 +35,7 @@ class RandomGaussianBlur(object):
         # Calculate the 2-dimensional gaussian kernel which is
         # the product of two gaussian distributions for two different
         # variables (in this case called x and y)
-        gaussian_kernel = (1. / (2. * math.pi * variance)) * \
+        gaussian_kernel = (1. / (2. * PI * variance)) * \
                           torch.exp(
                               -torch.sum((xy_grid - mean) ** 2., dim=-1) / (2 * variance)
                           )
@@ -46,8 +46,8 @@ class RandomGaussianBlur(object):
         return gaussian_kernel
 
     def __call__(self, x):
-        if np.random.random() < self.p:
-            sigma =  int(np.round(np.random.uniform(1.0, self.max_sigma)))
+        if torch.rand(()) < self.p:
+            sigma = int((torch.rand(()) * (1.0 - self.max_sigma) + self.max_sigma).round())
             x = x.view(1, x.size(0), x.size(1), x.size(2))
             x = F.pad(x, pad=self.padding_size, mode='reflect')
             kernel = self.gaussian_kernel(self.kernel_size, sigma)

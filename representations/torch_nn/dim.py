@@ -1,6 +1,6 @@
 from addict import Dict
 from image_representation import TorchNNRepresentation
-from image_representation.utils.tensorboard import resize_embeddings
+from image_representation.utils.tensorboard_utils import resize_embeddings
 import numpy as np
 import os
 import random
@@ -252,12 +252,12 @@ class DIM(TorchNNRepresentation):
         if torch._C._get_tracing_state():
             return self.forward_for_graph_tracing(x)
 
-        x = self.push_variable_to_device(x)
+        x = x.to(self.config.device)
         encoder_outputs = self.network.encoder(x)
         return self.forward_from_encoder(encoder_outputs)
 
     def forward_for_graph_tracing(self, x):
-        x = self.push_variable_to_device(x)
+        x = x.to(self.config.device)
         z, lf = self.network.encoder.forward_for_graph_tracing(x)
         global_pred = self.network.global_discrim(z, lf)
         local_pred = self.network.local_discrim(z, lf)
@@ -266,7 +266,7 @@ class DIM(TorchNNRepresentation):
 
     def calc_embedding(self, x, **kwargs):
         ''' the function calc outputs a representation vector of size batch_size*n_latents'''
-        x = self.push_variable_to_device(x)
+        x = x.to(self.config.device)
         self.eval()
         with torch.no_grad():
             z = self.network.encoder.calc_embedding(x)
@@ -284,7 +284,7 @@ class DIM(TorchNNRepresentation):
             dummy_input = torch.FloatTensor(1, self.config.network.parameters.n_channels,
                                             self.config.network.parameters.input_size[0],
                                             self.config.network.parameters.input_size[1]).uniform_(0, 1)
-            dummy_input = self.push_variable_to_device(dummy_input)
+            dummy_input = dummy_input.to(self.config.device)
             self.eval()
             with torch.no_grad():
                 logger.add_graph(self, dummy_input, verbose=False)
@@ -306,9 +306,9 @@ class DIM(TorchNNRepresentation):
                                 self.n_epochs)
 
             if self.n_epochs % self.config.checkpoint.save_model_every == 0:
-                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
+                self.save(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
             if self.n_epochs in self.config.checkpoint.save_model_at_epochs:
-                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, "epoch_{}_weight_model.pth".format(self.n_epochs)))
+                self.save(os.path.join(self.config.checkpoint.folder, "epoch_{}_weight_model.pth".format(self.n_epochs)))
 
             if do_validation:
                 t2 = time.time()
@@ -321,17 +321,16 @@ class DIM(TorchNNRepresentation):
                                     self.n_epochs)
 
                 valid_loss = valid_losses['total']
-                if valid_loss < best_valid_loss:
+                if valid_loss < best_valid_loss and self.config.checkpoint.save_best_model:
                     best_valid_loss = valid_loss
-                    self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
+                    self.save(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
 
     def train_epoch(self, train_loader, logger=None):
         self.train()
         losses = {}
         for data in train_loader:
-            x = data['obs']
+            x = data['obs'].to(self.config.device)
             x.requires_grad = True
-            x = self.push_variable_to_device(x)
             # forward
             model_outputs = self.forward(x)
             loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
@@ -370,7 +369,7 @@ class DIM(TorchNNRepresentation):
         with torch.no_grad():
             for data in valid_loader:
                 x = data['obs']
-                x = self.push_variable_to_device(x)
+                x = x.to(self.config.device)
                 # forward
                 model_outputs = self.forward(x)
                 loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}

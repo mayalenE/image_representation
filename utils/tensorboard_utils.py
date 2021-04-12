@@ -1,5 +1,4 @@
 import numpy as np
-import torchvision
 import torch.nn.functional as F
 
 def resize_embeddings(embedding_images, sprite_size=8192):

@@ -1,8 +1,8 @@
-from copy import deepcopy
 from addict import Dict
+import image_representation
 from image_representation import TorchNNRepresentation
 from image_representation.representations.torch_nn import decoders, discriminators
-from image_representation.utils.tensorboard import resize_embeddings
+from image_representation.utils.tensorboard_utils import resize_embeddings
 from itertools import chain
 import os
 import sys
@@ -81,12 +81,12 @@ class BiGAN(TorchNNRepresentation):
         z_real = encoder_outputs["z"]
         model_outputs = encoder_outputs
 
-        z_fake = torch.randn_like(z_real, requires_grad=True)
+        z_fake = torch.randn_like(z_real)
         x_fake = self.network.decoder(z_fake)["recon_x"]
 
         if self.training and self.n_epochs < 5000:
-            noise1 = torch.zeros_like(x_real.detach(), requires_grad=True).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000)
-            noise2 = torch.zeros_like(x_fake.detach(), requires_grad=True).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000)
+            noise1 = torch.zeros_like(x_real.detach()).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000)
+            noise2 = torch.zeros_like(x_fake.detach()).normal_(0, 0.1 * (5000 - self.n_epochs) / 5000)
             x_real = x_real + noise1
             x_fake = x_fake + noise2
 
@@ -99,7 +99,7 @@ class BiGAN(TorchNNRepresentation):
         # we reconstruct images during validation for visual evaluations
         if not self.training:
             with torch.no_grad():
-                model_outputs["recon_x"] = self.network.decoder(z_real)["recon_x"]
+                model_outputs["recon_x"] = self.network.decoder(z_real)["recon_x"].detach()
 
         return model_outputs
 
@@ -107,12 +107,12 @@ class BiGAN(TorchNNRepresentation):
         if torch._C._get_tracing_state():
             return self.forward_for_graph_tracing(x)
 
-        x = self.push_variable_to_device(x)
+        x = x.to(self.config.device)
         encoder_outputs = self.network.encoder(x)
         return self.forward_from_encoder(encoder_outputs)
 
     def forward_for_graph_tracing(self, x):
-        x = self.push_variable_to_device(x)
+        x = x.to(self.config.device)
         z, feature_map = self.network.encoder.forward_for_graph_tracing(x)
         prob_pos = self.network.discriminator(x, z)
         recon_x = self.network.decoder(z)
@@ -120,7 +120,7 @@ class BiGAN(TorchNNRepresentation):
 
     def calc_embedding(self, x, **kwargs):
         ''' the function calc outputs a representation vector of size batch_size*n_latents'''
-        x = self.push_variable_to_device(x)
+        x = x.to(self.config.device)
         self.eval()
         with torch.no_grad():
             z = self.network.encoder.calc_embedding(x)
@@ -138,7 +138,7 @@ class BiGAN(TorchNNRepresentation):
             dummy_input = torch.FloatTensor(1, self.config.network.parameters.n_channels,
                                             self.config.network.parameters.input_size[0],
                                             self.config.network.parameters.input_size[1]).uniform_(0, 1)
-            dummy_input = self.push_variable_to_device(dummy_input)
+            dummy_input = dummy_input.to(self.config.device)
             self.eval()
             with torch.no_grad():
                 logger.add_graph(self, dummy_input, verbose=False)
@@ -160,9 +160,9 @@ class BiGAN(TorchNNRepresentation):
                                 self.n_epochs)
 
             if self.n_epochs % self.config.checkpoint.save_model_every == 0:
-                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
+                self.save(os.path.join(self.config.checkpoint.folder, 'current_weight_model.pth'))
             if self.n_epochs in self.config.checkpoint.save_model_at_epochs:
-                self.save_checkpoint(os.path.join(self.config.checkpoint.folder, "epoch_{}_weight_model.pth".format(self.n_epochs)))
+                self.save(os.path.join(self.config.checkpoint.folder, "epoch_{}_weight_model.pth".format(self.n_epochs)))
 
             if do_validation:
                 t2 = time.time()
@@ -175,9 +175,9 @@ class BiGAN(TorchNNRepresentation):
                                     self.n_epochs)
 
                 valid_loss = valid_losses['total']
-                if valid_loss < best_valid_loss:
+                if valid_loss < best_valid_loss and self.config.checkpoint.save_best_model:
                     best_valid_loss = valid_loss
-                    self.save_checkpoint(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
+                    self.save(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
 
 
     def train_epoch(self, train_loader, logger=None):
@@ -186,19 +186,24 @@ class BiGAN(TorchNNRepresentation):
         for data in train_loader:
             x = data['obs']
             x.requires_grad = True
-            x = self.push_variable_to_device(x)
-            # forward
+            x = x.to(self.config.device)
+
+
+            # forward/backward discriminator
             model_outputs = self.forward(x)
             loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
             batch_losses = self.loss_f(loss_inputs)
-            # backward
             loss_d = batch_losses['discriminator']
-            loss_g = batch_losses['generator']
-
             self.optimizer_discriminator.zero_grad()
             loss_d.backward(retain_graph=True)
             self.optimizer_discriminator.step()
 
+            # forward/backward generator
+            # TODO: mixed forward for discriminator and generator
+            model_outputs = self.forward(x)
+            loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
+            batch_losses = self.loss_f(loss_inputs)
+            loss_g = batch_losses['generator']
             self.optimizer_generator.zero_grad()
             loss_g.backward()
             self.optimizer_generator.step()
@@ -211,7 +216,7 @@ class BiGAN(TorchNNRepresentation):
                     losses[k].append(v.data.item())
 
         for k, v in losses.items():
-            losses[k] = torch.mean(torch.tensor(v))
+            losses[k] = torch.mean(torch.tensor(v)).item()
 
         self.n_epochs += 1
 
@@ -239,7 +244,7 @@ class BiGAN(TorchNNRepresentation):
         with torch.no_grad():
             for data in valid_loader:
                 x = data['obs']
-                x = self.push_variable_to_device(x)
+                x = x.to(self.config.device)
                 # forward
                 model_outputs = self.forward(x)
                 loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}
@@ -295,17 +300,11 @@ class BiGAN(TorchNNRepresentation):
 
         # average loss and return
         for k, v in losses.items():
-            losses[k] = torch.mean(torch.tensor(v))
+            losses[k] = torch.mean(torch.tensor(v)).item()
 
         return losses
 
-    def get_encoder(self):
-        return deepcopy(self.network.encoder)
-
-    def get_decoder(self):
-        return deepcopy(self.network.decoder)
-
-    def save_checkpoint(self, checkpoint_filepath):
+    def save(self, filepath='representation.pickle'):
         # save current epoch weight file with optimizer if we want to relaunch training from that point
         network = {
             "epoch": self.n_epochs,
@@ -316,7 +315,21 @@ class BiGAN(TorchNNRepresentation):
             "optimizer_generator_state_dict": self.optimizer_generator.state_dict(),
         }
 
-        torch.save(network, checkpoint_filepath)
+        torch.save(network, filepath)
+
+    @staticmethod
+    def load(filepath='representation.pickle', map_location='cpu'):
+        saved_representation = torch.load(filepath, map_location=map_location)
+        representation_type = saved_representation['type']
+        representation_cls = getattr(image_representation, representation_type)
+        representation_config = saved_representation['config']
+        representation_config.device = map_location
+        representation = representation_cls(config=representation_config)
+        representation.n_epochs = saved_representation["epoch"]
+        representation.set_device(map_location)
+        representation.network.load_state_dict(saved_representation['network_state_dict'])
+        representation.optimizer_discriminator.load_state_dict(saved_representation['optimizer_discriminator_state_dict'])
+        representation.optimizer_generator.load_state_dict(saved_representation['optimizer_generator_state_dict'])
 
 
 """ ========================================================================================================================
@@ -377,7 +390,7 @@ class VAEGAN(BiGAN):
         for data in train_loader:
             x = data['obs']
             x.requires_grad = True
-            x = self.push_variable_to_device(x)
+            x = x.to(self.config.device)
             ## forward
             model_outputs = self.forward(x)
             loss_inputs = {key: model_outputs[key] for key in self.loss_f.input_keys_list}

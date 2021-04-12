@@ -1,4 +1,5 @@
 import h5py
+from addict import Dict
 import numpy as np
 import os
 import torch
@@ -214,6 +215,13 @@ class MNISTDataset(torchvision.datasets.MNIST):
             image = self.transform(image)
         return image
 
+    def get_augmented_batch(self, image_ids, augment=True, transform=True):
+        images_aug = []
+        for img_idx in image_ids:
+            image_aug = self.get_image(img_idx, augment=augment, transform=transform)
+            images_aug.append(image_aug)
+        images_aug = torch.stack(images_aug, dim=0)
+        return images_aug
 
     def __len__(self):
         return self.n_images
