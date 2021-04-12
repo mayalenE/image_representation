@@ -50,6 +50,7 @@ def run_training():
     simclr_config.optimizer.parameters.lr = 1e-3
     simclr_config.optimizer.parameters.weight_decay = 1e-5
     simclr_config.checkpoint.folder = "./checkpoints/simclr"
+    simclr_config.logging.folder = "./logs/simclr"
     simclr_config.logging.record_loss_every = 1
     simclr_config.logging.record_valid_images_every = 0
     simclr_config.logging.record_embeddings_every = 10
@@ -57,15 +58,6 @@ def run_training():
     training_config = Dict()
     training_config.n_epochs = 20
 
-
-    # prepare output folders
-    logging_folder = "./logs/simclr"
-    if (logging_folder is not None) and (not os.path.exists(logging_folder)):
-        os.makedirs(logging_folder)
-    if not os.path.exists(simclr_config.checkpoint.folder):
-        os.makedirs(simclr_config.checkpoint.folder)
-
-    logger = SummaryWriter(logging_folder, 'w')
 
     print('Run Training ...')
     simclr.run_training(train_loader, training_config, valid_loader=valid_loader, logger=logger)

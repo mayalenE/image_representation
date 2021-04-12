@@ -53,6 +53,7 @@ def run_training():
     bigan_config.optimizer.parameters.lr = 1e-3
     bigan_config.optimizer.parameters.weight_decay = 1e-5
     bigan_config.checkpoint.folder = "./checkpoints/bigan"
+    bigan_config.logging.folder = "./logs/gan"
     bigan_config.logging.record_loss_every = 1
     bigan_config.logging.record_valid_images_every = 10
     bigan_config.logging.record_embeddings_every = 10
@@ -60,18 +61,8 @@ def run_training():
     training_config = Dict()
     training_config.n_epochs = 20
 
-
-    # prepare output folders
-    logging_folder = "./logs/gan"
-    if (logging_folder is not None) and (not os.path.exists(logging_folder)):
-        os.makedirs(logging_folder)
-    if not os.path.exists(bigan_config.checkpoint.folder):
-        os.makedirs(bigan_config.checkpoint.folder)
-
-    logger = SummaryWriter(logging_folder, 'w')
-
     print('Run Training ...')
-    bigan.run_training(train_loader, training_config, valid_loader=valid_loader, logger=logger)
+    bigan.run_training(train_loader, training_config, valid_loader=valid_loader)
 
     print('Finished.')
 

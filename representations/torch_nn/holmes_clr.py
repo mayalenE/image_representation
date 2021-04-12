@@ -738,8 +738,8 @@ class HOLMES_CLR(TorchNNRepresentation):
                                             root_network_config.input_size[1]).uniform_(0, 1)
             dummy_input = dummy_input.to(self.config.device)
             self.eval()
-            with torch.no_grad():
-               self.logger.add_graph(self, dummy_input, verbose = False)
+            # with torch.no_grad():
+            #    self.logger.add_graph(self, dummy_input, verbose = False)
 
         do_validation = False
         if valid_loader is not None:
@@ -881,8 +881,8 @@ class HOLMES_CLR(TorchNNRepresentation):
                                             root_network_config.input_size[1]).uniform_(0, 1)
             dummy_input = dummy_input.to(self.config.device)
             self.eval()
-            with torch.no_grad():
-               self.logger.add_graph(self, dummy_input, verbose = False)
+            # with torch.no_grad():
+            #    self.logger.add_graph(self, dummy_input, verbose = False)
 
         do_validation = False
         if valid_loader is not None:

@@ -56,6 +56,7 @@ def run_training():
     holmes_vae_config.optimizer.parameters.weight_decay = 1e-5
 
     holmes_vae_config.checkpoint.folder = "./checkpoints/holmes_vae"
+    holmes_vae_config.logging.folder = "./logs/holmes_vae"
     holmes_vae_config.logging.record_loss_every = 1
     holmes_vae_config.logging.record_valid_images_every = 10
     holmes_vae_config.logging.record_embeddings_every = 10
@@ -65,17 +66,9 @@ def run_training():
     training_config = Dict()
     training_config.n_epochs = 20
 
-    # prepare output folders
-    logging_folder = "./logs/holmes_vae"
-    if (logging_folder is not None) and (not os.path.exists(logging_folder)):
-        os.makedirs(logging_folder)
-    if not os.path.exists(holmes_vae_config.checkpoint.folder):
-        os.makedirs(holmes_vae_config.checkpoint.folder)
-
-    logger = SummaryWriter(logging_folder, 'w')
 
     print('Run Training ...')
-    holmes_vae.run_training(train_loader, training_config, valid_loader=valid_loader, logger=logger)
+    holmes_vae.run_training(train_loader, training_config, valid_loader=valid_loader)
 
     print('Finished.')
 

@@ -56,6 +56,7 @@ def run_training():
     holmes_clr_config.optimizer.parameters.weight_decay = 1e-5
 
     holmes_clr_config.checkpoint.folder = "./checkpoints/holmes_clr"
+    holmes_clr_config.logging.folder = "./logs/holmes_clr"
     holmes_clr_config.logging.record_loss_every = 1
     holmes_clr_config.logging.record_valid_images_every = 10
     holmes_clr_config.logging.record_embeddings_every = 10
@@ -65,17 +66,8 @@ def run_training():
     training_config = Dict()
     training_config.n_epochs = 20
 
-    # prepare output folders
-    logging_folder = "./logs/holmes_clr"
-    if (logging_folder is not None) and (not os.path.exists(logging_folder)):
-        os.makedirs(logging_folder)
-    if not os.path.exists(holmes_clr_config.checkpoint.folder):
-        os.makedirs(holmes_clr_config.checkpoint.folder)
-
-    logger = SummaryWriter(logging_folder, 'w')
-
     print('Run Training ...')
-    holmes_clr.run_training(train_loader, training_config, valid_loader=valid_loader, logger=logger)
+    holmes_clr.run_training(train_loader, training_config, valid_loader=valid_loader)
 
     print('Finished.')
 
