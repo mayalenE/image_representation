@@ -1,26 +1,3 @@
-# Table of Contents
-
-* [Install and Run](#imagerepresentation-install-and-run)
-  
-* [Code Skeleton](#imagerepresentation-code-skeleton)
-  
-* [RoadMap](#imagerepresentation-roadmap)
-
----
-
-# ImageRepresentation: Install and Run
-
-1. If you do not already have it, please install [Conda](https://www.anaconda.com/)
-2. Create *morphosearch* conda environment: `conda create --name morphosearch python=3.6`
-3. Activate *morphosearch* conda environment: `conda activate morphosearch`
-4. If you do not already have it, please create a package folder that you will link to your conda env: `mkdir <path_to_packages_folder>`
-5. Into your package folder, clone the following packages:  
-    b. `git clone git@github.com:mayalenE/imagerepresentation.git`
-5. Include thos packages in the conda environment:  
-   `echo <path_to_packages_folder> "$HOME/miniconda3/envs/morphosearch/lib/python3.6/site-packages/my_packages.pth"`
-6. Install the required conda packages in the environment (*requirements.txt* file can be found in imagerepresentation directory):  
-   `while read requirement; do conda install --yes $requirement --channel default --channel anaconda --channel conda-forge --channel pytorch; done < requirements.txt`
-
 # ImageRepresentation: Code Skeleton
 
 ## addict.Dict
@@ -78,4 +55,3 @@ Aditionnally to Representation's main API methods, the following main API method
 - **load(filepath, map_loaction='cpu')**:
 - **calc_embedding (x)**: given an input image x calc the embedding z
 
-# ImageRepresentation: RoadMap
