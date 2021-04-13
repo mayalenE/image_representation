@@ -121,9 +121,7 @@ class BiGAN(TorchNNRepresentation):
     def calc_embedding(self, x, **kwargs):
         ''' the function calc outputs a representation vector of size batch_size*n_latents'''
         x = x.to(self.config.device)
-        self.eval()
-        with torch.no_grad():
-            z = self.network.encoder.calc_embedding(x)
+        z = self.network.encoder.calc_embedding(x)
         return z
 
     def run_training(self, train_loader, training_config, valid_loader=None, logger=None):

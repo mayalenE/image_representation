@@ -541,19 +541,18 @@ class HOLMES_CLR(TorchNNRepresentation):
         n_latents = self.config.network.parameters.n_latents
         z = torch.Tensor().new_full((len(x), n_latents), float("nan"))
         x = x.to(self.config.device)
-        self.eval()
-        with torch.no_grad():
-            all_nodes_outputs = self.network.depth_first_forward_whole_branch_preorder(x)
-            for node_idx in range(len(all_nodes_outputs)):
-                cur_node_path = all_nodes_outputs[node_idx][0][0]
-                if cur_node_path != node_path:
-                    continue
-                else:
-                    cur_node_x_ids = all_nodes_outputs[node_idx][1]
-                    cur_node_outputs = all_nodes_outputs[node_idx][2]
-                    for idx in range(len(cur_node_x_ids)):
-                        z[cur_node_x_ids[idx]] = cur_node_outputs["z"][idx]
-                    break
+
+        all_nodes_outputs = self.network.depth_first_forward_whole_branch_preorder(x)
+        for node_idx in range(len(all_nodes_outputs)):
+            cur_node_path = all_nodes_outputs[node_idx][0][0]
+            if cur_node_path != node_path:
+                continue
+            else:
+                cur_node_x_ids = all_nodes_outputs[node_idx][1]
+                cur_node_outputs = all_nodes_outputs[node_idx][2]
+                for idx in range(len(cur_node_x_ids)):
+                    z[cur_node_x_ids[idx]] = cur_node_outputs["z"][idx]
+                break
         return z
 
     def split_node(self, node_path, split_trigger=None, x_loader=None, x_fitness=None):

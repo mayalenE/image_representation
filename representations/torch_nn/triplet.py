@@ -147,9 +147,7 @@ class Triplet(TorchNNRepresentation):
                                              self.config.network.parameters.n_latents)
     def calc_embedding(self, x):
         x = x.to(self.config.device)
-        self.eval()
-        with torch.no_grad():
-            z = self.network.encoder.calc_embedding(x)
+        z = self.network.encoder.calc_embedding(x)
         return z
 
     def forward(self, x_ref, x_a, x_b, x_c):

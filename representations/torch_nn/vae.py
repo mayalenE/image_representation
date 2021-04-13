@@ -62,6 +62,18 @@ class VAE(TorchNNRepresentation):
         decoder_class = decoders.get_decoder(network_name)
         self.network.decoder = decoder_class(config=network_parameters)
 
+    def set_logger(self, logger_config):
+        TorchNNRepresentation.set_logger(self, logger_config)
+        # Save the graph in the logger
+        if self.logger is not None:
+            dummy_input = torch.DoubleTensor(1, self.config.network.parameters.n_channels,
+                                            self.config.network.parameters.input_size[0],
+                                            self.config.network.parameters.input_size[1]).uniform_(0, 1)
+            dummy_input = dummy_input.to(self.config.device)
+            self.eval()
+            with torch.no_grad():
+                self.logger.add_graph(self, dummy_input, verbose=False)
+
     def forward_from_encoder(self, encoder_outputs):
         decoder_outputs = self.network.decoder(encoder_outputs["z"])
         model_outputs = encoder_outputs
@@ -85,25 +97,13 @@ class VAE(TorchNNRepresentation):
     def calc_embedding(self, x, **kwargs):
         ''' the function calc outputs a representation vector of size batch_size*n_latents'''
         x = x.to(self.config.device)
-        self.eval()
-        with torch.no_grad():
-            z = self.network.encoder.calc_embedding(x)
+        z = self.network.encoder.calc_embedding(x)
         return z
 
     def run_training(self, train_loader, training_config, valid_loader=None):
 
         if "n_epochs" not in training_config:
             training_config.n_epochs = 0
-
-        # Save the graph in the logger
-        if self.logger is not None:
-            dummy_input = torch.FloatTensor(1, self.config.network.parameters.n_channels,
-                                            self.config.network.parameters.input_size[0],
-                                            self.config.network.parameters.input_size[1]).uniform_(0, 1)
-            dummy_input = dummy_input.to(self.config.device)
-            self.eval()
-            with torch.no_grad():
-                self.logger.add_graph(self, dummy_input, verbose=False)
 
         do_validation = False
         if valid_loader is not None:

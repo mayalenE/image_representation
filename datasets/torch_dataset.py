@@ -696,6 +696,7 @@ class LENIADataset(Dataset):
         # image
         img_tensor = self.images[idx]
 
+
         if self.data_augmentation:
             img_tensor = self.augment(img_tensor)
 
@@ -707,6 +708,7 @@ class LENIADataset(Dataset):
             label = int(self.labels[idx])
         else:
             label = -1
+
 
         if self.target_transform is not None:
             label = self.target_transform(label)
