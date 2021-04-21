@@ -26,6 +26,15 @@ class Discriminator(nn.Module, metaclass=ABCMeta):
         self.config.update(config)
         self.config.update(kwargs)
 
+        assert 2 <= len(self.config.input_size) <= 3, "Image must be 2D or 3D"
+        self.spatial_dims = len(self.config.input_size)
+        if self.spatial_dims == 2:
+            self.conv_module = nn.Conv2d
+            self.dropout_module = nn.Dropout2d
+        elif self.spatial_dims == 3:
+            self.conv_module = nn.Conv3d
+            self.dropout_module = nn.Dropout3d
+
 
 def get_discriminator(model_architecture):
     '''
@@ -116,18 +125,18 @@ class DumoulinDiscriminator(Discriminator):
         hidden_dim_joint = 2048
 
         self.infer_z = nn.Sequential(
-            nn.Conv2d(self.config.n_latents, hidden_dim_z, kernel_size=1, stride=1),
+            self.conv_module(self.config.n_latents, hidden_dim_z, kernel_size=1, stride=1),
             nn.LeakyReLU(inplace=True),
-            nn.Conv2d(hidden_dim_z, hidden_dim_z, kernel_size=1, stride=1),
+            self.conv_module(hidden_dim_z, hidden_dim_z, kernel_size=1, stride=1),
             nn.LeakyReLU(inplace=True),
         )
 
         self.infer_joint = nn.Sequential(
-            nn.Conv2d(hidden_dim_z + hidden_dim_x, hidden_dim_joint, kernel_size=1, stride=1),
+            self.conv_module(hidden_dim_z + hidden_dim_x, hidden_dim_joint, kernel_size=1, stride=1),
             nn.LeakyReLU(inplace=True),
-            nn.Conv2d(hidden_dim_joint, hidden_dim_joint, kernel_size=1, stride=1),
+            self.conv_module(hidden_dim_joint, hidden_dim_joint, kernel_size=1, stride=1),
             nn.LeakyReLU(inplace=True),
-            nn.Conv2d(hidden_dim_joint, 1, kernel_size=1, stride=1)
+            self.conv_module(hidden_dim_joint, 1, kernel_size=1, stride=1)
         )
 
         self.with_dropout = with_dropout
@@ -135,24 +144,24 @@ class DumoulinDiscriminator(Discriminator):
             infer_x_lf_dropout_modules = []
             for module_name, module in self.infer_x.lf.named_children():
                 module_list = [sub_mod for sub_mod in module.children()]
-                module_list.insert(3, nn.Dropout2d(0.2))
-                module_list.append(nn.Dropout2d(0.2))
+                module_list.insert(3, self.dropout_module(0.2))
+                module_list.append(self.dropout_module(0.2))
                 infer_x_lf_dropout_modules.append(nn.Sequential(*module_list))
             self.infer_x.lf = nn.Sequential(*infer_x_lf_dropout_modules)
             infer_x_gf_dropout_modules = []
             for module in self.infer_x.gf.children():
                 module_list = [sub_mod for sub_mod in module.children()]
-                module_list.insert(3, nn.Dropout2d(0.2))
-                module_list.append(nn.Dropout2d(0.2))
+                module_list.insert(3, self.dropout_module(0.2))
+                module_list.append(self.dropout_module(0.2))
                 infer_x_gf_dropout_modules.append(nn.Sequential(*module_list))
             self.infer_x.gf = nn.Sequential(*infer_x_gf_dropout_modules)
             module_list = [mod for mod in self.infer_z.children()]
-            module_list.insert(2, nn.Dropout2d(0.2))
-            module_list.append(nn.Dropout2d(0.2))
+            module_list.insert(2, self.dropout_module(0.2))
+            module_list.append(self.dropout_module(0.2))
             self.infer_z = nn.Sequential(*module_list)
             module_list = [mod for mod in self.infer_joint.children()]
-            module_list.insert(2, nn.Dropout2d(0.2))
-            module_list.insert(-1, nn.Dropout2d(0.2))
+            module_list.insert(2, self.dropout_module(0.2))
+            module_list.insert(-1, self.dropout_module(0.2))
             self.infer_joint = nn.Sequential(*module_list)
 
     def forward(self, x, z):

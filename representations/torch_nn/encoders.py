@@ -1,6 +1,6 @@
 from abc import ABCMeta
 from addict import Dict
-from image_representation.utils.torch_nn_module import Flatten, conv2d_output_sizes
+from image_representation.utils.torch_nn_module import Flatten, conv_output_sizes
 import math
 import torch
 from torch import nn
@@ -24,7 +24,7 @@ class Encoder(nn.Module, metaclass=ABCMeta):
         default_config = Dict()
 
         default_config.n_channels = 1
-        default_config.input_size = (64, 64)
+        default_config.input_size = (64, 64) #2D or 3D tuple
         default_config.n_conv_layers = 4
         default_config.n_latents = 10
         default_config.encoder_conditional_type = "gaussian"
@@ -42,6 +42,17 @@ class Encoder(nn.Module, metaclass=ABCMeta):
         self.config = self.__class__.default_config()
         self.config.update(config)
         self.config.update(kwargs)
+
+        assert 2 <= len(self.config.input_size) <= 3, "Image must be 2D or 3D"
+        self.spatial_dims = len(self.config.input_size)
+        if self.spatial_dims == 2:
+            self.conv_module = nn.Conv2d
+            self.maxpool_module = nn.MaxPool2d
+            self.batchnorm_module = nn.BatchNorm2d
+        elif self.spatial_dims == 3:
+            self.conv_module = nn.Conv3d
+            self.maxpool_module = nn.MaxPool3d
+            self.batchnorm_module = nn.BatchNorm3d
 
         self.output_keys_list = ["x", "lf", "gf", "z"]
         if self.config.encoder_conditional_type == "gaussian":
@@ -132,7 +143,7 @@ class BurgessEncoder(Encoder):
         Encoder.__init__(self, config=config, **kwargs)
 
         # need square image input
-        assert self.config.input_size[0] == self.config.input_size[1], "BurgessEncoder needs a square image input size"
+        assert torch.all(torch.tensor([self.config.input_size[i] == self.config.input_size[0] for i in range(1, len(self.config.input_size))])), "BurgessEncoder needs a square image input size"
 
         # network architecture
         if self.config.hidden_channels is None:
@@ -147,8 +158,7 @@ class BurgessEncoder(Encoder):
         dils = [1] * self.config.n_conv_layers
 
         # feature map size
-        feature_map_sizes = conv2d_output_sizes(self.config.input_size, self.config.n_conv_layers, kernels_size,
-                                                strides, pads, dils)
+        feature_map_sizes = conv_output_sizes(self.config.input_size, self.config.n_conv_layers, kernels_size, strides, pads, dils)
 
         # local feature
         self.local_feature_shape = (
@@ -158,11 +168,11 @@ class BurgessEncoder(Encoder):
         for conv_layer_id in range(self.config.feature_layer + 1):
             if conv_layer_id == 0:
                 self.lf.add_module("conv_{}".format(0), nn.Sequential(
-                    nn.Conv2d(self.config.n_channels, hidden_channels, kernels_size[0], strides[0], pads[0], dils[0]),
+                    self.conv_module(self.config.n_channels, hidden_channels, kernels_size[0], strides[0], pads[0], dils[0]),
                     nn.ReLU()))
             else:
                 self.lf.add_module("conv_{}".format(conv_layer_id), nn.Sequential(
-                    nn.Conv2d(hidden_channels, hidden_channels, kernels_size[conv_layer_id], strides[conv_layer_id],
+                    self.conv_module(hidden_channels, hidden_channels, kernels_size[conv_layer_id], strides[conv_layer_id],
                               pads[conv_layer_id], dils[conv_layer_id]), nn.ReLU()))
         self.lf.out_connection_type = ("conv", hidden_channels)
 
@@ -171,13 +181,13 @@ class BurgessEncoder(Encoder):
         ## convolutional layers
         for conv_layer_id in range(self.config.feature_layer + 1, self.config.n_conv_layers):
             self.gf.add_module("conv_{}".format(conv_layer_id), nn.Sequential(
-                nn.Conv2d(hidden_channels, hidden_channels, kernels_size[conv_layer_id], strides[conv_layer_id],
+                self.conv_module(hidden_channels, hidden_channels, kernels_size[conv_layer_id], strides[conv_layer_id],
                           pads[conv_layer_id], dils[conv_layer_id]), nn.ReLU()))
         self.gf.add_module("flatten", Flatten())
         ## linear layers
-        h_after_convs, w_after_convs = feature_map_sizes[-1]
+        n_linear_in = hidden_channels * torch.prod(torch.tensor(feature_map_sizes[-1])).item()
         self.gf.add_module("lin_0",
-                           nn.Sequential(nn.Linear(hidden_channels * h_after_convs * w_after_convs, hidden_dim),
+                           nn.Sequential(nn.Linear(n_linear_in, hidden_dim),
                                          nn.ReLU()))
         self.gf.add_module("lin_1", nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.ReLU()))
         self.gf.out_connection_type = ("lin", hidden_dim)
@@ -211,7 +221,7 @@ class HjelmEncoder(Encoder):
         Encoder.__init__(self, config=config, **kwargs)
 
         # need square image input
-        assert self.config.input_size[0] == self.config.input_size[1], "HjlemEncoder needs a square image input size"
+        assert torch.all(torch.tensor([self.config.input_size[i] == self.config.input_size[0] for i in range(1, len(self.config.input_size))])),  "HjlemEncoder needs a square image input size"
 
         # network architecture
         if self.config.hidden_channels is None:
@@ -226,7 +236,7 @@ class HjelmEncoder(Encoder):
         dils = [1] * self.config.n_conv_layers
 
         # feature map size
-        feature_map_sizes = conv2d_output_sizes(self.config.input_size, self.config.n_conv_layers, kernels_size,
+        feature_map_sizes = conv_output_sizes(self.config.input_size, self.config.n_conv_layers, kernels_size,
                                                 strides, pads, dils)
 
         # local feature 
@@ -239,12 +249,12 @@ class HjelmEncoder(Encoder):
         for conv_layer_id in range(self.config.feature_layer + 1):
             if conv_layer_id == 0:
                 self.lf.add_module("conv_{}".format(0), nn.Sequential(
-                    nn.Conv2d(self.config.n_channels, hidden_channels, kernels_size[0], strides[0], pads[0], dils[0]),
+                    self.conv_module(self.config.n_channels, hidden_channels, kernels_size[0], strides[0], pads[0], dils[0]),
                     nn.ReLU()))
             else:
                 self.lf.add_module("conv_{}".format(conv_layer_id), nn.Sequential(
-                    nn.Conv2d(hidden_channels, hidden_channels * 2, kernels_size[conv_layer_id], strides[conv_layer_id],
-                              pads[conv_layer_id], dils[conv_layer_id]), nn.BatchNorm2d(hidden_channels * 2),
+                    self.conv_module(hidden_channels, hidden_channels * 2, kernels_size[conv_layer_id], strides[conv_layer_id],
+                              pads[conv_layer_id], dils[conv_layer_id]),self.batchnorm_module(hidden_channels * 2),
                     nn.ReLU()))
                 hidden_channels *= 2
         self.lf.out_connection_type = ("conv", hidden_channels)
@@ -254,14 +264,14 @@ class HjelmEncoder(Encoder):
         ## convolutional layers
         for conv_layer_id in range(self.config.feature_layer + 1, self.config.n_conv_layers):
             self.gf.add_module("conv_{}".format(conv_layer_id), nn.Sequential(
-                nn.Conv2d(hidden_channels, hidden_channels * 2, kernels_size[conv_layer_id], strides[conv_layer_id],
-                          pads[conv_layer_id], dils[conv_layer_id]), nn.BatchNorm2d(hidden_channels * 2), nn.ReLU()))
+                self.conv_module(hidden_channels, hidden_channels * 2, kernels_size[conv_layer_id], strides[conv_layer_id],
+                          pads[conv_layer_id], dils[conv_layer_id]),self.batchnorm_module(hidden_channels * 2), nn.ReLU()))
             hidden_channels *= 2
         self.gf.add_module("flatten", Flatten())
         ## linear layers
-        h_after_convs, w_after_convs = feature_map_sizes[-1]
+        n_linear_in = hidden_channels * torch.prod(torch.tensor(feature_map_sizes[-1])).item()
         self.gf.add_module("lin_0",
-                           nn.Sequential(nn.Linear(hidden_channels * h_after_convs * w_after_convs, hidden_dim),
+                           nn.Sequential(nn.Linear(n_linear_in, hidden_dim),
                                          nn.BatchNorm1d(hidden_dim), nn.ReLU()))
         self.gf.out_connection_type = ("lin", hidden_dim)
 
@@ -314,8 +324,9 @@ class DumoulinEncoder(Encoder):
         # need square and power of 2 image size input
         power = math.log(self.config.input_size[0], 2)
         assert (power % 1 == 0.0) and (power > 3), "Dumoulin Encoder needs a power of 2 as image input size (>=16)"
-        assert self.config.input_size[0] == self.config.input_size[
-            1], "Dumoulin Encoder needs a square image input size"
+        # need square image input
+        assert torch.all(torch.tensor(
+            [self.config.input_size[i] == self.config.input_size[0] for i in range(1, len(self.config.input_size))])), "Dumoulin Encoder needs a square image input size"
 
         assert self.config.n_conv_layers == power - 2, "The number of convolutional layers in DumoulinEncoder must be log(input_size, 2) - 2 "
 
@@ -329,7 +340,7 @@ class DumoulinEncoder(Encoder):
         dils = [1, 1] * self.config.n_conv_layers
 
         # feature map size
-        feature_map_sizes = conv2d_output_sizes(self.config.input_size, 2 * self.config.n_conv_layers, kernels_size,
+        feature_map_sizes = conv_output_sizes(self.config.input_size, 2 * self.config.n_conv_layers, kernels_size,
                                                 strides, pads,
                                                 dils)
 
@@ -343,24 +354,24 @@ class DumoulinEncoder(Encoder):
         for conv_layer_id in range(self.config.feature_layer + 1):
             if conv_layer_id == 0:
                 self.lf.add_module("conv_{}".format(conv_layer_id), nn.Sequential(
-                    nn.Conv2d(self.config.n_channels, hidden_channels, kernels_size[2 * conv_layer_id],
+                    self.conv_module(self.config.n_channels, hidden_channels, kernels_size[2 * conv_layer_id],
                               strides[2 * conv_layer_id], pads[2 * conv_layer_id], dils[2 * conv_layer_id]),
-                    nn.BatchNorm2d(hidden_channels),
+                   self.batchnorm_module(hidden_channels),
                     nn.LeakyReLU(inplace=True),
-                    nn.Conv2d(hidden_channels, 2 * hidden_channels, kernels_size[2 * conv_layer_id + 1],
+                    self.conv_module(hidden_channels, 2 * hidden_channels, kernels_size[2 * conv_layer_id + 1],
                               strides[2 * conv_layer_id + 1], pads[2 * conv_layer_id + 1], dils[2 * conv_layer_id + 1]),
-                    nn.BatchNorm2d(2 * hidden_channels),
+                   self.batchnorm_module(2 * hidden_channels),
                     nn.LeakyReLU(inplace=True)
                 ))
             else:
                 self.lf.add_module("conv_{}".format(conv_layer_id), nn.Sequential(
-                    nn.Conv2d(hidden_channels, hidden_channels, kernels_size[2 * conv_layer_id],
+                    self.conv_module(hidden_channels, hidden_channels, kernels_size[2 * conv_layer_id],
                               strides[2 * conv_layer_id], pads[2 * conv_layer_id], dils[2 * conv_layer_id]),
-                    nn.BatchNorm2d(hidden_channels),
+                   self.batchnorm_module(hidden_channels),
                     nn.LeakyReLU(inplace=True),
-                    nn.Conv2d(hidden_channels, 2 * hidden_channels, kernels_size[2 * conv_layer_id + 1],
+                    self.conv_module(hidden_channels, 2 * hidden_channels, kernels_size[2 * conv_layer_id + 1],
                               strides[2 * conv_layer_id + 1], pads[2 * conv_layer_id + 1], dils[2 * conv_layer_id + 1]),
-                    nn.BatchNorm2d(2 * hidden_channels),
+                   self.batchnorm_module(2 * hidden_channels),
                     nn.LeakyReLU(inplace=True)
                 ))
             hidden_channels *= 2
@@ -371,13 +382,13 @@ class DumoulinEncoder(Encoder):
         ## convolutional layers
         for conv_layer_id in range(self.config.feature_layer + 1, self.config.n_conv_layers):
             self.gf.add_module("conv_{}".format(conv_layer_id), nn.Sequential(
-                nn.Conv2d(hidden_channels, hidden_channels, kernels_size[2 * conv_layer_id], strides[2 * conv_layer_id],
+                self.conv_module(hidden_channels, hidden_channels, kernels_size[2 * conv_layer_id], strides[2 * conv_layer_id],
                           pads[2 * conv_layer_id], dils[2 * conv_layer_id]),
-                nn.BatchNorm2d(hidden_channels),
+               self.batchnorm_module(hidden_channels),
                 nn.LeakyReLU(inplace=True),
-                nn.Conv2d(hidden_channels, 2 * hidden_channels, kernels_size[2 * conv_layer_id + 1],
+                self.conv_module(hidden_channels, 2 * hidden_channels, kernels_size[2 * conv_layer_id + 1],
                           strides[2 * conv_layer_id + 1], pads[2 * conv_layer_id + 1], dils[2 * conv_layer_id + 1]),
-                nn.BatchNorm2d(2 * hidden_channels),
+               self.batchnorm_module(2 * hidden_channels),
                 nn.LeakyReLU(inplace=True)
             ))
             hidden_channels *= 2
@@ -386,17 +397,17 @@ class DumoulinEncoder(Encoder):
         # encoding feature
         if self.config.encoder_conditional_type == "gaussian":
             self.add_module("ef", nn.Sequential(
-                nn.Conv2d(hidden_channels, hidden_channels, kernel_size=1, stride=1),
-                nn.BatchNorm2d(hidden_channels),
+                self.conv_module(hidden_channels, hidden_channels, kernel_size=1, stride=1),
+               self.batchnorm_module(hidden_channels),
                 nn.LeakyReLU(inplace=True),
-                nn.Conv2d(hidden_channels, 2 * self.config.n_latents, kernel_size=1, stride=1)
+                self.conv_module(hidden_channels, 2 * self.config.n_latents, kernel_size=1, stride=1)
             ))
         elif self.config.encoder_conditional_type == "deterministic":
             self.add_module("ef", nn.Sequential(
-                nn.Conv2d(hidden_channels, hidden_channels, kernel_size=1, stride=1),
-                nn.BatchNorm2d(hidden_channels),
+                self.conv_module(hidden_channels, hidden_channels, kernel_size=1, stride=1),
+               self.batchnorm_module(hidden_channels),
                 nn.LeakyReLU(inplace=True),
-                nn.Conv2d(hidden_channels, self.config.n_latents, kernel_size=1, stride=1)
+                self.conv_module(hidden_channels, self.config.n_latents, kernel_size=1, stride=1)
             ))
 
         # attention feature
@@ -420,7 +431,7 @@ class MNISTEncoder(Encoder):
         Encoder.__init__(self, config=config, **kwargs)
 
         # need square image input
-        assert self.config.input_size[0] == self.config.input_size[1], "MNISTEncoder needs a square image input size"
+        assert torch.all(torch.tensor([self.config.input_size[i] == self.config.input_size[0] for i in range(1, len(self.config.input_size))])), "MNISTEncoder needs a square image input size"
 
         # network architecture
         if ("linear_layers_dim" not in self.config) or (self.config.linear_layers_dim is None):
@@ -471,7 +482,8 @@ class CedricEncoder(Encoder):
         Encoder.__init__(self, config=config, **kwargs)
 
         # need square image input
-        assert self.config.input_size[0] == self.config.input_size[1], "CedricEncoder needs a square image input size"
+        assert torch.all(torch.tensor(
+            [self.config.input_size[i] == self.config.input_size[0] for i in range(1, len(self.config.input_size))])), "CedricEncoder needs a square image input size"
 
         # network architecture
         if self.config.hidden_channels is None:
@@ -486,7 +498,7 @@ class CedricEncoder(Encoder):
         dils = [1] * self.config.n_conv_layers
 
         # feature map size
-        feature_map_sizes = conv2d_output_sizes(self.config.input_size, self.config.n_conv_layers, kernels_size,
+        feature_map_sizes = conv_output_sizes(self.config.input_size, self.config.n_conv_layers, kernels_size,
                                                 strides, pads, dils)
 
         # local feature
@@ -497,14 +509,14 @@ class CedricEncoder(Encoder):
         for conv_layer_id in range(self.config.feature_layer + 1):
             if conv_layer_id == 0:
                 self.lf.add_module("conv_{}".format(0), nn.Sequential(
-                    nn.Conv2d(self.config.n_channels, hidden_channels, kernels_size[0]),
+                    self.conv_module(self.config.n_channels, hidden_channels, kernels_size[0]),
                     nn.PReLU(),
-                    nn.MaxPool2d(2, stride=strides[0])))
+                    self.maxpool_module(2, stride=strides[0])))
             else:
                 self.lf.add_module("conv_{}".format(conv_layer_id), nn.Sequential(
-                    nn.Conv2d(hidden_channels // 2, hidden_channels, kernels_size[conv_layer_id]),
+                    self.conv_module(hidden_channels // 2, hidden_channels, kernels_size[conv_layer_id]),
                     nn.PReLU(),
-                    nn.MaxPool2d(2, stride=strides[conv_layer_id])))
+                    self.maxpool_module(2, stride=strides[conv_layer_id])))
             hidden_channels *= 2
         self.lf.out_connection_type = ("conv", hidden_channels)
 
@@ -513,15 +525,15 @@ class CedricEncoder(Encoder):
         ## convolutional layers
         for conv_layer_id in range(self.config.feature_layer + 1, self.config.n_conv_layers):
             self.gf.add_module("conv_{}".format(conv_layer_id), nn.Sequential(
-                nn.Conv2d(hidden_channels // 2, hidden_channels, kernels_size[conv_layer_id]),
+                self.conv_module(hidden_channels // 2, hidden_channels, kernels_size[conv_layer_id]),
                 nn.PReLU(),
-                nn.MaxPool2d(2, stride=strides[conv_layer_id])))
+                self.maxpool_module(2, stride=strides[conv_layer_id])))
             hidden_channels *= 2
         self.gf.add_module("flatten", Flatten())
         ## linear layers
-        h_after_convs, w_after_convs = feature_map_sizes[-1]
+        n_linear_in = hidden_channels // 2 * torch.prod(torch.tensor(feature_map_sizes[-1])).item()
         self.gf.add_module("lin_0",
-                           nn.Sequential(nn.Linear(hidden_channels // 2 * h_after_convs * w_after_convs, hidden_dim),
+                           nn.Sequential(nn.Linear(n_linear_in, hidden_dim),
                                          nn.PReLU()))
 
         # encoding feature

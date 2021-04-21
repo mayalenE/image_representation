@@ -1,6 +1,6 @@
 from abc import ABCMeta
 from addict import Dict
-from image_representation.utils.torch_nn_module import Channelize, conv2d_output_sizes, convtranspose2d_get_output_padding
+from image_representation.utils.torch_nn_module import Channelize, conv_output_sizes, convtranspose_get_output_padding
 import math
 import torch
 from torch import nn
@@ -38,6 +38,15 @@ class Decoder(nn.Module, metaclass=ABCMeta):
         self.config = self.__class__.default_config()
         self.config.update(config)
         self.config.update(kwargs)
+
+        assert 2 <= len(self.config.input_size) <= 3, "Image must be 2D or 3D"
+        self.spatial_dims = len(self.config.input_size)
+        if self.spatial_dims == 2:
+            self.convtranspose_module = nn.ConvTranspose2d
+            self.batchnorm_module = nn.BatchNorm2d
+        elif self.spatial_dims == 3:
+            self.convtranspose_module = nn.ConvTranspose3d
+            self.batchnorm_module = nn.BatchNorm3d
 
         self.output_keys_list = ["z", "gfi", "lfi", "recon_x"]
 
@@ -98,15 +107,15 @@ class BurgessDecoder(Decoder):
         strides = [2] * self.config.n_conv_layers
         pads = [1] * self.config.n_conv_layers
         dils = [1] * self.config.n_conv_layers
-        feature_map_sizes = conv2d_output_sizes(self.config.input_size, self.config.n_conv_layers, kernels_size,
+        feature_map_sizes = conv_output_sizes(self.config.input_size, self.config.n_conv_layers, kernels_size,
                                                 strides, pads, dils)
-        h_after_convs, w_after_convs = feature_map_sizes[-1]
+        n_linear_in = hidden_channels * torch.prod(torch.tensor(feature_map_sizes[-1])).item()
         output_pads = [None] * self.config.n_conv_layers
-        output_pads[0] = convtranspose2d_get_output_padding(feature_map_sizes[0], self.config.input_size,
+        output_pads[0] = convtranspose_get_output_padding(feature_map_sizes[0], self.config.input_size,
                                                             kernels_size[0],
                                                             strides[0], pads[0])
         for conv_layer_id in range(1, self.config.n_conv_layers):
-            output_pads[conv_layer_id] = convtranspose2d_get_output_padding(feature_map_sizes[conv_layer_id],
+            output_pads[conv_layer_id] = convtranspose_get_output_padding(feature_map_sizes[conv_layer_id],
                                                                             feature_map_sizes[conv_layer_id - 1],
                                                                             kernels_size[conv_layer_id],
                                                                             strides[conv_layer_id], pads[conv_layer_id])
@@ -120,13 +129,13 @@ class BurgessDecoder(Decoder):
         self.gfi = nn.Sequential()
         self.gfi.add_module("lin_1_i", nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.ReLU()))
         self.gfi.add_module("lin_0_i",
-                            nn.Sequential(nn.Linear(hidden_dim, hidden_channels * h_after_convs * w_after_convs),
+                            nn.Sequential(nn.Linear(hidden_dim, n_linear_in),
                                           nn.ReLU()))
-        self.gfi.add_module("channelize", Channelize(hidden_channels, h_after_convs, w_after_convs))
+        self.gfi.add_module("channelize", Channelize(hidden_channels, feature_map_sizes[-1]))
         ## convolutional layers
         for conv_layer_id in range(self.config.n_conv_layers - 1, self.config.feature_layer + 1 - 1, -1):
             self.gfi.add_module("conv_{}_i".format(conv_layer_id), nn.Sequential(
-                nn.ConvTranspose2d(hidden_channels, hidden_channels, kernels_size[conv_layer_id],
+                self.convtranspose_module(hidden_channels, hidden_channels, kernels_size[conv_layer_id],
                                    strides[conv_layer_id], pads[conv_layer_id],
                                    output_padding=output_pads[conv_layer_id]), nn.ReLU()))
         self.gfi.out_connection_type = ("conv", hidden_channels)
@@ -135,11 +144,11 @@ class BurgessDecoder(Decoder):
         self.lfi = nn.Sequential()
         for conv_layer_id in range(self.config.feature_layer + 1 - 1, 0, -1):
             self.lfi.add_module("conv_{}_i".format(conv_layer_id), nn.Sequential(
-                nn.ConvTranspose2d(hidden_channels, hidden_channels, kernels_size[conv_layer_id],
+                self.convtranspose_module(hidden_channels, hidden_channels, kernels_size[conv_layer_id],
                                    strides[conv_layer_id], pads[conv_layer_id],
                                    output_padding=output_pads[conv_layer_id]), nn.ReLU()))
         self.lfi.add_module("conv_0_i",
-                            nn.ConvTranspose2d(hidden_channels, self.config.n_channels, kernels_size[0], strides[0],
+                            self.convtranspose_module(hidden_channels, self.config.n_channels, kernels_size[0], strides[0],
                                                pads[0],
                                                output_padding=output_pads[0]))
         self.lfi.out_connection_type = ("conv", self.config.n_channels)
@@ -162,15 +171,15 @@ class HjelmDecoder(Decoder):
         strides = [2] * self.config.n_conv_layers
         pads = [1] * self.config.n_conv_layers
         dils = [1] * self.config.n_conv_layers
-        feature_map_sizes = conv2d_output_sizes(self.config.input_size, self.config.n_conv_layers, kernels_size,
+        feature_map_sizes = conv_output_sizes(self.config.input_size, self.config.n_conv_layers, kernels_size,
                                                 strides, pads, dils)
-        h_after_convs, w_after_convs = feature_map_sizes[-1]
+        n_linear_in = hidden_channels * torch.prod(torch.tensor(feature_map_sizes[-1])).item()
         output_pads = [None] * self.config.n_conv_layers
-        output_pads[0] = convtranspose2d_get_output_padding(feature_map_sizes[0], self.config.input_size,
+        output_pads[0] = convtranspose_get_output_padding(feature_map_sizes[0], self.config.input_size,
                                                             kernels_size[0],
                                                             strides[0], pads[0])
         for conv_layer_id in range(1, self.config.n_conv_layers):
-            output_pads[conv_layer_id] = convtranspose2d_get_output_padding(feature_map_sizes[conv_layer_id],
+            output_pads[conv_layer_id] = convtranspose_get_output_padding(feature_map_sizes[conv_layer_id],
                                                                             feature_map_sizes[conv_layer_id - 1],
                                                                             kernels_size[conv_layer_id],
                                                                             strides[conv_layer_id], pads[conv_layer_id])
@@ -184,15 +193,15 @@ class HjelmDecoder(Decoder):
         ## linear layers
         self.gfi = nn.Sequential()
         self.gfi.add_module("lin_0_i",
-                            nn.Sequential(nn.Linear(hidden_dim, hidden_channels * h_after_convs * w_after_convs),
+                            nn.Sequential(nn.Linear(hidden_dim, n_linear_in),
                                           nn.ReLU()))
-        self.gfi.add_module("channelize", Channelize(hidden_channels, h_after_convs, w_after_convs))
+        self.gfi.add_module("channelize", Channelize(hidden_channels, feature_map_sizes[-1]))
         ## convolutional layers
         for conv_layer_id in range(self.config.n_conv_layers - 1, self.config.feature_layer + 1 - 1, -1):
             self.gfi.add_module("conv_{}_i".format(conv_layer_id), nn.Sequential(
-                nn.ConvTranspose2d(hidden_channels, hidden_channels // 2, kernels_size[conv_layer_id],
+                self.convtranspose_module(hidden_channels, hidden_channels // 2, kernels_size[conv_layer_id],
                                    strides[conv_layer_id], pads[conv_layer_id],
-                                   output_padding=output_pads[conv_layer_id]), nn.BatchNorm2d(hidden_channels // 2),
+                                   output_padding=output_pads[conv_layer_id]), self.batchnorm_module(hidden_channels // 2),
                 nn.ReLU()))
             hidden_channels = hidden_channels // 2
         self.gfi.out_connection_type = ("conv", hidden_channels)
@@ -201,13 +210,13 @@ class HjelmDecoder(Decoder):
         self.lfi = nn.Sequential()
         for conv_layer_id in range(self.config.feature_layer + 1 - 1, 0, -1):
             self.lfi.add_module("conv_{}_i".format(conv_layer_id), nn.Sequential(
-                nn.ConvTranspose2d(hidden_channels, hidden_channels // 2, kernels_size[conv_layer_id],
+                self.convtranspose_module(hidden_channels, hidden_channels // 2, kernels_size[conv_layer_id],
                                    strides[conv_layer_id], pads[conv_layer_id],
-                                   output_padding=output_pads[conv_layer_id]), nn.BatchNorm2d(hidden_channels // 2),
+                                   output_padding=output_pads[conv_layer_id]), self.batchnorm_module(hidden_channels // 2),
                 nn.ReLU()))
             hidden_channels = hidden_channels // 2
         self.lfi.add_module("conv_0_i",
-                            nn.ConvTranspose2d(hidden_channels, self.config.n_channels, kernels_size[0], strides[0],
+                            self.convtranspose_module(hidden_channels, self.config.n_channels, kernels_size[0], strides[0],
                                                pads[0],
                                                output_padding=output_pads[0]))
         self.lfi.out_connection_type = ("conv", self.config.n_channels)
@@ -235,34 +244,34 @@ class DumoulinDecoder(Decoder):
         pads = [0, 1] * self.config.n_conv_layers
         dils = [1, 1] * self.config.n_conv_layers
 
-        feature_map_sizes = conv2d_output_sizes(self.config.input_size, 2 * self.config.n_conv_layers, kernels_size,
+        feature_map_sizes = conv_output_sizes(self.config.input_size, 2 * self.config.n_conv_layers, kernels_size,
                                                 strides, pads,
                                                 dils)
         output_pads = [None] * 2 * self.config.n_conv_layers
-        output_pads[0] = convtranspose2d_get_output_padding(feature_map_sizes[0], self.config.input_size,
+        output_pads[0] = convtranspose_get_output_padding(feature_map_sizes[0], self.config.input_size,
                                                             kernels_size[0],
                                                             strides[0], pads[0])
-        output_pads[1] = convtranspose2d_get_output_padding(feature_map_sizes[1], feature_map_sizes[0], kernels_size[1],
+        output_pads[1] = convtranspose_get_output_padding(feature_map_sizes[1], feature_map_sizes[0], kernels_size[1],
                                                             strides[1], pads[1])
         for conv_layer_id in range(1, self.config.n_conv_layers):
-            output_pads[2 * conv_layer_id] = convtranspose2d_get_output_padding(feature_map_sizes[2 * conv_layer_id],
+            output_pads[2 * conv_layer_id] = convtranspose_get_output_padding(feature_map_sizes[2 * conv_layer_id],
                                                                                 feature_map_sizes[
                                                                                     2 * conv_layer_id - 1],
                                                                                 kernels_size[2 * conv_layer_id],
                                                                                 strides[2 * conv_layer_id],
                                                                                 pads[2 * conv_layer_id])
-            output_pads[2 * conv_layer_id + 1] = convtranspose2d_get_output_padding(
+            output_pads[2 * conv_layer_id + 1] = convtranspose_get_output_padding(
                 feature_map_sizes[2 * conv_layer_id + 1], feature_map_sizes[2 * conv_layer_id + 1 - 1],
                 kernels_size[2 * conv_layer_id + 1], strides[2 * conv_layer_id + 1], pads[2 * conv_layer_id + 1])
 
         # encoder feature inverse
         hidden_channels = int(hidden_channels * math.pow(2, self.config.n_conv_layers))
         self.efi = nn.Sequential(
-            nn.ConvTranspose2d(self.config.n_latents, hidden_channels, kernel_size=1, stride=1),
-            nn.BatchNorm2d(hidden_channels),
+            self.convtranspose_module(self.config.n_latents, hidden_channels, kernel_size=1, stride=1),
+            self.batchnorm_module(hidden_channels),
             nn.LeakyReLU(inplace=True),
-            nn.ConvTranspose2d(hidden_channels, hidden_channels, kernel_size=1, stride=1),
-            nn.BatchNorm2d(hidden_channels),
+            self.convtranspose_module(hidden_channels, hidden_channels, kernel_size=1, stride=1),
+            self.batchnorm_module(hidden_channels),
             nn.LeakyReLU(inplace=True)
         )
         self.efi.out_connection_type = ("conv", hidden_channels)
@@ -272,15 +281,15 @@ class DumoulinDecoder(Decoder):
         ## convolutional layers
         for conv_layer_id in range(self.config.n_conv_layers - 1, self.config.feature_layer + 1 - 1, -1):
             self.gfi.add_module("conv_{}_i".format(conv_layer_id), nn.Sequential(
-                nn.ConvTranspose2d(hidden_channels, hidden_channels // 2, kernels_size[2 * conv_layer_id + 1],
+                self.convtranspose_module(hidden_channels, hidden_channels // 2, kernels_size[2 * conv_layer_id + 1],
                                    strides[2 * conv_layer_id + 1], pads[2 * conv_layer_id + 1],
                                    output_padding=output_pads[2 * conv_layer_id + 1]),
-                nn.BatchNorm2d(hidden_channels // 2),
+                self.batchnorm_module(hidden_channels // 2),
                 nn.LeakyReLU(inplace=True),
-                nn.ConvTranspose2d(hidden_channels // 2, hidden_channels // 2, kernels_size[2 * conv_layer_id],
+                self.convtranspose_module(hidden_channels // 2, hidden_channels // 2, kernels_size[2 * conv_layer_id],
                                    strides[2 * conv_layer_id], pads[2 * conv_layer_id],
                                    output_padding=output_pads[2 * conv_layer_id]),
-                nn.BatchNorm2d(hidden_channels // 2),
+                self.batchnorm_module(hidden_channels // 2),
                 nn.LeakyReLU(inplace=True),
             ))
             hidden_channels = hidden_channels // 2
@@ -290,24 +299,24 @@ class DumoulinDecoder(Decoder):
         self.lfi = nn.Sequential()
         for conv_layer_id in range(self.config.feature_layer + 1 - 1, 0, -1):
             self.lfi.add_module("conv_{}_i".format(conv_layer_id), nn.Sequential(
-                nn.ConvTranspose2d(hidden_channels, hidden_channels // 2, kernels_size[2 * conv_layer_id + 1],
+                self.convtranspose_module(hidden_channels, hidden_channels // 2, kernels_size[2 * conv_layer_id + 1],
                                    strides[2 * conv_layer_id + 1], pads[2 * conv_layer_id + 1],
                                    output_padding=output_pads[2 * conv_layer_id + 1]),
-                nn.BatchNorm2d(hidden_channels // 2),
+                self.batchnorm_module(hidden_channels // 2),
                 nn.LeakyReLU(inplace=True),
-                nn.ConvTranspose2d(hidden_channels // 2, hidden_channels // 2, kernels_size[2 * conv_layer_id],
+                self.convtranspose_module(hidden_channels // 2, hidden_channels // 2, kernels_size[2 * conv_layer_id],
                                    strides[2 * conv_layer_id], pads[2 * conv_layer_id],
                                    output_padding=output_pads[2 * conv_layer_id]),
-                nn.BatchNorm2d(hidden_channels // 2),
+                self.batchnorm_module(hidden_channels // 2),
                 nn.LeakyReLU(inplace=True),
             ))
             hidden_channels = hidden_channels // 2
         self.lfi.add_module("conv_0_i", nn.Sequential(
-            nn.ConvTranspose2d(hidden_channels, hidden_channels // 2, kernels_size[1], strides[1], pads[1],
+            self.convtranspose_module(hidden_channels, hidden_channels // 2, kernels_size[1], strides[1], pads[1],
                                output_padding=output_pads[1]),
-            nn.BatchNorm2d(hidden_channels // 2),
+            self.batchnorm_module(hidden_channels // 2),
             nn.LeakyReLU(inplace=True),
-            nn.ConvTranspose2d(hidden_channels // 2, self.config.n_channels, kernels_size[0], strides[0], pads[0],
+            self.convtranspose_module(hidden_channels // 2, self.config.n_channels, kernels_size[0], strides[0], pads[0],
                                output_padding=output_pads[0]),
             nn.Sigmoid()
         ))
@@ -369,15 +378,15 @@ class CedricDecoder(Decoder):
         strides = [2] * self.config.n_conv_layers
         pads = [0] * self.config.n_conv_layers
         dils = [1] * self.config.n_conv_layers
-        feature_map_sizes = conv2d_output_sizes(self.config.input_size, self.config.n_conv_layers, kernels_size,
+        feature_map_sizes = conv_output_sizes(self.config.input_size, self.config.n_conv_layers, kernels_size,
                                                 strides, pads, dils)
-        h_after_convs, w_after_convs = feature_map_sizes[-1]
+        n_linear_in = hidden_channels * torch.prod(torch.tensor(feature_map_sizes[-1])).item()
         output_pads = [None] * self.config.n_conv_layers
-        output_pads[0] = convtranspose2d_get_output_padding(feature_map_sizes[0], self.config.input_size,
+        output_pads[0] = convtranspose_get_output_padding(feature_map_sizes[0], self.config.input_size,
                                                             kernels_size[0],
                                                             strides[0], pads[0])
         for conv_layer_id in range(1, self.config.n_conv_layers):
-            output_pads[conv_layer_id] = convtranspose2d_get_output_padding(feature_map_sizes[conv_layer_id],
+            output_pads[conv_layer_id] = convtranspose_get_output_padding(feature_map_sizes[conv_layer_id],
                                                                             feature_map_sizes[conv_layer_id - 1],
                                                                             kernels_size[conv_layer_id],
                                                                             strides[conv_layer_id], pads[conv_layer_id])
@@ -392,13 +401,12 @@ class CedricDecoder(Decoder):
         ## linear layers
         self.gfi = nn.Sequential()
         self.gfi.add_module("lin_0_i",
-                            nn.Sequential(nn.Linear(hidden_dim, hidden_channels * h_after_convs * w_after_convs),
-                                          nn.PReLU()))
-        self.gfi.add_module("channelize", Channelize(hidden_channels, h_after_convs, w_after_convs))
+                            nn.Sequential(nn.Linear(hidden_dim, n_linear_in), nn.PReLU()))
+        self.gfi.add_module("channelize", Channelize(hidden_channels, feature_map_sizes[-1]))
         ## convolutional layers
         for conv_layer_id in range(self.config.n_conv_layers - 1, self.config.feature_layer + 1 - 1, -1):
             self.gfi.add_module("conv_{}_i".format(conv_layer_id), nn.Sequential(
-                nn.ConvTranspose2d(hidden_channels, hidden_channels // 2, kernels_size[conv_layer_id],
+                self.convtranspose_module(hidden_channels, hidden_channels // 2, kernels_size[conv_layer_id],
                                    strides[conv_layer_id], pads[conv_layer_id],
                                    output_padding=output_pads[conv_layer_id]),
                 nn.PReLU()))
@@ -409,13 +417,13 @@ class CedricDecoder(Decoder):
         self.lfi = nn.Sequential()
         for conv_layer_id in range(self.config.feature_layer + 1 - 1, 0, -1):
             self.lfi.add_module("conv_{}_i".format(conv_layer_id), nn.Sequential(
-                nn.ConvTranspose2d(hidden_channels, hidden_channels // 2, kernels_size[conv_layer_id],
+                self.convtranspose_module(hidden_channels, hidden_channels // 2, kernels_size[conv_layer_id],
                                    strides[conv_layer_id], pads[conv_layer_id],
                                    output_padding=output_pads[conv_layer_id]),
                 nn.PReLU()))
             hidden_channels = hidden_channels // 2
 
         self.lfi.add_module("conv_0_i", nn.Sequential(
-            nn.ConvTranspose2d(hidden_channels, self.config.n_channels, kernels_size[0], strides[0], pads[0],
+            self.convtranspose_module(hidden_channels, self.config.n_channels, kernels_size[0], strides[0], pads[0],
                                output_padding=output_pads[0])))
         self.lfi.out_connection_type = ("conv", self.config.n_channels)
