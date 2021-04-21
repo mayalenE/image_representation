@@ -130,9 +130,9 @@ class MIXEDDataset(Dataset):
 
 
 
-# =================
+# ==================================
 # Torchvision Datasets
-# =================
+# ===============================
 
 class MNISTDataset(torchvision.datasets.MNIST):
 
@@ -583,6 +583,149 @@ class CIFAR100Dataset(torchvision.datasets.CIFAR100):
         return {'obs': img_tensor, 'label': label, 'index': idx}
 
 
+# ==================================
+# 3D Datasets
+# ===============================
+
+class Mnist3dDataset(Dataset):
+    """ Download from: https://www.kaggle.com/daavoo/3d-mnist, see tuto https://www.kaggle.com/shivamb/3d-convolutions-understanding-use-case """
+
+    @staticmethod
+    def default_config():
+        default_config = Dict()
+
+        # load data
+        default_config.data_root = None
+        default_config.split = "train"
+
+        # process data
+        default_config.preprocess = None
+        default_config.img_size = None
+        default_config.data_augmentation = False
+        default_config.transform = None
+        default_config.target_transform = None
+
+        return default_config
+
+    def __init__(self, config=None, **kwargs):
+        self.config = self.__class__.default_config()
+        self.config.update(config)
+        self.config.update(kwargs)
+
+        if self.config.data_root is None:
+            self.n_images = 0
+            if self.config.img_size is not None:
+                self.img_size = self.config.img_size
+                self.images = torch.zeros((0, 1, self.config.img_size[0], self.config.img_size[1], self.config.img_size[2]))
+                self.n_channels = 1
+            else:
+                raise ValueError("If data_root not given, the img_size must be specified in the config")
+            self.labels = torch.zeros((0, 1), dtype=torch.long)
+
+        else:
+            # load HDF5 Mnist3d dataset
+            dataset_filepath = os.path.join(self.config.data_root, '3Dmnist', 'full_dataset_vectors.h5')
+            with h5py.File(dataset_filepath, 'r') as file:
+                if self.config.split == "train":
+                    X = file["X_train"][:]
+                    Y = file["y_train"][:]
+                elif self.config.split in ["valid", "test"]:
+                    X = file["X_test"][:]
+                    Y = file["y_test"][:]
+                self.n_images = int(X.shape[0])
+                self.has_labels = True
+                self.labels = torch.LongTensor(Y)
+                self.images = torch.Tensor(X).float().reshape(-1, 1, 16, 16, 16)
+                if self.config.preprocess is not None:
+                    self.images = self.config.preprocess(self.images)
+
+                self.n_channels = 1
+                if self.images.ndim == 4: # grayscale B*D*H*W
+                    self.images = self.images.unsqueeze(1) # B*C*D*H*W
+                self.img_size = (self.images.shape[2], self.images.shape[3], self.images.shape[4])
+
+        # data augmentation boolean
+        self.data_augmentation = self.config.data_augmentation
+        if self.data_augmentation:
+            # TODO: MNIST 3D AUGMENT
+            ## rotation
+            if self.n_channels == 1:
+                fill = (0,)
+            else:
+                fill = 0
+            self.random_rotation = RandomApply([RandomRotation(30, resample=Image.BILINEAR, fill=fill)], p=0.6)
+            ## resized crop
+            self.random_resized_crop = RandomApply([RandomResizedCrop(self.img_size, scale=(0.9, 1.0), ratio=(0.75, 1.3333333333333333), interpolation=2)], p=0.6)
+            ## composition
+            self.augment = Compose([to_PIL_image, self.random_rotation, self.random_resized_crop, to_tensor])
+
+
+        # the user can additionally specify a transform in the config
+        self.transform = self.config.transform
+        self.target_transform = self.config.target_transform
+
+
+    def update(self, n_images, images, labels=None):
+        """update online the dataset"""
+        if labels is None:
+            labels = torch.Tensor([-1] * n_images)
+        assert n_images == images.shape[0] == labels.shape[0], print(
+            'ERROR: the given dataset size ({0}) mismatch with observations size ({1}) and labels size ({2})'.format(
+                n_images, images.shape[0], labels.shape[0]))
+
+        self.n_images = int(n_images)
+        self.images = images
+        self.labels = labels
+
+    def get_image(self, image_idx, augment=False, transform=True):
+        image = self.images[image_idx]
+        if augment and self.data_augmentation:
+            image = self.augment(image)
+        if transform and self.transform is not None:
+            image = self.transform(image)
+        return image
+
+    def get_augmented_batch(self, image_ids, augment=True, transform=True):
+        images_aug = []
+        for img_idx in image_ids:
+            image_aug = self.get_image(img_idx, augment=augment, transform=transform)
+            images_aug.append(image_aug)
+        images_aug = torch.stack(images_aug, dim=0)
+        return images_aug
+
+    def __len__(self):
+        return self.n_images
+
+    def __getitem__(self, idx):
+        # image
+        img_tensor = self.images[idx]
+
+
+        if self.data_augmentation:
+            img_tensor = self.augment(img_tensor)
+
+        if self.transform is not None:
+            img_tensor = self.transform(img_tensor)
+
+        # label
+        if self.labels[idx] is not None and not np.isnan(self.labels[idx]):
+            label = int(self.labels[idx])
+        else:
+            label = -1
+
+
+        if self.target_transform is not None:
+            label = self.target_transform(label)
+
+        return {'obs': img_tensor, 'label': label, 'index': idx}
+
+    def save(self, output_npz_filepath):
+        np.savez(output_npz_filepath, n_images=self.n_images, images=np.stack(self.images),
+                 labels=np.asarray(self.labels))
+        return
+
+
+
 # ===========================
 # Lenia Dataset
 # ===========================
@@ -614,7 +757,7 @@ class LENIADataset(Dataset):
 
         if self.config.data_root is None:
             self.n_images = 0
-            self.images = torch.zeros((0, 1, self.config.img_size[0], self.config.img_size[0]))
+            self.images = torch.zeros((0, 1, self.config.img_size[0], self.config.img_size[1]))
             if self.config.img_size is not None:
                 self.img_size = self.config.img_size
                 self.n_channels = 1
@@ -643,7 +786,6 @@ class LENIADataset(Dataset):
                 if self.images.ndim == 3:
                     self.images = self.images.unsqueeze(1)
                 self.img_size = (self.images.shape[2], self.images.shape[3])
-
 
         # data augmentation boolean
         self.data_augmentation = self.config.data_augmentation
@@ -841,10 +983,6 @@ class QuadrupletDataset(Dataset):
                 if self.config.n_quadruplets_per_epoch < self.config.n_annotated_quadruplets_per_epoch:
                     self.config.n_quadruplets_per_epoch = self.config.n_annotated_quadruplets_per_epoch
                     warnings.warn("WARNING: n_quadruplets_per_epoch < n_annotated_quadruplets_per_epoch, augmenting it!")
-
-                print('break')
-
-
 
 
     def __len__(self):
