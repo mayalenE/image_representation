@@ -779,9 +779,8 @@ class HOLMES_VAE(TorchNNRepresentation):
 
         # Save the graph in the logger
         if self.logger is not None:
-            root_network_config = self.config.node.network.parameters
-            dummy_input = torch.FloatTensor(4, root_network_config.n_channels, root_network_config.input_size[0],
-                                            root_network_config.input_size[1]).uniform_(0, 1)
+            dummy_size = (1, self.config.node.network.parameters.n_channels,) + self.config.node.network.parameters.input_size
+            dummy_input = torch.FloatTensor(size=dummy_size).uniform_(0, 1)
             dummy_input = dummy_input.to(self.config.device)
             self.eval()
             # with torch.no_grad():
@@ -922,9 +921,8 @@ class HOLMES_VAE(TorchNNRepresentation):
 
         # Save the graph in the logger
         if self.logger is not None:
-            root_network_config = self.config.node.network.parameters
-            dummy_input = torch.FloatTensor(4, root_network_config.n_channels, root_network_config.input_size[0],
-                                            root_network_config.input_size[1]).uniform_(0, 1)
+            dummy_size = (1, self.config.node.network.parameters.n_channels,) + self.config.node.network.parameters.input_size
+            dummy_input = torch.FloatTensor(size=dummy_size).uniform_(0, 1)
             dummy_input = dummy_input.to(self.config.device)
             self.eval()
             # with torch.no_grad():
@@ -1437,6 +1435,8 @@ class HOLMES_VAE(TorchNNRepresentation):
                 leaf_embeddings = torch.cat([embeddings[i] for i in leaf_x_ids])
                 leaf_labels = torch.cat([labels[i] for i in leaf_x_ids])
                 leaf_images = torch.cat([images[i] for i in leaf_x_ids])
+                if len(leaf_images.shape) == 5:
+                    leaf_images = leaf_images[:, :, self.config.node.network.parameters.input_size[0] // 2, :, :]
                 leaf_images = resize_embeddings(leaf_images)
                 try:
                     self.logger.add_embedding(
@@ -1458,11 +1458,14 @@ class HOLMES_VAE(TorchNNRepresentation):
                 vizu_tensor_list = [None] * (2 * n_images)
                 vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]
                 vizu_tensor_list[1::2] = [output_images[n] for n in range(n_images)]
-                img = make_grid(vizu_tensor_list, nrow=2, padding=0)
-                try:
-                    self.logger.add_image("leaf_{}".format(leaf_path), img, self.n_epochs)
-                except:
-                    pass
+                if len(input_images.shape) == 4:
+                    img = make_grid(vizu_tensor_list, nrow=2, padding=0)
+                    self.logger.add_image(f"leaf_{leaf_path}_reconstructions", img, self.n_epochs)
+                elif len(input_images.shape) == 5:
+                    self.logger.add_video(f"leaf_{leaf_path}_original", torch.stack(vizu_tensor_list[0::2]).transpose(1, 2),
+                                          self.n_epochs)
+                    self.logger.add_video(f"leaf_{leaf_path}_reconstructions", torch.stack(vizu_tensor_list[1::2]).transpose(1, 2),
+                                          self.n_epochs)
 
         # 4) AVERAGE LOSS ON WHOLE TREE AND RETURN
         for k, v in losses.items():

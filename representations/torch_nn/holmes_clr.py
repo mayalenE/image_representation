@@ -732,9 +732,8 @@ class HOLMES_CLR(TorchNNRepresentation):
 
         # Save the graph in the logger
         if self.logger is not None:
-            root_network_config = self.config.node.network.parameters
-            dummy_input = torch.FloatTensor(4, root_network_config.n_channels, root_network_config.input_size[0],
-                                            root_network_config.input_size[1]).uniform_(0, 1)
+            dummy_size = (4, self.config.node.network.parameters.n_channels,) + self.config.node.network.parameters.input_size
+            dummy_input = torch.FloatTensor(size=dummy_size).uniform_(0, 1)
             dummy_input = dummy_input.to(self.config.device)
             self.eval()
             # with torch.no_grad():
@@ -875,9 +874,9 @@ class HOLMES_CLR(TorchNNRepresentation):
 
         # Save the graph in the logger
         if self.logger is not None:
-            root_network_config = self.config.node.network.parameters
-            dummy_input = torch.FloatTensor(4, root_network_config.n_channels, root_network_config.input_size[0],
-                                            root_network_config.input_size[1]).uniform_(0, 1)
+            dummy_size = (4,
+                          self.config.node.network.parameters.n_channels,) + self.config.node.network.parameters.input_size
+            dummy_input = torch.FloatTensor(size=dummy_size).uniform_(0, 1)
             dummy_input = dummy_input.to(self.config.device)
             self.eval()
             # with torch.no_grad():
@@ -1462,6 +1461,8 @@ class HOLMES_CLR(TorchNNRepresentation):
                 leaf_embeddings = torch.cat([embeddings[i] for i in leaf_x_ids])
                 leaf_labels = torch.cat([labels[i] for i in leaf_x_ids])
                 leaf_images = torch.cat([images[i] for i in leaf_x_ids])
+                if len(leaf_images.shape) == 5:
+                    leaf_images = leaf_images[:, :, self.config.node.network.parameters.input_size[0] // 2, :, :]
                 leaf_images = resize_embeddings(leaf_images)
                 try:
                     self.logger.add_embedding(

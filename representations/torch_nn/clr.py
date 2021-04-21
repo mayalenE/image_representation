@@ -121,9 +121,8 @@ class SimCLR(TorchNNRepresentation):
 
         # Save the graph in the logger
         if self.logger is not None:
-            dummy_input = torch.FloatTensor(1, self.config.network.parameters.n_channels,
-                                            self.config.network.parameters.input_size[0],
-                                            self.config.network.parameters.input_size[1]).uniform_(0, 1)
+            dummy_size = (4, self.config.network.parameters.n_channels,) + self.config.network.parameters.input_size
+            dummy_input = torch.FloatTensor(size=dummy_size).uniform_(0, 1)
             dummy_input = dummy_input.to(self.config.device)
             self.eval()
             with torch.no_grad():
@@ -238,6 +237,8 @@ class SimCLR(TorchNNRepresentation):
             embedding_samples = torch.cat(embedding_samples)
             embedding_metadata = torch.cat(embedding_metadata)
             embedding_images = torch.cat(embedding_images)
+            if len(embedding_images.shape) == 5:
+                embedding_images = embedding_images[:, :, self.config.network.parameters.input_size[0] // 2, :,:]  # we take slice at middle depth only
             embedding_images = resize_embeddings(embedding_images)
             self.logger.add_embedding(
                 embedding_samples,

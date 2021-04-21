@@ -133,9 +133,8 @@ class BiGAN(TorchNNRepresentation):
 
         # Save the graph in the logger
         if logger is not None:
-            dummy_input = torch.FloatTensor(1, self.config.network.parameters.n_channels,
-                                            self.config.network.parameters.input_size[0],
-                                            self.config.network.parameters.input_size[1]).uniform_(0, 1)
+            dummy_size = (1, self.config.network.parameters.n_channels,) + self.config.network.parameters.input_size
+            dummy_input = torch.FloatTensor(size=dummy_size).uniform_(0, 1)
             dummy_input = dummy_input.to(self.config.device)
             self.eval()
             with torch.no_grad():
@@ -285,10 +284,18 @@ class BiGAN(TorchNNRepresentation):
             vizu_tensor_list = [None] * (2 * n_images)
             vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]
             vizu_tensor_list[1::2] = [output_images[n] for n in range(n_images)]
-            img = make_grid(vizu_tensor_list, nrow=2, padding=0)
-            self.logger.add_image("reconstructions", img, self.n_epochs)
+            if len(input_images.shape) == 4:
+                img = make_grid(vizu_tensor_list, nrow=2, padding=0)
+                self.logger.add_image("reconstructions", img, self.n_epochs)
+            elif len(input_images.shape) == 5:
+                self.logger.add_video("original", torch.stack(vizu_tensor_list[0::2]).transpose(1, 2), self.n_epochs)
+                self.logger.add_video("reconstructions", torch.stack(vizu_tensor_list[1::2]).transpose(1, 2),
+                                      self.n_epochs)
 
         if record_embeddings:
+            if len(images.shape) == 5:
+                images = images[:, :, self.config.network.parameters.input_size[0] // 2, :,
+                         :]  # we take slice at middle depth only
             images = resize_embeddings(images)
             self.logger.add_embedding(
                 embeddings,
