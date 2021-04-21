@@ -5,7 +5,7 @@ import os
 import torch
 from torch.utils.data import Dataset
 import torchvision
-from image_representation.datasets.preprocess import RandomCenterCrop, RandomRoll,  RandomSphericalRotation, RandomGaussianBlur
+from image_representation.datasets.preprocess import TensorRandomResizedCrop, TensorRandomCenterCrop, TensorRandomRoll,  TensorRandomSphericalRotation, TensorRandomGaussianBlur
 from torchvision.transforms import CenterCrop, Compose, ToTensor, ToPILImage, RandomHorizontalFlip, RandomVerticalFlip, RandomRotation, ColorJitter, Pad, RandomApply, RandomResizedCrop
 import warnings
 from PIL import Image
@@ -648,16 +648,11 @@ class Mnist3dDataset(Dataset):
         self.data_augmentation = self.config.data_augmentation
         if self.data_augmentation:
             # TODO: MNIST 3D AUGMENT
-            ## rotation
-            if self.n_channels == 1:
-                fill = (0,)
-            else:
-                fill = 0
-            self.random_rotation = RandomApply([RandomRotation(30, resample=Image.BILINEAR, fill=fill)], p=0.6)
+            ## TODO: TensorRandomRotation
             ## resized crop
-            self.random_resized_crop = RandomApply([RandomResizedCrop(self.img_size, scale=(0.9, 1.0), ratio=(0.75, 1.3333333333333333), interpolation=2)], p=0.6)
+            self.random_resized_crop = TensorRandomResizedCrop(p=0.6, size=self.img_size, scale=(0.9, 1.0), ratio_x=(0.75, 1.3333333333333333), ratio_y=(0.75, 1.3333333333333333), interpolation='trilinear')
             ## composition
-            self.augment = Compose([to_PIL_image, self.random_rotation, self.random_resized_crop, to_tensor])
+            self.augment = Compose([self.random_resized_crop])
 
 
         # the user can additionally specify a transform in the config
@@ -791,9 +786,9 @@ class LENIADataset(Dataset):
         self.data_augmentation = self.config.data_augmentation
         if self.data_augmentation:
             # LENIA Augment
-            self.random_center_crop = RandomCenterCrop(p=0.6, crop_ratio=(1., 2.), keep_img_size=True)
-            self.random_roll = RandomRoll(p_x=0.6, p_y=0.6, max_dx=0.5, max_dy=0.5, img_size=self.img_size)
-            self.random_spherical_rotation = RandomSphericalRotation(p=0.6, max_degrees=20, n_channels=self.n_channels, img_size=self.img_size)
+            self.random_center_crop = TensorRandomCenterCrop(p=0.6, size=self.img_size, scale=(1.0, 2.0), ratio_x=(1., 1.), interpolation='bilinear')
+            self.random_roll = TensorRandomRoll(p=(0.6, 0.6), max_delta=(0.5,0.5))
+            self.random_spherical_rotation = TensorRandomSphericalRotation(p=0.6, max_degrees=20, n_channels=self.n_channels, img_size=self.img_size)
             self.random_horizontal_flip = RandomHorizontalFlip(0.2)
             self.random_vertical_flip = RandomVerticalFlip(0.2)
             self.augment = Compose([self.random_center_crop, self.random_roll, self.random_spherical_rotation, to_PIL_image, self.random_horizontal_flip, self.random_vertical_flip, to_tensor])
