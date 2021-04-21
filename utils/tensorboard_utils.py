@@ -2,7 +2,7 @@ import numpy as np
 import torch.nn.functional as F
 
 def resize_embeddings(embedding_images, sprite_size=8192):
-    image_size = max(embedding_images.shape[2], embedding_images.shape[3])
+    image_size = max(embedding_images.shape[-2], embedding_images.shape[-1]) #show on last 2 dims (HW)
     n_images = np.ceil(np.sqrt(len(embedding_images)))
     if n_images * image_size <= sprite_size:
         return embedding_images

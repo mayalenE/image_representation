@@ -98,7 +98,6 @@ class TorchNNRepresentation(Representation, nn.Module):
         self.set_checkpoint(self.config.checkpoint)
 
         self.n_epochs = 0
-        self.n_latents = self.network.encoder.config.n_latents
 
     def set_network(self, network_name, network_parameters):
         """
@@ -108,6 +107,7 @@ class TorchNNRepresentation(Representation, nn.Module):
         self.network = nn.Module()
         encoder_class = encoders.get_encoder(network_name)
         self.network.encoder = encoder_class(config=network_parameters)
+        self.n_latents = self.network.encoder.config.n_latents
 
         # update config
         self.config.network.name = network_name

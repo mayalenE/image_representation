@@ -435,6 +435,8 @@ class HOLMES_CLR(TorchNNRepresentation):
     def set_network(self, network_name, network_parameters):
         depth = 0
         self.network = self.NodeClass(depth, config=self.config.node)  # root node that links to child nodes
+        self.n_latents = self.network.network.encoder.config.n_latents
+
         self.network.optimizer_group_id = 0
         self.output_keys_list = self.network.output_keys_list + ["path_taken"]  # node.left is a leaf node
 
@@ -860,7 +862,7 @@ class HOLMES_CLR(TorchNNRepresentation):
                         self.save(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
 
                 # 4) Perform evaluation/test epoch
-                if self.n_epochs % self.config.evaluation.save_results_every == 0:
+                if (self.config.evaluation.folder is not None) and (self.n_epochs % self.config.evaluation.save_results_every == 0):
                     save_results_per_node = (self.n_epochs == training_config.n_epochs)
                     self.evaluation_epoch(valid_loader, save_results_per_node=save_results_per_node)
 
@@ -1174,7 +1176,7 @@ class HOLMES_CLR(TorchNNRepresentation):
                             self.save(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
 
                     # 5) Perform evaluation/test epoch
-                    if self.n_epochs % self.config.evaluation.save_results_every == 0:
+                    if (self.config.evaluation.folder is not None) and (self.n_epochs % self.config.evaluation.save_results_every == 0):
                         save_results_per_node = (self.n_epochs == n_epochs_total)
                         self.evaluation_epoch(valid_loader, save_results_per_node=save_results_per_node)
 

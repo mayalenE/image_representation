@@ -58,7 +58,7 @@ class QuadrupletNet(nn.Module):
 
         for epoch in range(training_config.n_epochs):
             # start with evaluation/test epoch
-            if self.n_epochs % self.config.evaluation.save_results_every == 0:
+            if (self.config.evaluation.folder is not None) and (self.n_epochs % self.config.evaluation.save_results_every == 0):
                 train_acc, test_acc = self.evaluation_epoch(train_loader, valid_loader)
                 if self.logger is not None:
                     self.logger.add_scalars('pred_acc', {'train': train_acc}, self.n_epochs)
