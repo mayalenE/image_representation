@@ -80,8 +80,8 @@ class SphericPad(nn.Module):
             output = torch.cat([output[:, :, -(self.pad_bottom + self.pad_top):-self.pad_bottom, :], output], dim=2)
             output = torch.cat([output[:, :, :, -(self.pad_right + self.pad_left):-self.pad_right], output], dim=3)
 
-        elif input.ndim == 4:
-            output = torch.cat([input, input[:, :, self.pad_bottom, :, :]], dim=2)
+        elif input.ndim == 5:
+            output = torch.cat([input, input[:, :, :self.pad_bottom, :, :]], dim=2)
             output = torch.cat([output, output[:, :, :, :self.pad_right, :]], dim=3)
             output = torch.cat([output, output[:, :, :, :, :self.pad_back]], dim=4)
             output = torch.cat([output[:, :, -(self.pad_bottom + self.pad_top):-self.pad_bottom, :, :], output], dim=2)

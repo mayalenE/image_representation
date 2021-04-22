@@ -6,7 +6,6 @@ matplotlib
 numpy
 os
 pillow
-plotly
 scikit-learn
 six
 torch

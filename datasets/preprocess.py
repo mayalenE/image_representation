@@ -23,7 +23,8 @@ class TensorRandomFlip(object):
 
     def __call__(self, x):
         if torch.rand(()) < self.p:
-            return x.flip(self.dim_flip)
+            x = x.flip(self.dim_flip)
+        return x
 
 
 class TensorRandomGaussianBlur(object):
@@ -71,8 +72,7 @@ class TensorRandomGaussianBlur(object):
     def __call__(self, x):
         if torch.rand(()) < self.p:
             sigma = int((torch.rand(()) * (1.0 - self.max_sigma) + self.max_sigma).round())
-            x = x.view((1, ) + tuple(x.size()))
-            x = F.pad(x, pad=self.padding_size, mode='reflect')
+            x = F.pad(x.unsqueeze(0), pad=self.padding_size, mode='reflect')
             kernel = self.gaussian_kernel(self.kernel_size, sigma)
             if self.spatial_dims == 2:
                 x = F.conv2d(x, kernel, groups=self.n_channels).squeeze(0)
@@ -86,9 +86,9 @@ class TensorRandomSphericalRotation(object):
         self.p = p
         self.spatial_dims = len(img_size)
         radius = max(img_size) / 2
-        padding_size = int(np.sqrt(2 * np.power(radius, 2)) - radius)
+        self.padding_size = int(np.sqrt(2 * np.power(radius, 2)) - radius)
         # max rotation needs padding of [sqrt(2*128^2)-128 = 53.01]
-        self.spheric_pad = SphericPad(padding_size=padding_size)
+        self.spheric_pad = SphericPad(padding_size=self.padding_size)
         if n_channels == 1:
             fill = (0,)
         else:
@@ -98,14 +98,14 @@ class TensorRandomSphericalRotation(object):
             self.center_crop = transforms.CenterCrop(img_size)
         if self.spatial_dims == 3:
             if isinstance(max_degrees, numbers.Number):
-                self.max_degress = (max_degrees, max_degrees, max_degrees)
+                self.max_degrees = (max_degrees, max_degrees, max_degrees)
             elif isinstance(max_degrees, tuple) or isinstance(max_degrees, list):
                 assert len(max_degrees) == 3, "the number of rotation is 3, must provide tuple of length 3"
-                self.max_degress = tuple(max_degrees)
+                self.max_degrees = tuple(max_degrees)
 
     def __call__(self, x):
         if np.random.random() < self.p:
-            x = x.view((1,) + tuple(x.size()))
+            x = x.unsqueeze(0)
             if self.spatial_dims == 2:
                 x = self.spheric_pad(x).squeeze(0)
                 img_PIL = to_PIL(x)
@@ -113,7 +113,7 @@ class TensorRandomSphericalRotation(object):
                 img_PIL = self.center_crop(img_PIL)
                 x = to_Tensor(img_PIL)
             elif self.spatial_dims == 3:
-                x = self.spheric_pad(x).squeeze(0)
+                x = self.spheric_pad(x)
                 theta_x = float(torch.empty(1).uniform_(-float(self.max_degrees[0]), float(self.max_degrees[0])).item()) * math.pi / 180.0
                 theta_y = float(torch.empty(1).uniform_(-float(self.max_degrees[1]), float(self.max_degrees[1])).item()) * math.pi / 180.0
                 theta_z = float(torch.empty(1).uniform_(-float(self.max_degrees[2]), float(self.max_degrees[2])).item()) * math.pi / 180.0
@@ -126,9 +126,10 @@ class TensorRandomSphericalRotation(object):
                 R_z = torch.tensor([[math.cos(theta_z), -math.sin(theta_z), 0.0],
                                     [math.sin(theta_z), math.cos(theta_z), 0.0],
                                     [0., 0., 1.]])
-                R = R_z.matmul(R_y.matmul(R_x)).unsqueeze(0) # batch_size = 1
-                grid = F.affine_grid(torch.cat([R, torch.zeros(3,1)], dim=-1), size=x.size())
-                x = F.functional.grid_sample(x, grid)
+                R = R_z.matmul(R_y.matmul(R_x)) # batch_size = 1
+                grid = F.affine_grid(torch.cat([R, torch.zeros(3,1)], dim=-1).unsqueeze(0), size=x.size())
+                x = F.grid_sample(x, grid)
+                x = x[:, :, self.padding_size:-self.padding_size, self.padding_size:-self.padding_size , self.padding_size:-self.padding_size].squeeze(0)
         return x
 
 
@@ -144,23 +145,23 @@ class TensorRandomRoll(object):
         if isinstance(max_delta, numbers.Number):
             self.max_delta = tuple([max_delta] * self.spatial_dims)
         else:
-            self.max_delta = max()
+            self.max_delta = max_delta
 
         assert len(self.p) == len(self.max_delta) == self.spatial_dims
 
         self.roll = [None] * self.spatial_dims
-        for dim in range(self.spatial_dims):
+        for dim in range(-self.spatial_dims, 0):
             self.roll[dim] = Roll(shift=0, dim=dim)
 
     def __call__(self, x):
 
-        for dim in range(self.spatial_dims):
+        for dim in range(-self.spatial_dims, 0):
 
             if np.random.random() < self.p[dim]:
 
-                shift_dim = int(np.round(np.random.uniform(-self.max_delta[dim] * x.shape[1+dim], self.max_delta[dim] * x.shape[1+dim]))) #x: C*D*H*W
+                shift_dim = int(np.round(np.random.uniform(-self.max_delta[dim] * x.shape[dim], self.max_delta[dim] * x.shape[dim]))) #x: C*D*H*W
                 self.roll[dim].shift = shift_dim
-                x = self.roll[dim](x)
+                x = self.roll[dim](x.unsqueeze(0)).squeeze(0)
 
         return x
 
@@ -216,7 +217,7 @@ class TensorRandomResizedCrop(object):
         else:
             return x
 
-class TensorRandomCenterCrop(object):
+class TensorRandomCentroidCrop(object):
     def __init__(self, p, size, scale=(1., 1.), ratio_x=(1., 1.), ratio_y=(1.,1.), interpolation='bilinear'):
         self.p = p
         if (scale[0] > scale[1]) or (ratio_x[0] > ratio_x[1]) or (ratio_y[0] > ratio_y[1]):
@@ -295,8 +296,6 @@ def centroid_crop_preprocess(x, patch_size, out_size=None, interpolation='biline
     spatial_dims = len(img_size)
 
     padding_size = round(max(*[patch_size[dim] / 2 for dim in range(spatial_dims)]))
-    spheric_pad = SphericPad(padding_size=padding_size)
-    x = spheric_pad(x.view((1, ) + tuple(x.size()))).squeeze(0)
 
     # crop around center of mass (mY and mX describe the position of the centroid of the image)
     image = x.numpy()
@@ -311,8 +310,11 @@ def centroid_crop_preprocess(x, patch_size, out_size=None, interpolation='biline
         else:
             m_dim = np.sum(dim_power1_image) / m00
         m_dim += padding_size
-        bbox[dim] = (m_dim - patch_size[dim]) / 2
-        bbox[spatial_dims+dim] = patch_size[dim]
+        bbox[dim] = int(m_dim - patch_size[dim] / 2)
+        bbox[spatial_dims+dim] = int(patch_size[dim])
+
+    spheric_pad = SphericPad(padding_size=padding_size)
+    x = spheric_pad(x.unsqueeze(0)).squeeze(0)
 
     if out_size is not None:
         patch = resized_crop(x, tuple(bbox), out_size, mode=interpolation)

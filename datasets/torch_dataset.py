@@ -1,11 +1,12 @@
 import h5py
 from addict import Dict
+import image_representation
 import numpy as np
 import os
 import torch
 from torch.utils.data import Dataset
 import torchvision
-from image_representation.datasets.preprocess import TensorRandomResizedCrop, TensorRandomCenterCrop, TensorRandomRoll,  TensorRandomSphericalRotation, TensorRandomGaussianBlur, TensorRandomFlip
+from image_representation.datasets.preprocess import TensorRandomResizedCrop, TensorRandomCentroidCrop, TensorRandomRoll,  TensorRandomSphericalRotation, TensorRandomGaussianBlur, TensorRandomFlip
 from torchvision.transforms import CenterCrop, Compose, ToTensor, ToPILImage, RandomHorizontalFlip, RandomVerticalFlip, RandomRotation, ColorJitter, Pad, RandomApply, RandomResizedCrop
 import warnings
 from PIL import Image
@@ -650,7 +651,7 @@ class Mnist3dDataset(Dataset):
             # TODO: MNIST 3D AUGMENT
             ## TODO: TensorRandomRotation
             ## resized crop
-            self.random_resized_crop = TensorRandomResizedCrop(p=0.6, size=self.img_size, scale=(0.9, 1.0), ratio_x=(0.75, 1.3333333333333333), ratio_y=(0.75, 1.3333333333333333), interpolation='trilinear')
+            self.random_resized_crop = TensorRandomResizedCrop(p=0.6, size=self.img_size, scale=(0.6, 1.0), ratio_x=(0.75, 1.3333333333333333), ratio_y=(0.75, 1.3333333333333333), interpolation='trilinear')
             ## composition
             self.augment = Compose([self.random_resized_crop])
 
@@ -786,7 +787,7 @@ class LENIADataset(Dataset):
         self.data_augmentation = self.config.data_augmentation
         if self.data_augmentation:
             # LENIA Augment
-            self.random_center_crop = TensorRandomCenterCrop(p=0.6, size=self.img_size, scale=(0.5, 1.0), ratio_x=(1., 1.), interpolation='bilinear')
+            self.random_center_crop = TensorRandomCentroidCrop(p=0.6, size=self.img_size, scale=(0.5, 1.0), ratio_x=(1., 1.), interpolation='bilinear')
             self.random_roll = TensorRandomRoll(p=(0.6, 0.6), max_delta=(0.5,0.5))
             self.random_spherical_rotation = TensorRandomSphericalRotation(p=0.6, max_degrees=20, n_channels=self.n_channels, img_size=self.img_size)
             self.random_horizontal_flip = RandomHorizontalFlip(0.2)
@@ -859,11 +860,11 @@ class LENIADataset(Dataset):
 
 
 # ===========================
-# EvoCraft Dataset
+# Evocraft Dataset
 # ===========================
 
-class EvoCraftDataset(Dataset):
-    """ EvoCraft dataset"""
+class EvocraftDataset(Dataset):
+    """ Evocraft dataset"""
 
     @staticmethod
     def default_config():
@@ -919,14 +920,14 @@ class EvoCraftDataset(Dataset):
                 self.n_channels = 1
                 if self.images.ndim == 3:
                     self.images = self.images.unsqueeze(1)
-                self.img_size = (self.images.shape[2], self.images.shape[3])
+                self.img_size = (self.images.shape[2], self.images.shape[3], self.images.shape[4])
 
         # data augmentation boolean
         self.data_augmentation = self.config.data_augmentation
         if self.data_augmentation:
             # EvoCraft Augment
-            self.random_center_crop = TensorRandomCenterCrop(p=0.6, size=self.img_size, scale=(0.5, 1.0), ratio_x=(1., 1.), ratio_y=(1., 1.), interpolation='trilinear')
-            self.random_roll = TensorRandomRoll(p=(0.6, 0.6, 0.6), max_delta=(0.5, 0.5, 0.5))
+            self.random_center_crop = TensorRandomCentroidCrop(p=0.6, size=self.img_size, scale=(0.5, 1.0), ratio_x=(1., 1.), ratio_y=(1., 1.), interpolation='trilinear')
+            self.random_roll = TensorRandomRoll(p=(0.6, 0.6, 0.6), max_delta=(0.5, 0.5, 0.5), spatial_dims=3)
             self.random_spherical_rotation = TensorRandomSphericalRotation(p=0.6, max_degrees=(20,20,20), n_channels=self.n_channels, img_size=self.img_size)
             self.random_z_flip = TensorRandomFlip(p=0.2, dim_flip=-3)
             self.random_y_flip = TensorRandomFlip(p=0.2, dim_flip=-2)
