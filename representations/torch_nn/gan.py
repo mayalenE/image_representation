@@ -281,17 +281,27 @@ class BiGAN(TorchNNRepresentation):
             vizu_tensor_list = [None] * (2 * n_images)
             vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]
             vizu_tensor_list[1::2] = [output_images[n] for n in range(n_images)]
-            if len(input_images.shape) == 4:
-                img = make_grid(vizu_tensor_list, nrow=2, padding=0)
-                self.logger.add_image("reconstructions", img, self.n_epochs)
-            elif len(input_images.shape) == 5:
-                self.logger.add_video("original", torch.stack(vizu_tensor_list[0::2]).transpose(1, 2), self.n_epochs)
-                self.logger.add_video("reconstructions", torch.stack(vizu_tensor_list[1::2]).transpose(1, 2),
-                                      self.n_epochs)
+            if self.config.network.parameters.n_channels == 1 or self.config.network.parameters.n_channels == 3: # grey scale or RGB
+                if len(input_images.shape)==4:
+                    img = make_grid(vizu_tensor_list, nrow=2, padding=0)
+                    self.logger.add_image("reconstructions", img, self.n_epochs)
+                elif len(input_images.shape) == 5:
+                    self.logger.add_video("original", torch.stack(vizu_tensor_list[0::2]).transpose(1,2), self.n_epochs)
+                    self.logger.add_video("reconstructions", torch.stack(vizu_tensor_list[1::2]).transpose(1,2), self.n_epochs)
+            else:
+                for channel in range(self.config.network.parameters.n_channels):
+                    if len(input_images.shape) == 4:
+                        img = make_grid(torch.stack(vizu_tensor_list)[:, channel, :, :].unsqueeze(1), nrow=2, padding=0)
+                        self.logger.add_image(f"reconstructions_channel_{channel}", img, self.n_epochs)
+                    elif len(input_images.shape) == 5:
+                        self.logger.add_video(f"original_channel_{channel}", torch.stack(vizu_tensor_list[0::2])[:, channel, :, :].unsqueeze(1).transpose(1, 2),
+                                              self.n_epochs)
+                        self.logger.add_video(f"reconstructions_channel_{channel}", torch.stack(vizu_tensor_list[1::2])[:, channel, :, :].unsqueeze(1).transpose(1, 2),
+                                              self.n_epochs)
 
         if record_embeddings:
             if len(images.shape) == 5:
-                images = images[:, :, self.config.network.parameters.input_size[0] // 2, :,
+                images = images[:, :3, self.config.network.parameters.input_size[0] // 2, :,
                          :]  # we take slice at middle depth only
             images = resize_embeddings(images)
             self.logger.add_embedding(

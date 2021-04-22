@@ -389,7 +389,7 @@ class DIM(TorchNNRepresentation):
             embedding_metadata = torch.cat(embedding_metadata)
             embedding_images = torch.cat(embedding_images)
             if len(embedding_images.shape) == 5:
-                embedding_images = embedding_images[:, :, self.config.network.parameters.input_size[0] // 2, :, :] #we take slice at middle depth only
+                embedding_images = embedding_images[:, :3, self.config.network.parameters.input_size[0] // 2, :, :] #we take slice at middle depth only
             embedding_images = resize_embeddings(embedding_images)
             self.logger.add_embedding(
                 embedding_samples,

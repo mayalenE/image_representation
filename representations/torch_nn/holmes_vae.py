@@ -1437,7 +1437,7 @@ class HOLMES_VAE(TorchNNRepresentation):
                 leaf_labels = torch.cat([labels[i] for i in leaf_x_ids])
                 leaf_images = torch.cat([images[i] for i in leaf_x_ids])
                 if len(leaf_images.shape) == 5:
-                    leaf_images = leaf_images[:, :, self.config.node.network.parameters.input_size[0] // 2, :, :]
+                    leaf_images = leaf_images[:, :3, self.config.node.network.parameters.input_size[0] // 2, :, :]
                 leaf_images = resize_embeddings(leaf_images)
                 try:
                     self.logger.add_embedding(
@@ -1459,14 +1459,31 @@ class HOLMES_VAE(TorchNNRepresentation):
                 vizu_tensor_list = [None] * (2 * n_images)
                 vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]
                 vizu_tensor_list[1::2] = [output_images[n] for n in range(n_images)]
-                if len(input_images.shape) == 4:
-                    img = make_grid(vizu_tensor_list, nrow=2, padding=0)
-                    self.logger.add_image(f"leaf_{leaf_path}_reconstructions", img, self.n_epochs)
-                elif len(input_images.shape) == 5:
-                    self.logger.add_video(f"leaf_{leaf_path}_original", torch.stack(vizu_tensor_list[0::2]).transpose(1, 2),
-                                          self.n_epochs)
-                    self.logger.add_video(f"leaf_{leaf_path}_reconstructions", torch.stack(vizu_tensor_list[1::2]).transpose(1, 2),
-                                          self.n_epochs)
+                if self.config.network.parameters.n_channels == 1 or self.config.network.parameters.n_channels == 3:  # grey scale or RGB
+                    if len(input_images.shape) == 4:
+                        img = make_grid(vizu_tensor_list, nrow=2, padding=0)
+                        self.logger.add_image("leaf_{leaf_path}_reconstructions", img, self.n_epochs)
+                    elif len(input_images.shape) == 5:
+                        self.logger.add_video("leaf_{leaf_path}_original", torch.stack(vizu_tensor_list[0::2]).transpose(1, 2),
+                                              self.n_epochs)
+                        self.logger.add_video("leaf_{leaf_path}_reconstructions", torch.stack(vizu_tensor_list[1::2]).transpose(1, 2),
+                                              self.n_epochs)
+                else:
+                    for channel in range(self.config.network.parameters.n_channels):
+                        if len(input_images.shape) == 4:
+                            img = make_grid(torch.stack(vizu_tensor_list)[:, channel, :, :].unsqueeze(1), nrow=2,
+                                            padding=0)
+                            self.logger.add_image(f"leaf_{leaf_path}_reconstructions_channel_{channel}", img, self.n_epochs)
+                        elif len(input_images.shape) == 5:
+                            self.logger.add_video(f"leaf_{leaf_path}_original_channel_{channel}",
+                                                  torch.stack(vizu_tensor_list[0::2])[:, channel, :, :].unsqueeze(
+                                                      1).transpose(1, 2),
+                                                  self.n_epochs)
+                            self.logger.add_video(f"leaf_{leaf_path}_reconstructions_channel_{channel}",
+                                                  torch.stack(vizu_tensor_list[1::2])[:, channel, :, :].unsqueeze(
+                                                      1).transpose(1, 2),
+                                                  self.n_epochs)
+
 
         # 4) AVERAGE LOSS ON WHOLE TREE AND RETURN
         for k, v in losses.items():
