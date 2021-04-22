@@ -16,6 +16,16 @@ to_Tensor = transforms.ToTensor()
                PREPROCESS DATA HELPER
 -------------------------------------------------'''
 
+class TensorRandomFlip(object):
+    def __init__(self, p=0.5, dim_flip=-1):
+        self.p = p
+        self.dim_flip = dim_flip
+
+    def __call__(self, x):
+        if torch.rand(()) < self.p:
+            return x.flip(self.dim_flip)
+
+
 class TensorRandomGaussianBlur(object):
     def __init__(self, p=0.5, kernel_radius=5, max_sigma=5, n_channels=1, spatial_dims=2):
         self.p = p
@@ -71,11 +81,9 @@ class TensorRandomGaussianBlur(object):
         return x
 
 
-
 class TensorRandomSphericalRotation(object):
     def __init__(self, p=0.5, max_degrees=20, n_channels=1, img_size=(64, 64)):
         self.p = p
-        self.max_degrees = max_degrees
         self.spatial_dims = len(img_size)
         radius = max(img_size) / 2
         padding_size = int(np.sqrt(2 * np.power(radius, 2)) - radius)
@@ -88,9 +96,12 @@ class TensorRandomSphericalRotation(object):
         if self.spatial_dims == 2:
             self.random_rotation = transforms.RandomRotation(max_degrees, resample=Image.BILINEAR, fill=fill)
             self.center_crop = transforms.CenterCrop(img_size)
-        elif self.spatial_dims == 3:
-            raise NotImplementedError
-
+        if self.spatial_dims == 3:
+            if isinstance(max_degrees, numbers.Number):
+                self.max_degress = (max_degrees, max_degrees, max_degrees)
+            elif isinstance(max_degrees, tuple) or isinstance(max_degrees, list):
+                assert len(max_degrees) == 3, "the number of rotation is 3, must provide tuple of length 3"
+                self.max_degress = tuple(max_degrees)
 
     def __call__(self, x):
         if np.random.random() < self.p:
@@ -102,7 +113,22 @@ class TensorRandomSphericalRotation(object):
                 img_PIL = self.center_crop(img_PIL)
                 x = to_Tensor(img_PIL)
             elif self.spatial_dims == 3:
-                raise NotImplementedError
+                x = self.spheric_pad(x).squeeze(0)
+                theta_x = float(torch.empty(1).uniform_(-float(self.max_degrees[0]), float(self.max_degrees[0])).item()) * math.pi / 180.0
+                theta_y = float(torch.empty(1).uniform_(-float(self.max_degrees[1]), float(self.max_degrees[1])).item()) * math.pi / 180.0
+                theta_z = float(torch.empty(1).uniform_(-float(self.max_degrees[2]), float(self.max_degrees[2])).item()) * math.pi / 180.0
+                R_x = torch.tensor([[1., 0., 0.],
+                                    [0., math.cos(theta_x), -math.sin(theta_x)],
+                                    [0., math.sin(theta_x), math.cos(theta_x)]])
+                R_y = torch.tensor([[math.cos(theta_y), 0., math.sin(theta_y)],
+                                    [0., 1.0, 0.0],
+                                    [-math.sin(theta_y), 0.0, math.cos(theta_y)]])
+                R_z = torch.tensor([[math.cos(theta_z), -math.sin(theta_z), 0.0],
+                                    [math.sin(theta_z), math.cos(theta_z), 0.0],
+                                    [0., 0., 1.]])
+                R = R_z.matmul(R_y.matmul(R_x)).unsqueeze(0) # batch_size = 1
+                grid = F.affine_grid(torch.cat([R, torch.zeros(3,1)], dim=-1), size=x.size())
+                x = F.functional.grid_sample(x, grid)
         return x
 
 

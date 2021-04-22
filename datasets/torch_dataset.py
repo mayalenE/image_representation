@@ -5,7 +5,7 @@ import os
 import torch
 from torch.utils.data import Dataset
 import torchvision
-from image_representation.datasets.preprocess import TensorRandomResizedCrop, TensorRandomCenterCrop, TensorRandomRoll,  TensorRandomSphericalRotation, TensorRandomGaussianBlur
+from image_representation.datasets.preprocess import TensorRandomResizedCrop, TensorRandomCenterCrop, TensorRandomRoll,  TensorRandomSphericalRotation, TensorRandomGaussianBlur, TensorRandomFlip
 from torchvision.transforms import CenterCrop, Compose, ToTensor, ToPILImage, RandomHorizontalFlip, RandomVerticalFlip, RandomRotation, ColorJitter, Pad, RandomApply, RandomResizedCrop
 import warnings
 from PIL import Image
@@ -786,7 +786,7 @@ class LENIADataset(Dataset):
         self.data_augmentation = self.config.data_augmentation
         if self.data_augmentation:
             # LENIA Augment
-            self.random_center_crop = TensorRandomCenterCrop(p=0.6, size=self.img_size, scale=(1.0, 2.0), ratio_x=(1., 1.), interpolation='bilinear')
+            self.random_center_crop = TensorRandomCenterCrop(p=0.6, size=self.img_size, scale=(0.5, 1.0), ratio_x=(1., 1.), interpolation='bilinear')
             self.random_roll = TensorRandomRoll(p=(0.6, 0.6), max_delta=(0.5,0.5))
             self.random_spherical_rotation = TensorRandomSphericalRotation(p=0.6, max_degrees=20, n_channels=self.n_channels, img_size=self.img_size)
             self.random_horizontal_flip = RandomHorizontalFlip(0.2)
@@ -858,6 +858,144 @@ class LENIADataset(Dataset):
         return
 
 
+# ===========================
+# EvoCraft Dataset
+# ===========================
+
+class EvoCraftDataset(Dataset):
+    """ EvoCraft dataset"""
+
+    @staticmethod
+    def default_config():
+        default_config = Dict()
+
+        # load data
+        default_config.data_root = None
+        default_config.split = "train"
+
+        # process data
+        default_config.preprocess = None
+        default_config.n_channels = None
+        default_config.img_size = None
+        default_config.data_augmentation = False
+        default_config.transform = None
+        default_config.target_transform = None
+
+        return default_config
+
+    def __init__(self, config=None, **kwargs):
+        self.config = self.__class__.default_config()
+        self.config.update(config)
+        self.config.update(kwargs)
+
+        if self.config.data_root is None:
+            self.n_images = 0
+            if self.config.img_size is not None:
+                self.img_size = self.config.img_size
+            if self.config.n_channels is not None:
+                self.n_channels = self.config.n_channels
+            self.images = torch.empty((0, self.n_channels,) + self.img_size)
+            self.labels = torch.zeros((0, 1), dtype=torch.long)
+
+        else:
+            # load HDF5 evoCraft dataset
+            dataset_filepath = os.path.join(self.config.data_root, 'dataset', 'dataset.h5')
+            with h5py.File(dataset_filepath, 'r') as file:
+                if 'n_data' in file[self.config.split]:
+                    self.n_images = int(file[self.config.split]['n_data'])
+                else:
+                    self.n_images = int(file[self.config.split]['observations'].shape[0])
+
+                self.has_labels = bool('labels' in file[self.config.split])
+                if self.has_labels:
+                    self.labels = torch.LongTensor(file[self.config.split]['labels'])
+                else:
+                    self.labels = torch.LongTensor([-1] * self.n_images)
+
+                self.images = torch.Tensor(file[self.config.split]['observations']).float()
+                if self.config.preprocess is not None:
+                    self.images = self.config.preprocess(self.images)
+
+                self.n_channels = 1
+                if self.images.ndim == 3:
+                    self.images = self.images.unsqueeze(1)
+                self.img_size = (self.images.shape[2], self.images.shape[3])
+
+        # data augmentation boolean
+        self.data_augmentation = self.config.data_augmentation
+        if self.data_augmentation:
+            # EvoCraft Augment
+            self.random_center_crop = TensorRandomCenterCrop(p=0.6, size=self.img_size, scale=(0.5, 1.0), ratio_x=(1., 1.), ratio_y=(1., 1.), interpolation='trilinear')
+            self.random_roll = TensorRandomRoll(p=(0.6, 0.6, 0.6), max_delta=(0.5, 0.5, 0.5))
+            self.random_spherical_rotation = TensorRandomSphericalRotation(p=0.6, max_degrees=(20,20,20), n_channels=self.n_channels, img_size=self.img_size)
+            self.random_z_flip = TensorRandomFlip(p=0.2, dim_flip=-3)
+            self.random_y_flip = TensorRandomFlip(p=0.2, dim_flip=-2)
+            self.random_x_flip = TensorRandomFlip(p=0.2, dim_flip=-1)
+            self.augment = Compose([self.random_center_crop, self.random_roll, self.random_spherical_rotation, self.random_z_flip, self.random_y_flip, self.random_x_flip])
+
+
+        # the user can additionally specify a transform in the config
+        self.transform = self.config.transform
+        self.target_transform = self.config.target_transform
+
+    def update(self, n_images, images, labels=None):
+        """update online the dataset"""
+        if labels is None:
+            labels = torch.Tensor([-1] * n_images)
+        assert n_images == images.shape[0] == labels.shape[0], print(
+            'ERROR: the given dataset size ({0}) mismatch with observations size ({1}) and labels size ({2})'.format(
+                n_images, images.shape[0], labels.shape[0]))
+
+        self.n_images = int(n_images)
+        self.images = images
+        self.labels = labels
+
+    def get_image(self, image_idx, augment=False, transform=True):
+        image = self.images[image_idx]
+        if augment and self.data_augmentation:
+            image = self.augment(image)
+        if transform and self.transform is not None:
+            image = self.transform(image)
+        return image
+
+    def get_augmented_batch(self, image_ids, augment=True, transform=True):
+        images_aug = []
+        for img_idx in image_ids:
+            image_aug = self.get_image(img_idx, augment=augment, transform=transform)
+            images_aug.append(image_aug)
+        images_aug = torch.stack(images_aug, dim=0)
+        return images_aug
+
+    def __len__(self):
+        return self.n_images
+
+    def __getitem__(self, idx):
+        # image
+        img_tensor = self.images[idx]
+
+
+        if self.data_augmentation:
+            img_tensor = self.augment(img_tensor)
+
+        if self.transform is not None:
+            img_tensor = self.transform(img_tensor)
+
+        # label
+        if self.labels[idx] is not None and not np.isnan(self.labels[idx]):
+            label = int(self.labels[idx])
+        else:
+            label = -1
+
+
+        if self.target_transform is not None:
+            label = self.target_transform(label)
+
+        return {'obs': img_tensor, 'label': label, 'index': idx}
+
+    def save(self, output_npz_filepath):
+        np.savez(output_npz_filepath, n_images=self.n_images, images=np.stack(self.images),
+                 labels=np.asarray(self.labels))
+        return
 
 
 
