@@ -1,7 +1,6 @@
 import os
-
+import shutil
 import torch
-torch.autograd.set_detect_anomaly(True)
 from addict import Dict
 from image_representation import BiGAN
 from image_representation.datasets.torch_dataset import Mnist3dDataset
@@ -57,6 +56,8 @@ def run_training():
 
     bigan_config.checkpoint.folder = "./checkpoints/bigan3d"
     bigan_config.logging.folder = "./logs/bigan3d"
+    if os.path.exists(bigan_config.logging.folder):
+        shutil.rmtree(bigan_config.logging.folder)
     bigan_config.logging.record_loss_every = 1
     bigan_config.logging.record_valid_images_every = 1
     bigan_config.logging.record_embeddings_every = 1

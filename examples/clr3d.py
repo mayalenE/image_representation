@@ -3,6 +3,8 @@ from image_representation import SimCLR
 from addict import Dict
 import torch
 from torch.utils.data import DataLoader
+import os
+import shutil
 
 def run_training():
 
@@ -49,6 +51,8 @@ def run_training():
     simclr_config.optimizer.parameters.weight_decay = 1e-5
     simclr_config.checkpoint.folder = "./checkpoints/simclr3d"
     simclr_config.logging.folder = "./logs/simclr3d"
+    if os.path.exists(simclr_config.logging.folder):
+        shutil.rmtree(simclr_config.logging.folder)
     simclr_config.logging.record_loss_every = 1
     simclr_config.logging.record_valid_images_every = 0
     simclr_config.logging.record_embeddings_every = 1

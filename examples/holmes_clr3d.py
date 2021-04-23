@@ -3,6 +3,8 @@ from image_representation import HOLMES_CLR
 from addict import Dict
 import torch
 from torch.utils.data import DataLoader
+import os
+import shutil
 
 def run_training():
 
@@ -57,6 +59,8 @@ def run_training():
 
     holmes_clr_config.checkpoint.folder = "./checkpoints/holmes_clr3d"
     holmes_clr_config.logging.folder = "./logs/holmes_clr3d"
+    if os.path.exists(holmes_clr_config.logging.folder):
+        shutil.rmtree(holmes_clr_config.logging.folder)
     holmes_clr_config.logging.record_loss_every = 1
     holmes_clr_config.logging.record_valid_images_every = 1
     holmes_clr_config.logging.record_embeddings_every = 1

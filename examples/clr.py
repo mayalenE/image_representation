@@ -2,9 +2,9 @@ from image_representation.datasets.torch_dataset import MNISTDataset
 from image_representation import SimCLR
 from addict import Dict
 import torch
-from tensorboardX import SummaryWriter
 from torch.utils.data import DataLoader
 import os
+import shutil
 
 def run_training():
 
@@ -29,7 +29,7 @@ def run_training():
     train_loader = DataLoader(train_dataset, batch_size=64,
                                   shuffle=True,
                                   num_workers=0)
-    valid_loader = DataLoader(train_dataset, batch_size=10,
+    valid_loader = DataLoader(valid_dataset, batch_size=10,
                              shuffle=False,
                              num_workers=0)
 
@@ -51,6 +51,8 @@ def run_training():
     simclr_config.optimizer.parameters.weight_decay = 1e-5
     simclr_config.checkpoint.folder = "./checkpoints/simclr"
     simclr_config.logging.folder = "./logs/simclr"
+    if os.path.exists(simclr_config.logging.folder):
+        shutil.rmtree(simclr_config.logging.folder)
     simclr_config.logging.record_loss_every = 1
     simclr_config.logging.record_valid_images_every = 0
     simclr_config.logging.record_embeddings_every = 10
@@ -60,7 +62,7 @@ def run_training():
 
 
     print('Run Training ...')
-    simclr.run_training(train_loader, training_config, valid_loader=valid_loader, logger=logger)
+    simclr.run_training(train_loader, training_config, valid_loader=valid_loader)
 
     print('Finished.')
 

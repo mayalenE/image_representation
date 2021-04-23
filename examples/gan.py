@@ -1,13 +1,10 @@
 import os
-
+import shutil
 import torch
-torch.autograd.set_detect_anomaly(True)
 from addict import Dict
 from image_representation import BiGAN
 from image_representation.datasets.torch_dataset import MNISTDataset
-from tensorboardX import SummaryWriter
 from torch.utils.data import DataLoader
-
 
 def run_training():
 
@@ -32,7 +29,7 @@ def run_training():
     train_loader = DataLoader(train_dataset, batch_size=64,
                                   shuffle=True,
                                   num_workers=0)
-    valid_loader = DataLoader(train_dataset, batch_size=10,
+    valid_loader = DataLoader(valid_dataset, batch_size=10,
                              shuffle=False,
                              num_workers=0)
 
@@ -53,7 +50,9 @@ def run_training():
     bigan_config.optimizer.parameters.lr = 1e-3
     bigan_config.optimizer.parameters.weight_decay = 1e-5
     bigan_config.checkpoint.folder = "./checkpoints/bigan"
-    bigan_config.logging.folder = "./logs/gan"
+    bigan_config.logging.folder = "./logs/bigan"
+    if os.path.exists(bigan_config.logging.folder):
+        shutil.rmtree(bigan_config.logging.folder)
     bigan_config.logging.record_loss_every = 1
     bigan_config.logging.record_valid_images_every = 10
     bigan_config.logging.record_embeddings_every = 10

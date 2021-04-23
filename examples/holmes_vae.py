@@ -2,9 +2,9 @@ from image_representation.datasets.torch_dataset import MNISTDataset
 from image_representation import HOLMES_VAE
 from addict import Dict
 import torch
-from tensorboardX import SummaryWriter
 from torch.utils.data import DataLoader
 import os
+import shutil
 
 def run_training():
 
@@ -57,6 +57,8 @@ def run_training():
 
     holmes_vae_config.checkpoint.folder = "./checkpoints/holmes_vae"
     holmes_vae_config.logging.folder = "./logs/holmes_vae"
+    if os.path.exists(holmes_vae_config.logging.folder):
+        shutil.rmtree(holmes_vae_config.logging.folder)
     holmes_vae_config.logging.record_loss_every = 1
     holmes_vae_config.logging.record_valid_images_every = 10
     holmes_vae_config.logging.record_embeddings_every = 10
