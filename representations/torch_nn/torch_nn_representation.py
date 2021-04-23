@@ -36,6 +36,7 @@ class TorchNNRepresentation(Representation, nn.Module):
 
         # device parameters
         default_config.device = 'cuda'
+        default_config.dtype = torch.double
 
         # loss parameters
         default_config.loss = Dict()
@@ -84,6 +85,7 @@ class TorchNNRepresentation(Representation, nn.Module):
         self.set_network(self.config.network.name, self.config.network.parameters)
         self.init_network_weights(self.config.network.weights_init.name, self.config.network.weights_init.parameters)
         self.set_device(self.config.device)
+        self.set_dtype(self.config.dtype)
 
         # loss function
         self.set_loss(self.config.loss.name, self.config.loss.parameters)
@@ -127,6 +129,10 @@ class TorchNNRepresentation(Representation, nn.Module):
     def set_device(self, device):
         self.to(device) #device="cuda" or "cpu"
         self.config.device = device
+
+    def set_dtype(self, dtype):
+        self.type(dtype)
+        self.config.dtype = dtype
 
 
     def set_loss(self, loss_name, loss_parameters):

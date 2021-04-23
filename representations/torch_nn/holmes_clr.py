@@ -540,8 +540,7 @@ class HOLMES_CLR(TorchNNRepresentation):
         if node_path is None:
             warnings.warn("WARNING: computing the embedding in root node of progressive tree as no path specified")
             node_path = "0"
-        n_latents = self.config.network.parameters.n_latents
-        z = torch.Tensor().new_full((len(x), n_latents), float("nan"))
+        z = torch.Tensor().new_full((len(x), self.n_latents), float("nan"))
         x = x.to(self.config.device)
 
         all_nodes_outputs = self.network.depth_first_forward_whole_branch_preorder(x)
@@ -592,7 +591,7 @@ class HOLMES_CLR(TorchNNRepresentation):
                         x_fitness = x_fitness[keep_ids]
                         z_fitness = x_fitness
                 if z_library.shape[0] == 0:
-                    z_library = torch.zeros((2, self.config.network.parameters.n_latents))
+                    z_library = torch.zeros((2, self.n_latents))
                     if z_fitness is not None:
                         z_fitness = np.zeros(2)
                 node.create_boundary(z_library, z_fitness, boundary_config=split_trigger.boundary_config)
@@ -1782,7 +1781,7 @@ class ConnectedProjectionHead(nn.Module):
 
         # add lateral connections (linear layer projection head)
         if self.connect_proj:
-            connection_dim = self.config.n_latents
+            connection_dim = self.n_latents
             self.network_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
 
 

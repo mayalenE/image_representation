@@ -2,13 +2,12 @@ from addict import Dict
 import image_representation
 from image_representation import TorchNNRepresentation
 from image_representation.representations.torch_nn import decoders, discriminators
-from image_representation.utils.tensorboard_utils import resize_embeddings
+from image_representation.utils.tensorboard_utils import resize_embeddings, logger_add_image_list
 from itertools import chain
 import os
 import sys
 import time
 import torch
-from torchvision.utils import make_grid
 
 """ ========================================================================================================================
 Base BiGAN architecture
@@ -281,23 +280,9 @@ class BiGAN(TorchNNRepresentation):
             vizu_tensor_list = [None] * (2 * n_images)
             vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]
             vizu_tensor_list[1::2] = [output_images[n] for n in range(n_images)]
-            if self.config.network.parameters.n_channels == 1 or self.config.network.parameters.n_channels == 3: # grey scale or RGB
-                if len(input_images.shape)==4:
-                    img = make_grid(vizu_tensor_list, nrow=2, padding=0)
-                    self.logger.add_image("reconstructions", img, self.n_epochs)
-                elif len(input_images.shape) == 5:
-                    self.logger.add_video("original", torch.stack(vizu_tensor_list[0::2]).transpose(1,2), self.n_epochs)
-                    self.logger.add_video("reconstructions", torch.stack(vizu_tensor_list[1::2]).transpose(1,2), self.n_epochs)
-            else:
-                for channel in range(self.config.network.parameters.n_channels):
-                    if len(input_images.shape) == 4:
-                        img = make_grid(torch.stack(vizu_tensor_list)[:, channel, :, :].unsqueeze(1), nrow=2, padding=0)
-                        self.logger.add_image(f"reconstructions_channel_{channel}", img, self.n_epochs)
-                    elif len(input_images.shape) == 5:
-                        self.logger.add_video(f"original_channel_{channel}", torch.stack(vizu_tensor_list[0::2])[:, channel, :, :].unsqueeze(1).transpose(1, 2),
-                                              self.n_epochs)
-                        self.logger.add_video(f"reconstructions_channel_{channel}", torch.stack(vizu_tensor_list[1::2])[:, channel, :, :].unsqueeze(1).transpose(1, 2),
-                                              self.n_epochs)
+            logger_add_image_list(self.logger, vizu_tensor_list, "reconstructions",
+                                  global_step=self.n_epochs, n_channels=self.config.network.parameters.n_channels,
+                                  spatial_dims=len(self.config.network.parameters.input_size))
 
         if record_embeddings:
             if len(images.shape) == 5:
