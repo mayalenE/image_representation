@@ -3,11 +3,10 @@ from addict import Dict
 import image_representation
 from image_representation import TorchNNRepresentation, VAE, BetaVAE, AnnealedVAE, BetaTCVAE
 from image_representation.representations.torch_nn import encoders, decoders
-from image_representation.utils.tensorboard_utils import resize_embeddings
+from image_representation.utils.tensorboard_utils import resize_embeddings, logger_add_image_list
 from image_representation.datasets.torch_dataset import MIXEDDataset
 from image_representation.utils.torch_nn_init import get_weights_init
 from image_representation.utils.misc import do_filter_boolean
-import matplotlib.pyplot as plt
 import numpy as np
 import os
 from sklearn import cluster, svm, mixture
@@ -15,7 +14,6 @@ import sys
 import time
 import torch
 from torch import nn
-from torchvision.utils import make_grid
 from torch.utils.data import DataLoader
 import warnings
 # from torchviz import make_dot
@@ -85,10 +83,10 @@ class Node(nn.Module):
 
     def create_boundary(self, z_library, z_fitness=None, boundary_config=None):
         # normalize z points
-        self.feature_range = (z_library.min(axis=0), z_library.max(axis=0))
+        self.feature_range = (z_library.min(axis=0)[0], z_library.max(axis=0)[0])
         X = z_library - self.feature_range[0]
         scale = self.feature_range[1] - self.feature_range[0]
-        scale[np.where(scale == 0)] = 1.0  # trick when some some latents are the same for every point (no scale and divide by 1)
+        scale[torch.where(scale == 0)[0]] = 1.0  # trick when some some latents are the same for every point (no scale and divide by 1)
         X = X / scale
 
         default_boundary_config = Dict()
@@ -101,7 +99,7 @@ class Node(nn.Module):
         if z_fitness is None:
             if boundary_config.algo == 'cluster.KMeans':
                 boundary_config.kwargs.n_clusters = 2
-                self.boundary = boundary_algo(**boundary_config.kwargs).fit(X)
+                self.boundary = boundary_algo(**boundary_config.kwargs).fit(X.cpu().numpy())
         else:
             y = z_fitness.squeeze()
             if boundary_config.algo == 'cluster.KMeans':
@@ -111,10 +109,10 @@ class Node(nn.Module):
                 center = np.nan_to_num(center)
                 boundary_config.kwargs.init = center
                 boundary_config.kwargs.n_clusters = 2
-                self.boundary = boundary_algo(**boundary_config.kwargs).fit(X)
+                self.boundary = boundary_algo(**boundary_config.kwargs).fit(X.cpu().numpy())
             elif boundary_config.algo == 'svm.SVC':
                 y = y > np.percentile(y, 80)
-                self.boundary = boundary_algo(**boundary_config.kwargs).fit(X, y)
+                self.boundary = boundary_algo(**boundary_config.kwargs).fit(X.cpu().numpy(), y)
 
         return
 
@@ -276,13 +274,13 @@ class Node(nn.Module):
             raise ValueError("Boundary computation is required before calling this function")
         else:
             # normalize
-            if isinstance(z, torch.Tensor):
-                z = z.detach().cpu().numpy()
             z = z - self.feature_range[0]
             scale = self.feature_range[1] - self.feature_range[0]
-            scale[np.where(scale == 0)] = 1.0  # trick when some some latents are the same for every point (no scale and divide by 1)
+            scale[torch.where(scale == 0)[0]] = 1.0  # trick when some some latents are the same for every point (no scale and divide by 1)
             z = z / scale
             # compute boundary side
+            if isinstance(z, torch.Tensor):
+                z = z.detach().cpu().numpy()
             side = self.boundary.predict(z)  # returns 0: left, 1: right
         return side
 
@@ -290,6 +288,8 @@ class Node(nn.Module):
         """
         Return code: -1 for leaf node,  0 to send left, 1 to send right
         """
+        z = z.to(self.config.device)
+
         if self.leaf:
             return -1 * torch.ones_like(z)
         else:
@@ -301,7 +301,7 @@ class Node(nn.Module):
 
             if len(from_node_path) == 0:
                 if from_side is None or self.boundary is None:
-                    z_gen = torch.randn((n_images, self.config.network.parameters.n_latents))
+                    z_gen = torch.randn((n_images, self.n_latents))
                 else:
                     desired_side = int(from_side)
                     z_gen = []
@@ -309,7 +309,7 @@ class Node(nn.Module):
                     max_trials = n_images
                     trials = 0
                     while remaining > 0:
-                        cur_z_gen = torch.randn((remaining, self.config.network.parameters.n_latents))
+                        cur_z_gen = torch.randn((remaining, self.n_latents))
                         if trials == max_trials:
                             z_gen.append(cur_z_gen)
                             remaining = 0
@@ -337,7 +337,7 @@ class Node(nn.Module):
                 max_trials = n_images
                 trials = 0
                 while remaining > 0:
-                    cur_z_gen = torch.randn((remaining, self.config.network.parameters.n_latents))
+                    cur_z_gen = torch.randn((remaining, self.n_latents))
                     if trials == max_trials:
                         z_gen.append(cur_z_gen)
                         remaining = 0
@@ -559,27 +559,42 @@ class HOLMES_VAE(TorchNNRepresentation):
 
         return model_outputs
 
-    def calc_embedding(self, x, node_path=None, **kwargs):
-        ''' the function calc outputs a representation vector of size batch_size*n_latents'''
-        if node_path is None:
-            warnings.warn("WARNING: computing the embedding in root node of progressive tree as no path specified")
-            node_path = "0"
-        n_latents = self.config.network.parameters.n_latents
-        z = torch.Tensor().new_full((len(x), n_latents), float("nan"))
+    def calc_embedding(self, x, mode="niche", node_path=None, **kwargs):
+        """
+        :param mode: either "exhaustif" or "niche"
+        :param node_path: if "niche" must specify niche's node_path
+        :return:
+        """
         x = x.to(self.config.device)
 
-        all_nodes_outputs = self.network.depth_first_forward_whole_branch_preorder(x)
+        if mode == "niche":
+            z = torch.Tensor().new_full((len(x), self.n_latents), float("nan")).to(self.config.device)
+            all_nodes_outputs = self.network.depth_first_forward_whole_branch_preorder(x)
+            if node_path is None:
+                node_path = "0"
+                warnings.warn("Node path not specified... setting it to root node 0.")
+
+        elif mode == "exhaustif":
+            z = Dict.fromkeys(self.network.get_node_pathes())
+            all_nodes_outputs = self.network.depth_first_forward_whole_tree_preorder(x)
+
         for node_idx in range(len(all_nodes_outputs)):
             cur_node_path = all_nodes_outputs[node_idx][0][0]
-            if cur_node_path != node_path:
+            if mode == "niche" and cur_node_path != node_path:
                 continue
-            else:
+            elif mode == "niche" and cur_node_path == node_path:
                 cur_node_x_ids = all_nodes_outputs[node_idx][1]
                 cur_node_outputs = all_nodes_outputs[node_idx][2]
                 for idx in range(len(cur_node_x_ids)):
                     z[cur_node_x_ids[idx]] = cur_node_outputs["z"][idx]
                 break
+            else:
+                cur_node_outputs = all_nodes_outputs[node_idx][2]
+                z[cur_node_path] = cur_node_outputs["z"]
         return z
+
+
+
 
     def split_node(self, node_path, split_trigger=None, x_loader=None, x_fitness=None):
         """
@@ -616,7 +631,7 @@ class HOLMES_VAE(TorchNNRepresentation):
                         x_fitness = x_fitness[keep_ids]
                         z_fitness = x_fitness
                 if z_library.shape[0] == 0:
-                    z_library = torch.zeros((2, self.config.network.parameters.n_latents))
+                    z_library = torch.zeros((2, self.n_latents))
                     if z_fitness is not None:
                         z_fitness = np.zeros(2)
                 node.create_boundary(z_library, z_fitness, boundary_config=split_trigger.boundary_config)
@@ -632,7 +647,11 @@ class HOLMES_VAE(TorchNNRepresentation):
 
         # Update optimize
         cur_node_optimizer_group_id = node.optimizer_group_id
+        # delete param groups and residuates in optimize.state
         del self.optimizer.param_groups[cur_node_optimizer_group_id]
+        for n, p in node.named_parameters():
+            if p in self.optimizer.state.keys():
+                del self.optimizer.state[p]
         node.optimizer_group_id = None
         n_groups = len(self.optimizer.param_groups)
         # update optimizer_group ids in the tree and sanity check that there is no conflict
@@ -660,114 +679,71 @@ class HOLMES_VAE(TorchNNRepresentation):
         if x_loader is not None:
             self.save_split_history(node_path, x_loader, z_library, x_fitness, split_trigger)
 
-
         # save model
         if split_trigger is not None and (split_trigger.save_model_before_after or split_trigger.save_model_before_after == 'after'):
             self.save(os.path.join(self.config.checkpoint.folder, 'weight_model_after_split_{}_node_{}_epoch_{}.pth'.format(len(self.split_history), node_path, self.n_epochs)))
-
 
         return
 
 
     def save_split_history(self, node_path, x_loader, z_library, z_fitness, split_trigger):
         # save results
-        split_output_folder = os.path.join(self.config.evaluation.folder, "split_history", "split_{}_node_{}_epoch_{}".format(len(self.split_history), node_path, self.n_epochs))
-        if not os.path.exists(split_output_folder):
-            os.makedirs(split_output_folder)
+        title = f"split_{len(self.split_history)}_node_{node_path}_epoch_{self.n_epochs}"
 
-        ## a) save z_library (z_fitness, y_poor_buffer, y_predicted, y_ground_truth)
-        node = self.network.get_child_node(node_path)
-        y_predicted = node.get_children_node(z_library)
-        y_ground_truth = x_loader.dataset.labels
-        np.savez(os.path.join(split_output_folder, "z_library.npz"),
-                 **{'z_library': z_library, 'z_fitness': z_fitness,
-                    'y_predicted': y_predicted, 'y_ground_truth': y_ground_truth})
-
-        ## b) poor data make grid
+        ## poor data buffer
         if split_trigger.type == "threshold":
-            output_filename = os.path.join(split_output_folder, "poor_data_buffer.png")
             poor_data_buffer = x_loader.dataset.images[np.where(z_fitness > split_trigger.parameters.threshold)[0]]
-            img = np.transpose(make_grid(poor_data_buffer, nrow=int(np.sqrt(poor_data_buffer.shape[0])), padding=0).cpu().numpy(), (1, 2, 0))
-            plt.figure()
-            plt.imshow(img)
-            plt.savefig(output_filename)
-            plt.close()
+            logger_add_image_list(self.logger, poor_data_buffer, title + "/poor_data",
+                                  n_channels=self.config.node.network.parameters.n_channels,
+                                  spatial_dims=len(self.config.node.network.parameters.input_size))
 
-        ## c) left/right samples from which boundary is fitted
+        ## left/right samples from which boundary is fitted
         if split_trigger.boundary_config.z_fitness is not None:
             y_fit = z_fitness > np.percentile(z_fitness, 80)
             samples_left_fit_ids = np.where(y_fit == 0)[0]
             samples_left_fit_ids = np.random.choice(samples_left_fit_ids, min(100, len(samples_left_fit_ids)))
-            output_filename = os.path.join(split_output_folder, "samples_left_fit.png")
             samples_left_fit_buffer = x_loader.dataset.images[samples_left_fit_ids]
-            img = np.transpose(
-                make_grid(samples_left_fit_buffer, nrow=int(np.sqrt(samples_left_fit_buffer.shape[0])),
-                          padding=0).cpu().numpy(), (1, 2, 0))
-            plt.figure()
-            plt.imshow(img)
-            plt.savefig(output_filename)
-            plt.close()
+            logger_add_image_list(self.logger, samples_left_fit_buffer, title + "/samples_left_fit",
+                                  n_channels=self.config.node.network.parameters.n_channels,
+                                  spatial_dims=len(self.config.node.network.parameters.input_size))
 
             samples_right_fit_ids = np.where(y_fit == 1)[0]
             samples_right_fit_ids = np.random.choice(samples_right_fit_ids, min(100, len(samples_right_fit_ids)))
-            output_filename = os.path.join(split_output_folder, "samples_right_fit.png")
             samples_right_fit_buffer = x_loader.dataset.images[samples_right_fit_ids]
-            img = np.transpose(
-                make_grid(samples_right_fit_buffer, nrow=int(np.sqrt(samples_right_fit_buffer.shape[0])),
-                          padding=0).cpu().numpy(), (1, 2, 0))
-            plt.figure()
-            plt.imshow(img)
-            plt.savefig(output_filename)
-            plt.close()
+            logger_add_image_list(self.logger, samples_right_fit_buffer, title + "/samples_right_fit",
+                                  n_channels=self.config.node.network.parameters.n_channels,
+                                  spatial_dims=len(self.config.node.network.parameters.input_size))
 
-            ## d) wrongly classified buffer make grid
+            ## wrongly classified buffer make grid
+            node = self.network.get_child_node(node_path)
+            y_predicted = node.get_children_node(z_library)
             wrongly_sent_left_ids = np.where((y_predicted == 0) & (y_predicted != y_fit))[0]
             if len(wrongly_sent_left_ids) > 0:
                 wrongly_sent_left_ids = np.random.choice(wrongly_sent_left_ids, min(100, len(wrongly_sent_left_ids)))
-                output_filename = os.path.join(split_output_folder, "wrongly_sent_left.png")
                 wrongly_sent_left_buffer = x_loader.dataset.images[wrongly_sent_left_ids]
-                img = np.transpose(
-                    make_grid(wrongly_sent_left_buffer, nrow=int(np.sqrt(wrongly_sent_left_buffer.shape[0])),
-                              padding=0).cpu().numpy(), (1, 2, 0))
-                plt.figure()
-                plt.imshow(img)
-                plt.savefig(output_filename)
-                plt.close()
+                logger_add_image_list(self.logger, wrongly_sent_left_buffer, title + "/wrongly_sent_left",
+                                      n_channels=self.config.node.network.parameters.n_channels,
+                                      spatial_dims=len(self.config.node.network.parameters.input_size))
 
             wrongly_sent_right_ids = np.where((y_predicted == 1) & (y_predicted != y_fit))[0]
             if len(wrongly_sent_right_ids) > 0:
                 wrongly_sent_right_ids = np.random.choice(wrongly_sent_right_ids, min(100, len(wrongly_sent_right_ids)))
-                output_filename = os.path.join(split_output_folder, "wrongly_sent_right.png")
                 wrongly_sent_right_buffer = x_loader.dataset.images[wrongly_sent_right_ids]
-                img = np.transpose(
-                    make_grid(wrongly_sent_right_buffer, nrow=int(np.sqrt(wrongly_sent_right_buffer.shape[0])),
-                              padding=0).cpu().numpy(), (1, 2, 0))
-                plt.figure()
-                plt.imshow(img)
-                plt.savefig(output_filename)
-                plt.close()
+                logger_add_image_list(self.logger, wrongly_sent_right_buffer, title + "/wrongly_sent_right",
+                                      n_channels=self.config.node.network.parameters.n_channels,
+                                      spatial_dims=len(self.config.node.network.parameters.input_size))
 
 
-        ## d) left and right side generated samples
-        output_filename = os.path.join(split_output_folder, "samples_gen_sent_left.png")
+        ## left and right side generated samples
         samples_left_gen_buffer = self.network.generate_images(100, from_node_path=node_path[1:], from_side='0')
-        img = np.transpose(
-            make_grid(samples_left_gen_buffer, nrow=int(np.sqrt(samples_left_gen_buffer.shape[0])),
-                      padding=0).cpu().numpy(), (1, 2, 0))
-        plt.figure()
-        plt.imshow(img)
-        plt.savefig(output_filename)
-        plt.close()
+        logger_add_image_list(self.logger, samples_left_gen_buffer, title + "/samples_gen_sent_left",
+                              n_channels=self.config.node.network.parameters.n_channels,
+                              spatial_dims=len(self.config.node.network.parameters.input_size))
 
-        output_filename = os.path.join(split_output_folder, "samples_gen_sent_right.png")
         samples_right_gen_buffer = self.network.generate_images(100, from_node_path=node_path[1:], from_side='1')
-        img = np.transpose(
-            make_grid(samples_right_gen_buffer, nrow=int(np.sqrt(samples_right_gen_buffer.shape[0])),
-                      padding=0).cpu().numpy(), (1, 2, 0))
-        plt.figure()
-        plt.imshow(img)
-        plt.savefig(output_filename)
-        plt.close()
+        logger_add_image_list(self.logger, samples_right_gen_buffer, title + "/samples_gen_sent_right",
+                              n_channels=self.config.node.network.parameters.n_channels,
+                              spatial_dims=len(self.config.node.network.parameters.input_size))
 
         return
 
@@ -1459,31 +1435,9 @@ class HOLMES_VAE(TorchNNRepresentation):
                 vizu_tensor_list = [None] * (2 * n_images)
                 vizu_tensor_list[0::2] = [input_images[n] for n in range(n_images)]
                 vizu_tensor_list[1::2] = [output_images[n] for n in range(n_images)]
-                if self.config.network.parameters.n_channels == 1 or self.config.network.parameters.n_channels == 3:  # grey scale or RGB
-                    if len(input_images.shape) == 4:
-                        img = make_grid(vizu_tensor_list, nrow=2, padding=0)
-                        self.logger.add_image("leaf_{leaf_path}_reconstructions", img, self.n_epochs)
-                    elif len(input_images.shape) == 5:
-                        self.logger.add_video("leaf_{leaf_path}_original", torch.stack(vizu_tensor_list[0::2]).transpose(1, 2),
-                                              self.n_epochs)
-                        self.logger.add_video("leaf_{leaf_path}_reconstructions", torch.stack(vizu_tensor_list[1::2]).transpose(1, 2),
-                                              self.n_epochs)
-                else:
-                    for channel in range(self.config.network.parameters.n_channels):
-                        if len(input_images.shape) == 4:
-                            img = make_grid(torch.stack(vizu_tensor_list)[:, channel, :, :].unsqueeze(1), nrow=2,
-                                            padding=0)
-                            self.logger.add_image(f"leaf_{leaf_path}_reconstructions_channel_{channel}", img, self.n_epochs)
-                        elif len(input_images.shape) == 5:
-                            self.logger.add_video(f"leaf_{leaf_path}_original_channel_{channel}",
-                                                  torch.stack(vizu_tensor_list[0::2])[:, channel, :, :].unsqueeze(
-                                                      1).transpose(1, 2),
-                                                  self.n_epochs)
-                            self.logger.add_video(f"leaf_{leaf_path}_reconstructions_channel_{channel}",
-                                                  torch.stack(vizu_tensor_list[1::2])[:, channel, :, :].unsqueeze(
-                                                      1).transpose(1, 2),
-                                                  self.n_epochs)
-
+                logger_add_image_list(self.logger, vizu_tensor_list, f"leaf_{leaf_path}/reconstructions",
+                                      global_step=self.n_epochs, n_channels=self.config.node.network.parameters.n_channels,
+                                      spatial_dims=len(self.config.node.network.parameters.input_size))
 
         # 4) AVERAGE LOSS ON WHOLE TREE AND RETURN
         for k, v in losses.items():
@@ -1691,11 +1645,15 @@ class ConnectedEncoder(encoders.Encoder):
         self.ef = encoder_instance.ef
 
         # add lateral connections
+        if encoder_instance.spatial_dims == 2:
+            self.conv_module = nn.Conv2d
+        elif encoder_instance.spatial_dims == 3:
+            self.conv_module = nn.Conv3d
         ## lf
         if self.connect_lf:
             if self.lf.out_connection_type[0] == "conv":
                 connection_channels = self.lf.out_connection_type[1]
-                self.lf_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
+                self.lf_c = nn.Sequential(self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
             elif self.lf.out_connection_type[0] == "lin":
                 connection_dim = self.lf.out_connection_type[1]
                 self.lf_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
@@ -1704,7 +1662,7 @@ class ConnectedEncoder(encoders.Encoder):
         if self.connect_gf:
             if self.gf.out_connection_type[0] == "conv":
                 connection_channels = self.gf.out_connection_type[1]
-                self.gf_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
+                self.gf_c = nn.Sequential(self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
             elif self.gf.out_connection_type[0] == "lin":
                 connection_dim = self.gf.out_connection_type[1]
                 self.gf_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
@@ -1800,11 +1758,16 @@ class ConnectedDecoder(decoders.Decoder):
         self.lfi = decoder_instance.lfi
 
         # add lateral connections
+
         ## gfi
+        if decoder_instance.spatial_dims == 2:
+            self.conv_module = nn.Conv2d
+        elif decoder_instance.spatial_dims == 3:
+            self.conv_module = nn.Conv3d
         if self.connect_gfi:
             if self.efi.out_connection_type[0] == "conv":
                 connection_channels = self.efi.out_connection_type[1]
-                self.gfi_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
+                self.gfi_c = nn.Sequential(self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
             elif self.efi.out_connection_type[0] == "lin":
                 connection_dim = self.efi.out_connection_type[1]
                 self.gfi_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
@@ -1812,7 +1775,7 @@ class ConnectedDecoder(decoders.Decoder):
         if self.connect_lfi:
             if self.gfi.out_connection_type[0] == "conv":
                 connection_channels = self.gfi.out_connection_type[1]
-                self.lfi_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
+                self.lfi_c = nn.Sequential(self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
             elif self.gfi.out_connection_type[0] == "lin":
                 connection_dim = self.gfi.out_connection_type[1]
                 self.lfi_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
@@ -1821,7 +1784,7 @@ class ConnectedDecoder(decoders.Decoder):
         if self.connect_recon:
             if self.lfi.out_connection_type[0] == "conv":
                 connection_channels = self.lfi.out_connection_type[1]
-                self.recon_c = nn.Sequential(nn.Conv2d(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False))
+                self.recon_c = nn.Sequential(self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False))
             elif self.lfi.out_connection_type[0] == "lin":
                 connection_dim = self.lfi.out_connection_type[1]
                 self.recon_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
