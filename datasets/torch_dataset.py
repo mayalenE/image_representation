@@ -917,9 +917,7 @@ class EvocraftDataset(Dataset):
                 if self.config.preprocess is not None:
                     self.images = self.config.preprocess(self.images)
 
-                self.n_channels = 1
-                if self.images.ndim == 3:
-                    self.images = self.images.unsqueeze(1)
+                self.n_channels = self.images.shape[1]
                 self.img_size = (self.images.shape[2], self.images.shape[3], self.images.shape[4])
 
         # data augmentation boolean
