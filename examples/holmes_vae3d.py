@@ -73,7 +73,7 @@ def run_training():
     training_config.split_trigger.active = True
     training_config.split_trigger.fitness_key = 'recon'
     training_config.split_trigger.type = 'plateau'
-    training_config.split_trigger.parameters = Dict(epsilon=10, n_steps_average=50)
+    training_config.split_trigger.parameters = Dict(epsilon=20, n_steps_average=50)
     training_config.split_trigger.conditions = Dict(min_init_n_epochs=200, n_min_points=500, n_max_splits=10, n_epochs_min_between_splits=100)
     training_config.split_trigger.save_model_before_after = True
     training_config.split_trigger.boundary_config.z_fitness = "recon_loss"

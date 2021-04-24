@@ -83,23 +83,24 @@ class Node(nn.Module):
 
     def create_boundary(self, z_library, z_fitness=None, boundary_config=None):
         # normalize z points
-        self.feature_range = (z_library.min(axis=0)[0], z_library.max(axis=0)[0])
+        self.feature_range = (z_library.min(axis=0), z_library.max(axis=0))
         X = z_library - self.feature_range[0]
         scale = self.feature_range[1] - self.feature_range[0]
-        scale[torch.where(scale == 0)[0]] = 1.0  # trick when some some latents are the same for every point (no scale and divide by 1)
+        scale[np.where(scale == 0)[0]] = 1.0  # trick when some some latents are the same for every point (no scale and divide by 1)
         X = X / scale
 
         default_boundary_config = Dict()
         default_boundary_config.algo = 'svm.SVC'
         default_boundary_config.kwargs = Dict()
         if boundary_config is not None:
-            boundary_config.update(default_boundary_config)
+            default_boundary_config.update(boundary_config)
+        boundary_config = default_boundary_config
         boundary_algo = eval(boundary_config.algo)
 
         if z_fitness is None:
             if boundary_config.algo == 'cluster.KMeans':
                 boundary_config.kwargs.n_clusters = 2
-                self.boundary = boundary_algo(**boundary_config.kwargs).fit(X.cpu().numpy())
+                self.boundary = boundary_algo(**boundary_config.kwargs).fit(X)
         else:
             y = z_fitness.squeeze()
             if boundary_config.algo == 'cluster.KMeans':
@@ -109,10 +110,10 @@ class Node(nn.Module):
                 center = np.nan_to_num(center)
                 boundary_config.kwargs.init = center
                 boundary_config.kwargs.n_clusters = 2
-                self.boundary = boundary_algo(**boundary_config.kwargs).fit(X.cpu().numpy())
+                self.boundary = boundary_algo(**boundary_config.kwargs).fit(X)
             elif boundary_config.algo == 'svm.SVC':
                 y = y > np.percentile(y, 80)
-                self.boundary = boundary_algo(**boundary_config.kwargs).fit(X.cpu().numpy(), y)
+                self.boundary = boundary_algo(**boundary_config.kwargs).fit(X, y)
 
         return
 
@@ -273,14 +274,15 @@ class Node(nn.Module):
         if self.boundary is None:
             raise ValueError("Boundary computation is required before calling this function")
         else:
-            # normalize
-            z = z - self.feature_range[0]
-            scale = self.feature_range[1] - self.feature_range[0]
-            scale[torch.where(scale == 0)[0]] = 1.0  # trick when some some latents are the same for every point (no scale and divide by 1)
-            z = z / scale
             # compute boundary side
             if isinstance(z, torch.Tensor):
                 z = z.detach().cpu().numpy()
+
+            # normalize
+            z = z - self.feature_range[0]
+            scale = self.feature_range[1] - self.feature_range[0]
+            scale[np.where(scale == 0)[0]] = 1.0  # trick when some some latents are the same for every point (no scale and divide by 1)
+            z = z / scale
             side = self.boundary.predict(z)  # returns 0: left, 1: right
         return side
 
@@ -634,7 +636,7 @@ class HOLMES_VAE(TorchNNRepresentation):
                     z_library = torch.zeros((2, self.n_latents))
                     if z_fitness is not None:
                         z_fitness = np.zeros(2)
-                node.create_boundary(z_library, z_fitness, boundary_config=split_trigger.boundary_config)
+                node.create_boundary(z_library.cpu().numpy(), z_fitness, boundary_config=split_trigger.boundary_config)
 
         # Instanciate childrens
         node.left = node.NodeClass(node.depth + 1, parent_network=deepcopy(node.network), config=node.config)
