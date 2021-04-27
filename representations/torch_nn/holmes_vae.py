@@ -591,7 +591,7 @@ class HOLMES_VAE(TorchNNRepresentation):
                     z[cur_node_x_ids[idx]] = cur_node_outputs["z"][idx]
                 break
             else:
-                cur_node_outputs = all_nodes_outputs[node_idx][2]
+                cur_node_outputs = all_nodes_outputs[node_idx][1]
                 z[cur_node_path] = cur_node_outputs["z"]
         return z
 
@@ -1226,7 +1226,7 @@ class HOLMES_VAE(TorchNNRepresentation):
 
         with torch.no_grad():
             for data in train_loader:
-                x = data["obs"].to(self.config.device)
+                x = data["obs"].to(self.config.device).type(self.config.dtype)
                 x_ids.append(data["index"])
                 labels.append(data["label"])
                 # forward
@@ -1311,7 +1311,7 @@ class HOLMES_VAE(TorchNNRepresentation):
         losses = {}
 
         for data in train_loader:
-            x = data['obs'].to(self.config.device)
+            x = data['obs'].to(self.config.device).type(self.config.dtype)
             # forward
             model_outputs = self.forward(x)
             # g = make_dot(model_outputs, params=dict(self.network.named_parameters()))
@@ -1377,7 +1377,7 @@ class HOLMES_VAE(TorchNNRepresentation):
 
         with torch.no_grad():
             for data in valid_loader:
-                x = data['obs'].to(self.config.device)
+                x = data['obs'].to(self.config.device).type(self.config.dtype)
                 y = data['label'].squeeze().to(self.config.device)
                 # forward
                 model_outputs = self.forward(x)

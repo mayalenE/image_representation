@@ -64,9 +64,8 @@ class MIXEDDataset(Dataset):
         """ Update the current dataset lists """
         if labels is None:
             labels = torch.LongTensor([-1] * n_images)
-        assert n_images == images.shape[0] == labels.shape[0], print(
-            'ERROR: the given dataset size ({0}) mismatch with observations size ({1}) and labels size ({2})'.format(
-                n_images, images.shape[0], labels.shape[0]))
+        assert n_images == images.shape[0] == labels.shape[0], 'ERROR: the given dataset size ({0}) mismatch with observations size ({1}) and labels size ({2})'.format(
+                n_images, images.shape[0], labels.shape[0])
 
         self.n_images = int(n_images)
         self.images = images
@@ -948,6 +947,12 @@ class EvocraftDataset(Dataset):
         self.n_images = int(n_images)
         self.images = images
         self.labels = labels
+
+    def add(self, image, label):
+        image = self.config.preprocess(image)
+        self.images = torch.cat([self.images, image])
+        self.labels = torch.cat([self.labels, label])
+        self.n_images += 1
 
     def get_image(self, image_idx, augment=False, transform=True):
         image = self.images[image_idx]
