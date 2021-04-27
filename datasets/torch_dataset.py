@@ -1,6 +1,5 @@
 import h5py
 from addict import Dict
-import image_representation
 import numpy as np
 import os
 import torch
@@ -38,7 +37,7 @@ class MIXEDDataset(Dataset):
         default_config.target_transform = None
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         self.config = self.__class__.default_config()
         self.config.update(config)
         self.config.update(kwargs)
@@ -153,7 +152,7 @@ class MNISTDataset(torchvision.datasets.MNIST):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         self.config = self.__class__.default_config()
         self.config.update(config)
         self.config.update(kwargs)
@@ -266,7 +265,7 @@ class SVHNDataset(torchvision.datasets.SVHN):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         self.config = self.__class__.default_config()
         self.config.update(config)
         self.config.update(kwargs)
@@ -371,7 +370,7 @@ class CIFAR10Dataset(torchvision.datasets.CIFAR10):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         self.config = self.__class__.default_config()
         self.config.update(config)
         self.config.update(kwargs)
@@ -488,7 +487,7 @@ class CIFAR100Dataset(torchvision.datasets.CIFAR100):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         self.config = self.__class__.default_config()
         self.config.update(config)
         self.config.update(kwargs)
@@ -607,7 +606,7 @@ class Mnist3dDataset(Dataset):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         self.config = self.__class__.default_config()
         self.config.update(config)
         self.config.update(kwargs)
@@ -745,7 +744,7 @@ class LENIADataset(Dataset):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         self.config = self.__class__.default_config()
         self.config.update(config)
         self.config.update(kwargs)
@@ -883,7 +882,7 @@ class EvocraftDataset(Dataset):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         self.config = self.__class__.default_config()
         self.config.update(config)
         self.config.update(kwargs)
@@ -1077,7 +1076,7 @@ class QuadrupletDataset(Dataset):
 
         return default_config
 
-    def __init__(self, dataset_name='lenia', config=None, **kwargs):
+    def __init__(self, dataset_name='lenia', config={}, **kwargs):
         self.config = self.__class__.default_config()
         self.config.update(config)
         self.config.update(kwargs)
