@@ -579,7 +579,7 @@ LOSS HELPERS
 
 def _reconstruction_loss(recon_x, x, reconstruction_dist="bernoulli", reduction="mean"):
     if reconstruction_dist == "bernoulli":
-        loss = _bce_with_digits_loss(recon_x, x, reduction=reduction)
+        loss = _bce_with_logits_loss(recon_x, x, reduction=reduction)
     elif reconstruction_dist == "gaussian":
         loss = _mse_loss(recon_x, x, reduction=reduction)
     else:
@@ -642,7 +642,7 @@ def _bce_loss(recon_x, x, reduction="mean"):
     return bce_loss
 
 
-def _bce_with_digits_loss(recon_x, x, reduction="mean"):
+def _bce_with_logits_loss(recon_x, x, reduction="mean"):
     """ Returns the reconstruction loss (sigmoid + binary cross entropy) summed on the image dims and averaged on the batch size """
     if reduction == "mean":
         bce_loss = F.binary_cross_entropy_with_logits(recon_x, x, reduction="sum") / x.size(0)
