@@ -1,5 +1,6 @@
 from image_representation.representations.representation import Representation
 from image_representation.representations.torch_nn.torch_nn_representation import TorchNNRepresentation
+
 # image representation NN models
 from image_representation.representations.torch_nn.dim import DIM
 from image_representation.representations.torch_nn.vae import VAE, BetaVAE, AnnealedVAE, BetaTCVAE
@@ -18,3 +19,7 @@ __all__ = ["Representation", "TorchNNRepresentation",
            "HOLMES_VAE", "HOLMES_CLR",
            "VAEQuadruplet", "BetaVAEQuadruplet", "AnnealedVAEQuadruplet", "BetaTCVAEQuadruplet",
            "VAETriplet", "BetaVAETriplet", "AnnealedVAETriplet", "BetaTCVAETriplet"]
+
+
+# minkowski engine NN models
+USE_ME = True # set this to False if you dont want to import ME modules

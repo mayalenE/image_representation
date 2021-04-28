@@ -8,6 +8,8 @@ __pycache__/
 # Don't track example logs
 examples/logs/
 examples/checkpoints/
+examples/*/logs/
+examples/*/checkpoints/
 
 datasets/tests/example_augmentations/
 datasets/tests/example_quadruplets/
