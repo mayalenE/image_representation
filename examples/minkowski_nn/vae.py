@@ -34,13 +34,13 @@ def run_training():
 
 
     print('Load dataloader ...')
-    train_loader = DataLoader(train_dataset, batch_size=2,
+    train_loader = DataLoader(train_dataset, batch_size=3,
                               shuffle=True,
-                              num_workers=1,
+                              num_workers=0,
                               collate_fn=sparse_collation)
-    valid_loader = DataLoader(valid_dataset, batch_size=2,
+    valid_loader = DataLoader(valid_dataset, batch_size=3,
                              shuffle=False,
-                             num_workers=1,
+                             num_workers=0,
                              collate_fn=sparse_collation)
 
     print('Load VAE ...')
