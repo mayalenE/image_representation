@@ -77,53 +77,53 @@ def ME_weights_init_pytorch(m):
         m.bn.reset_parameters()
 
         
-def ME_weights_init_xavier_uniform(m):
+def ME_weights_init_xavier_uniform(m, gain=1.0):
     classname = m.__class__.__name__
     if classname.find('MinkowskiConvolution') != -1:
-        xavier_uniform_(m.kernel)
+        xavier_uniform_(m.kernel, gain=gain)
         if m.bias is not None:
             m.bias.data.fill_(0)
     if classname.find('MinkowskiLinear') != -1:
-        xavier_uniform_(m.linear.weight.data)
+        xavier_uniform_(m.linear.weight.data, gain=gain)
         if m.bias is not None:
             m.bias.data.fill_(0)
     if (classname.find('MinkowskiBatchNorm') != -1):
         m.bn.reset_parameters()
             
-def ME_weights_init_xavier_normal(m):
+def ME_weights_init_xavier_normal(m, gain=1.0):
     classname = m.__class__.__name__
     if classname.find('MinkowskiConvolution') != -1:
-        xavier_normal_(m.kernel)
+        xavier_normal_(m.kernel, gain=gain)
         if m.bias is not None:
             m.bias.data.fill_(0)
     if classname.find('MinkowskiLinear') != -1:
-        xavier_normal_(m.linear.weight.data)
+        xavier_normal_(m.linear.weight.data, gain=gain)
         if m.bias is not None:
             m.bias.data.fill_(0)
     if (classname.find('MinkowskiBatchNorm') != -1):
         m.bn.reset_parameters()
             
-def ME_weights_init_kaiming_uniform(m):
+def ME_weights_init_kaiming_uniform(m, a=0, mode='fan_in', nonlinearity='leaky_relu'):
     classname = m.__class__.__name__
     if classname.find('MinkowskiConvolution') != -1:
-        kaiming_uniform_(m.kernel)
+        kaiming_uniform_(m.kernel, a=a, mode=mode, nonlinearity=nonlinearity)
         if m.bias is not None:
             m.bias.data.fill_(0)
     if classname.find('MinkowskiLinear') != -1:
-        kaiming_uniform_(m.linear.weight.data)
+        kaiming_uniform_(m.linear.weight.data, a=a, mode=mode, nonlinearity=nonlinearity)
         if m.bias is not None:
             m.bias.data.fill_(0)
     if (classname.find('MinkowskiBatchNorm') != -1):
         m.bn.reset_parameters()
             
-def ME_weights_init_kaiming_normal(m):
+def ME_weights_init_kaiming_normal(m, a=0, mode='fan_in', nonlinearity='leaky_relu'):
     classname = m.__class__.__name__
     if classname.find('MinkowskiConvolution') != -1:
-        kaiming_normal_(m.kernel)
+        kaiming_normal_(m.kernel, a=a, mode=mode, nonlinearity=nonlinearity)
         if m.bias is not None:
             m.bias.data.fill_(0)
     if classname.find('MinkowskiLinear') != -1:
-        kaiming_normal_(m.linear.weight.data)
+        kaiming_normal_(m.linear.weight.data, a=a, mode=mode, nonlinearity=nonlinearity)
         if m.bias is not None:
             m.bias.data.fill_(0)
     if (classname.find('MinkowskiBatchNorm') != -1):
