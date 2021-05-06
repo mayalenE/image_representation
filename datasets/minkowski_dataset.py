@@ -199,12 +199,15 @@ class ModelNet40Dataset(Dataset):
         self.config.update(config)
         self.config.update(kwargs)
 
-        fnames = glob.glob(os.path.join(self.config.data_root, "ModelNet40/", f"chair/{self.config.split}/*.off"))
+        if self.config.split == "train":
+            split = "train"
+        elif self.config.split in ["valid", "test"]:
+            split = "test"
+        fnames = glob.glob(os.path.join(self.config.data_root, "ModelNet40/", f"chair/{split}/*.off"))
         fnames = sorted([os.path.relpath(fname, os.path.join(self.config.data_root, "ModelNet40/")) for fname in fnames])
         assert len(fnames) > 0, "No file loaded"
 
-        self.coords = []
-        self.feats = []
+        self.fnames = []
         self.n_images = 0
         # Ignore warnings in obj loader
         o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
@@ -227,20 +230,12 @@ class ModelNet40Dataset(Dataset):
 
             if len(xyz) < 1000:
                 print(f"Skipping {mesh_file}: does not have sufficient CAD sampling density after resampling: {len(xyz)}.")
+
             else:
-                xyz = xyz * self.config.resolution
-                coords = torch.from_numpy(np.floor(xyz)).int()
-                inds = ME.utils.sparse_quantize(
-                    coords, return_index=True, return_maps_only=True
-                )
-
-                feats = torch.ones((len(xyz), 1)) # put color or other features if available
-
-                self.coords.append(coords[inds])
-                self.feats.append(feats[inds])
+                self.fnames.append(file)
                 self.n_images += 1
 
-        self.n_channels = self.feats[0].shape[-1]
+        self.n_channels = 1
         self.img_size = (self.config.resolution, self.config.resolution, self.config.resolution) #TODO: check here!
         self.dtype = torch.float32
 
@@ -275,9 +270,23 @@ class ModelNet40Dataset(Dataset):
         return self.n_images
 
     def __getitem__(self, idx):
+        file = self.fnames[idx]
+        mesh_file = os.path.join(self.config.data_root, "ModelNet40/", file)
+        pcd = o3d.io.read_triangle_mesh(mesh_file)
+        # Normalize to fit the mesh inside a unit cube while preserving aspect ratio
+        vertices = np.asarray(pcd.vertices)
+        vmax = vertices.max(0, keepdims=True)
+        vmin = vertices.min(0, keepdims=True)
+        pcd.vertices = o3d.utility.Vector3dVector(
+            (vertices - vmin) / (vmax - vmin).max()
+        )
+        xyz = resample_mesh(pcd, density=self.config.density)
+        xyz = xyz * self.config.resolution
+        coords, inds = ME.utils.sparse_quantize(xyz, return_index=True)
+
         # image
-        coords_tensor = self.coords[idx]
-        feats_tensor = self.feats[idx]
+        coords_tensor = coords
+        feats_tensor = torch.from_numpy(xyz[inds]).float()
 
         if self.data_augmentation:
             coords_tensor, feats_tensor = self.augment(coords_tensor, feats_tensor)
@@ -294,11 +303,7 @@ class ModelNet40Dataset(Dataset):
         if self.target_transform is not None:
             label = self.target_transform(label)
 
-        inds = ME.utils.sparse_quantize(
-            coords_tensor, return_index=True, return_maps_only=True
-        )
-
-        return {'coords': coords_tensor[inds], 'feats': feats_tensor[inds], 'label': label, 'index': idx}
+        return {'coords': coords_tensor, 'feats': feats_tensor, 'label': label, 'index': idx}
 
 
 class Mnist3dDataset(Dataset):
