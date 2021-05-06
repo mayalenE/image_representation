@@ -77,7 +77,7 @@ class TorchNNRepresentation(Representation, nn.Module):
 
 
         # define the device to use (gpu or cpu)
-        if self.config.device == 'cuda' and not torch.cuda.is_available():
+        if 'cuda' in self.config.device and not torch.cuda.is_available():
             self.config.device = 'cpu'
             warnings.warn("Cannot set model device as GPU because not available, setting it to CPU")
 
