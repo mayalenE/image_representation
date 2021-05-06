@@ -44,18 +44,18 @@ class MEEncoder(Encoder):
 
         # encoding
         if self.config.encoder_conditional_type == "gaussian":
-            ef = self.ef(gf)
+            ef = self.global_pool(self.ef(gf))
             mu, logvar = torch.chunk(ef.F, 2, dim=1)
             zf = self.reparameterize(mu, logvar)
             z = ME.SparseTensor(
                 features=zf,
                 coordinates=ef.C,
-                tensor_stride=ef.tensor_stride,
+                tensor_stride=torch.tensor([2**self.config.n_conv_layers]*self.spatial_dims, device=zf.device),
                 coordinate_manager=ef.coordinate_manager,
             )
             encoder_outputs.update({"z": z, "mu": mu, "logvar": logvar})
         elif self.config.encoder_conditional_type == "deterministic":
-            z = self.ef(gf)
+            z = self.global_pool(self.ef(gf))
             encoder_outputs.update({"z": z})
 
         # attention features
@@ -222,8 +222,16 @@ class MEDumoulinEncoder(MEEncoder):
                                         dimension=self.spatial_dims, bias=True),
             ))
 
+        # global pool
+        self.global_pool = ME.MinkowskiGlobalPooling()
+
         # attention feature
         if self.config.use_attention:
-            self.add_module("af", ME.MinkowskiLinear(self.config.hidden_dim, 4 * self.config.n_latents))
+            self.add_module("af", ME.MinkowskiConvolution(hidden_channels, 4 * self.config.n_latents,
+                                                     kernel_size=1, stride=1, dilation=1,
+                                                     dimension=self.spatial_dims, bias=True
+                                                     ))
 
 
+class MEFDumoulinEncoder(MEDumoulinEncoder):
+    pass
