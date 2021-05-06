@@ -21,7 +21,7 @@ def ME_sparse_to_dense(x, shape=None, min_coordinate=None, contract_stride=True)
     # New coordinates
     batch_indices = x.C[:, 0]
 
-    # TODO, batch first
+    # shift by min coordinate
     if min_coordinate is None:
         min_coordinate, _ = x.C.min(0, keepdim=True)
         min_coordinate = min_coordinate[:, 1:]
@@ -33,9 +33,8 @@ def ME_sparse_to_dense(x, shape=None, min_coordinate=None, contract_stride=True)
             min_coordinate = min_coordinate.unsqueeze(0)
         coords = x.C[:, 1:] - min_coordinate
 
-    assert (
-                   min_coordinate % tensor_stride
-           ).sum() == 0, "The minimum coordinates must be divisible by the tensor stride."
+    assert (min_coordinate % tensor_stride).sum() == 0, "The minimum coordinates must be divisible by the tensor stride."
+
 
     if coords.ndim == 1:
         coords = coords.unsqueeze(1)
@@ -44,6 +43,13 @@ def ME_sparse_to_dense(x, shape=None, min_coordinate=None, contract_stride=True)
     if contract_stride:
         coords = coords // tensor_stride
 
+    # clamp if > shape's max coordinate
+    max_coordinate = torch.tensor(shape[2:], device=coords.device, dtype=coords.dtype)
+    mask = torch.where((coords < max_coordinate).all(axis=1))[0]
+    coords = coords[mask]
+    feats = x.F[mask]
+    batch_indices = batch_indices[mask]
+
     nchannels = x.F.size(1)
     if shape is None:
         size = coords.max(0)[0] + 1
@@ -51,13 +57,15 @@ def ME_sparse_to_dense(x, shape=None, min_coordinate=None, contract_stride=True)
 
     dense_F = torch.zeros(shape, dtype=x.F.dtype, device=x.F.device)
 
+
     tcoords = coords.t().long()
     batch_indices = batch_indices.long()
     exec(
         "dense_F[batch_indices, :, "
         + ", ".join([f"tcoords[{i}]" for i in range(len(tcoords))])
-        + "] = x.F"
+        + "] = feats"
     )
+
 
     tensor_stride = torch.IntTensor(x.tensor_stride)
     return dense_F, min_coordinate, tensor_stride
