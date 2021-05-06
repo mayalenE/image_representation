@@ -318,7 +318,6 @@ class DumoulinDecoder(Decoder):
             nn.LeakyReLU(inplace=True),
             self.convtranspose_module(hidden_channels // 2, self.config.n_channels, kernels_size[0], strides[0], pads[0],
                                output_padding=output_pads[0]),
-            #nn.Sigmoid() #TODO: remove or not sigmoid here?
         ))
         self.lfi.out_connection_type = ("conv", self.config.n_channels)
 
