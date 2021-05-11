@@ -13,7 +13,7 @@ import MinkowskiEngine as ME
 """ ========================================================================================================================
 Base VAE architecture
 ========================================================================================================================="""
-class VAE(MinkowskiNNRepresentation):
+class MEVAE(MinkowskiNNRepresentation):
     '''
     Base Minkowski VAE Class
     '''
@@ -87,7 +87,6 @@ class VAE(MinkowskiNNRepresentation):
 
     def calc_embedding(self, x, **kwargs):
         ''' the function calc outputs a representation vector of size batch_size*n_latents'''
-        x = x.to(self.config.device)
         z = self.network.encoder.calc_embedding(x)
         return z
 
@@ -136,6 +135,9 @@ class VAE(MinkowskiNNRepresentation):
         self.train()
         losses = {}
         for data in train_loader:
+            if 'cuda' in self.config.device:
+                torch.cuda.empty_cache()
+
             coords = data['coords'].to(self.config.device)
             feats = data['feats'].to(self.config.device).type(self.config.dtype)
             x = ME.SparseTensor(feats, coords)
@@ -154,9 +156,6 @@ class VAE(MinkowskiNNRepresentation):
                     losses[k] = [v.cpu().data.item()]
                 else:
                     losses[k].append(v.cpu().data.item())
-
-            if 'cuda' in self.config.device:
-                torch.cuda.empty_cache()
 
         for k, v in losses.items():
             losses[k] = torch.mean(torch.tensor(v))
@@ -186,6 +185,9 @@ class VAE(MinkowskiNNRepresentation):
 
         with torch.no_grad():
             for data in valid_loader:
+                if 'cuda' in self.config.device:
+                    torch.cuda.empty_cache()
+
                 coords = data['coords'].to(self.config.device)
                 feats = data['feats'].to(self.config.device).type(self.config.dtype)
                 x = ME.SparseTensor(feats, coords)
@@ -200,25 +202,23 @@ class VAE(MinkowskiNNRepresentation):
                         losses[k] = v.detach().cpu().unsqueeze(-1)
                     else:
                         losses[k] = torch.vstack([losses[k], v.detach().cpu().unsqueeze(-1)])
+                batch_size = len(x._batchwise_row_indices)
                 if record_valid_images:
                     recon_x = model_outputs["recon_x"]
-                    shape = torch.Size([valid_loader.batch_size, self.config.network.parameters.n_channels] + list(self.config.network.parameters.input_size))
+                    shape = torch.Size([batch_size, self.config.network.parameters.n_channels] + list(self.config.network.parameters.input_size))
                     min_coordinate = torch.zeros(len(self.config.network.parameters.input_size), device=self.config.device, dtype=torch.int32)
                     x = ME_sparse_to_dense(x, shape=shape, min_coordinate=min_coordinate)[0]
                     recon_x = ME_sparse_to_dense(recon_x, shape=shape, min_coordinate=min_coordinate)[0]
                     images.append(x)
                     recon_images.append(recon_x)
                 if record_embeddings:
-                    shape = torch.Size([valid_loader.batch_size, self.config.network.parameters.n_latents] + [1]*len(self.config.network.parameters.input_size))
+                    shape = torch.Size([batch_size, self.config.network.parameters.n_latents] + [1]*len(self.config.network.parameters.input_size))
                     min_coordinate = torch.zeros(len(self.config.network.parameters.input_size), device=self.config.device, dtype=torch.int32)
                     z = ME_sparse_to_dense(model_outputs["z"], shape=shape, min_coordinate=min_coordinate)[0].squeeze()
                     embeddings.append(z)
                     labels.append(data["label"])
                     if not record_valid_images:
                         images.append(x)
-
-                if 'cuda' in self.config.device:
-                    torch.cuda.empty_cache()
 
         if record_valid_images:
             recon_images = torch.cat(recon_images)
@@ -269,14 +269,14 @@ State-of-the-art modifications of the basic VAE
 ========================================================================================================================="""
 
 
-class BetaVAE(VAE):
+class MEBetaVAE(MEVAE):
     '''
     BetaVAE Class
     '''
 
     @staticmethod
     def default_config():
-        default_config = VAE.default_config()
+        default_config = MEVAE.default_config()
 
         # loss parameters
         default_config.loss.name = "BetaVAE"
@@ -286,17 +286,17 @@ class BetaVAE(VAE):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        VAE.__init__(self, config, **kwargs)
+        MEVAE.__init__(self, config, **kwargs)
 
 
-class AnnealedVAE(VAE):
+class MEAnnealedVAE(MEVAE):
     '''
     AnnealedVAE Class
     '''
 
     @staticmethod
     def default_config():
-        default_config = VAE.default_config()
+        default_config = MEVAE.default_config()
 
         # loss parameters
         default_config.loss.name = "AnnealedVAE"
@@ -309,16 +309,16 @@ class AnnealedVAE(VAE):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        VAE.__init__(self, config, **kwargs)
+        MEVAE.__init__(self, config, **kwargs)
 
-class BetaTCVAE(VAE):
+class MEBetaTCVAE(MEVAE):
     '''
     BetaTCVAE Class
     '''
 
     @staticmethod
     def default_config():
-        default_config = VAE.default_config()
+        default_config = MEVAE.default_config()
 
         # loss parameters
         default_config.loss.name = "BetaTCVAE"
@@ -332,7 +332,7 @@ class BetaTCVAE(VAE):
         return default_config
 
     def __init__(self, config=None, **kwargs):
-        VAE.__init__(self, config, **kwargs)
+        MEVAE.__init__(self, config, **kwargs)
 
 
     def train_epoch(self, train_loader):
@@ -343,6 +343,9 @@ class BetaTCVAE(VAE):
         self.loss_f.dataset_size = len(train_loader.dataset)
 
         for data in train_loader:
+            if 'cuda' in self.config.device:
+                torch.cuda.empty_cache()
+
             coords = data['coords'].to(self.config.device)
             feats = data['feats'].to(self.config.device).type(self.config.dtype)
             x = ME.SparseTensor(feats, coords)
@@ -362,8 +365,6 @@ class BetaTCVAE(VAE):
                 else:
                     losses[k].append(v.data.item())
 
-            if 'cuda' in self.config.device:
-                torch.cuda.empty_cache()
 
         for k, v in losses.items():
             losses[k] = torch.mean(torch.tensor(v))
