@@ -205,7 +205,10 @@ class QuadrupletNet(nn.Module):
 
         if record_embeddings:
             if len(images.shape) == 5:
-                images = images[:, :3, self.config.network.parameters.input_size[0] // 2, :, :] #we take slice at middle depth only
+                images = images[:, :, self.config.network.parameters.input_size[0] // 2, :,
+                         :]  # we take slice at middle depth only
+            if (images.shape[1] != 1) or (images.shape[1] != 3):
+                images = images[:, :3, ...]
             images = resize_embeddings(images)
             self.logger.add_embedding(
                 embeddings,

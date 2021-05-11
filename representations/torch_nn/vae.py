@@ -93,7 +93,7 @@ class VAE(TorchNNRepresentation):
 
     def calc_embedding(self, x, **kwargs):
         ''' the function calc outputs a representation vector of size batch_size*n_latents'''
-        x = x.to(self.config.device)
+        x = x.to(self.config.device).type(self.config.dtype)
         z = self.network.encoder.calc_embedding(x)
         return z
 
@@ -237,7 +237,9 @@ class VAE(TorchNNRepresentation):
 
         if record_embeddings:
             if len(images.shape) == 5:
-                images = images[:, :3, self.config.network.parameters.input_size[0] // 2, :, :] #we take slice at middle depth only
+                images = images[:, :, self.config.network.parameters.input_size[0] // 2, :, :] #we take slice at middle depth only
+            if (images.shape[1] != 1) or (images.shape[1] != 3):
+                images = images[:, :3, ...]
             images = resize_embeddings(images)
             self.logger.add_embedding(
                 embeddings,

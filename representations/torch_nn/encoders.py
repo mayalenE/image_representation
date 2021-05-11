@@ -146,8 +146,8 @@ class BurgessEncoder(Encoder):
         assert torch.all(torch.tensor([self.config.input_size[i] == self.config.input_size[0] for i in range(1, len(self.config.input_size))])), "BurgessEncoder needs a square image input size"
 
         # network architecture
-        if self.config.hidden_channels is None:
-            self.config.hidden_channels = 32
+        if self.config.hidden_channel is None:
+            self.config.hidden_channel = 8
         hidden_channels = self.config.hidden_channels
         if self.config.hidden_dim is None:
             self.config.hidden_dim = 256
@@ -416,12 +416,12 @@ class DumoulinEncoder(Encoder):
 
     def forward(self, x):
         # batch norm cannot deal with batch_size 1 in train mode
-        if self.training and x.size(0) == 1:
+        if self.training and x.size()[0] == 1:
             self.eval()
-            encoder_outputs = Encoder.forward(x)
+            encoder_outputs = Encoder.forward(self, x)
             self.train()
         else:
-            encoder_outputs = Encoder.forward(x)
+            encoder_outputs = Encoder.forward(self, x)
         return encoder_outputs
 
 

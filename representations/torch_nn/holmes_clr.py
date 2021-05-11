@@ -1463,7 +1463,10 @@ class HOLMES_CLR(TorchNNRepresentation):
                 leaf_labels = torch.cat([labels[i] for i in leaf_x_ids])
                 leaf_images = torch.cat([images[i] for i in leaf_x_ids])
                 if len(leaf_images.shape) == 5:
-                    leaf_images = leaf_images[:, :3, self.config.node.network.parameters.input_size[0] // 2, :, :]
+                    leaf_images = leaf_images[:, :, self.config.network.parameters.input_size[0] // 2, :,
+                                       :]  # we take slice at middle depth only
+                if (leaf_images.shape[1] != 1) or (leaf_images.shape[1] != 3):
+                    leaf_images = leaf_images[:, :3, ...]
                 leaf_images = resize_embeddings(leaf_images)
                 try:
                     self.logger.add_embedding(

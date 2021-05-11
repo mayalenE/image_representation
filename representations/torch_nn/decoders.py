@@ -236,8 +236,8 @@ class DumoulinDecoder(Decoder):
         assert self.config.n_conv_layers == power - 2, "The number of convolutional layers in DumoulinEncoder must be log(input_size, 2) - 2 "
 
         # network architecture
-        if self.config.hidden_channels is None:
-            self.config.hidden_channels = int(512 // math.pow(2, self.config.n_conv_layers))
+        if self.config.hidden_channel is None:
+            self.config.hidden_channel = 8
         hidden_channels = self.config.hidden_channels
         kernels_size = [4, 4] * self.config.n_conv_layers
         strides = [1, 2] * self.config.n_conv_layers
@@ -320,6 +320,16 @@ class DumoulinDecoder(Decoder):
                                output_padding=output_pads[0]),
         ))
         self.lfi.out_connection_type = ("conv", self.config.n_channels)
+
+    def forward(self, z):
+        # batch norm cannot deal with batch_size 1 in train mode
+        if self.training and z.size()[0] == 1:
+            self.eval()
+            encoder_outputs = Decoder.forward(self, z)
+            self.train()
+        else:
+            encoder_outputs = Decoder.forward(self, z)
+        return encoder_outputs
 
 
 class MNISTDecoder(Decoder):

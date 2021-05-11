@@ -156,7 +156,7 @@ class TorchNNRepresentation(Representation, nn.Module):
         if logger_config.folder is not None:
             if not os.path.exists(logger_config.folder):
                 os.makedirs(logger_config.folder)
-            self.logger = SummaryWriter(logger_config.folder, 'w')
+            self.logger = SummaryWriter(logger_config.folder)
         else:
             self.logger = None
 
@@ -193,6 +193,16 @@ class TorchNNRepresentation(Representation, nn.Module):
         }
 
         torch.save(network, filepath)
+
+    def get_checkpoint(self):
+        checkpoint = {
+            "epoch": self.n_epochs,
+            "type": self.__class__.__name__,
+            "config": self.config,
+            "network_state_dict": self.network.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict()
+        }
+        return checkpoint
 
     @staticmethod
     def load(filepath='representation.pickle', map_location='cpu'):
