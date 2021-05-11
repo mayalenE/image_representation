@@ -1000,6 +1000,158 @@ class EvocraftDataset(Dataset):
                  labels=np.asarray(self.labels))
         return
 
+# ===========================
+# SimCells Dataset
+# ===========================
+
+class SimCellsDataset(Dataset):
+    """ SimCells dataset"""
+
+    @staticmethod
+    def default_config():
+        default_config = Dict()
+
+        # load data
+        default_config.data_root = None
+        default_config.split = "train"
+
+        # process data
+        default_config.preprocess = None
+        default_config.img_size = None
+        default_config.n_channels = 4
+        default_config.data_augmentation = False
+        default_config.transform = None
+        default_config.target_transform = None
+
+        return default_config
+
+    def __init__(self, config={}, **kwargs):
+        self.config = self.__class__.default_config()
+        self.config.update(config)
+        self.config.update(kwargs)
+
+        if self.config.data_root is None:
+            self.n_images = 0
+            if self.config.img_size is not None:
+                self.images = torch.zeros((0, 4, self.config.img_size[0], self.config.img_size[1]))
+                self.img_size = self.config.img_size
+                self.n_channels = self.config.n_channels
+            self.labels = torch.zeros((0, 1), dtype=torch.long)
+
+        else:
+            # load HDF5 SimCells dataset
+            dataset_filepath = os.path.join(self.config.data_root, 'dataset', 'dataset.h5')
+            with h5py.File(dataset_filepath, 'r') as file:
+                if 'n_data' in file[self.config.split]:
+                    self.n_images = int(file[self.config.split]['n_data'])
+                else:
+                    self.n_images = int(file[self.config.split]['observations'].shape[0])
+
+                self.has_labels = bool('labels' in file[self.config.split])
+                if self.has_labels:
+                    self.labels = torch.LongTensor(file[self.config.split]['labels'])
+                else:
+                    self.labels = torch.LongTensor([-1] * self.n_images)
+
+                self.images = torch.Tensor(file[self.config.split]['observations']).float()
+                if self.config.preprocess is not None:
+                    self.images = self.config.preprocess(self.images)
+
+                self.n_channels = 1
+                if self.images.ndim == 3:
+                    self.images = self.images.unsqueeze(1)
+                self.img_size = (self.images.shape[2], self.images.shape[3])
+
+        # data augmentation boolean
+        self.data_augmentation = self.config.data_augmentation
+        if self.data_augmentation:
+            # SimCells Augment
+            ## rotation
+            if self.n_channels == 1:
+                fill = (0,)
+            else:
+                fill = 0
+            radius = max(self.img_size[0], self.img_size[1]) / 2
+            padding_size = int(np.sqrt(2 * np.power(radius, 2)) - radius)
+            self.pad = Pad(padding_size, padding_mode='edge')
+            self.center_crop = CenterCrop(self.img_size)
+            self.random_rotation = RandomApply([self.pad, RandomRotation(20, resample=Image.BILINEAR, fill=fill), self.center_crop], p=0.6)
+            ## horizontal flip
+            self.random_horizontal_flip = RandomHorizontalFlip(0.2)
+            self.random_vertical_flip = RandomVerticalFlip(0.2)
+            self.augment = Compose([to_PIL_image, self.random_rotation, self.random_horizontal_flip, self.random_vertical_flip, to_tensor])
+
+
+        # the user can additionally specify a transform in the config
+        self.transform = self.config.transform
+        self.target_transform = self.config.target_transform
+
+    def add(self, image, label):
+        if self.config.preprocess is not None:
+            image = self.config.preprocess(image)
+        self.images = torch.cat([self.images, image])
+        self.labels = torch.cat([self.labels, label])
+        self.n_images += 1
+
+    def update(self, n_images, images, labels=None):
+        """update online the dataset"""
+        if labels is None:
+            labels = torch.Tensor([-1] * n_images)
+        assert n_images == images.shape[0] == labels.shape[0], print(
+            'ERROR: the given dataset size ({0}) mismatch with observations size ({1}) and labels size ({2})'.format(
+                n_images, images.shape[0], labels.shape[0]))
+
+        self.n_images = int(n_images)
+        self.images = images
+        self.labels = labels
+
+    def get_image(self, image_idx, augment=False, transform=True):
+        image = self.images[image_idx]
+        if augment and self.data_augmentation:
+            image = self.augment(image)
+        if transform and self.transform is not None:
+            image = self.transform(image)
+        return image
+
+    def get_augmented_batch(self, image_ids, augment=True, transform=True):
+        images_aug = []
+        for img_idx in image_ids:
+            image_aug = self.get_image(img_idx, augment=augment, transform=transform)
+            images_aug.append(image_aug)
+        images_aug = torch.stack(images_aug, dim=0)
+        return images_aug
+
+    def __len__(self):
+        return self.n_images
+
+    def __getitem__(self, idx):
+        # image
+        img_tensor = self.images[idx]
+
+
+        if self.data_augmentation:
+            img_tensor = self.augment(img_tensor)
+
+        if self.transform is not None:
+            img_tensor = self.transform(img_tensor)
+
+        # label
+        if self.labels[idx] is not None and not np.isnan(self.labels[idx]):
+            label = int(self.labels[idx])
+        else:
+            label = -1
+
+
+        if self.target_transform is not None:
+            label = self.target_transform(label)
+
+        return {'obs': img_tensor, 'label': label, 'index': idx}
+
+    def save(self, output_npz_filepath):
+        np.savez(output_npz_filepath, n_images=self.n_images, images=np.stack(self.images),
+                 labels=np.asarray(self.labels))
+        return
+
 
 
 # ===========================

@@ -430,3 +430,120 @@ class Mnist3dDataset(Dataset):
 
         return {'coords': coords_tensor[inds], 'feats': feats_tensor[inds], 'label': label, 'index': idx}
 
+
+# ===========================
+# SimCells Dataset
+# ===========================
+
+class SimCellsDataset(Dataset):
+    """ SimCells dataset"""
+
+    @staticmethod
+    def default_config():
+        default_config = Dict()
+
+        # load data
+        default_config.data_root = None
+        default_config.split = "train"
+
+        # process data
+        default_config.preprocess = None
+        default_config.img_size = None
+        default_config.n_channels = 4
+        default_config.data_augmentation = False
+        default_config.transform = None
+        default_config.target_transform = None
+
+        return default_config
+
+    def __init__(self, config={}, **kwargs):
+        self.config = self.__class__.default_config()
+        self.config.update(config)
+        self.config.update(kwargs)
+
+        if self.config.data_root is None:
+            self.n_images = 0
+            if self.config.img_size is not None:
+                self.coords = []
+                self.feats = []
+                self.img_size = self.config.img_size
+                self.n_channels = self.config.n_channels
+            self.labels = torch.zeros((0, 1), dtype=torch.long)
+
+        else:
+            # TODO: load HDF5 SimCells dataset
+            pass
+
+        # data augmentation boolean
+        self.data_augmentation = self.config.data_augmentation
+        if self.data_augmentation:
+            self.augment = [] #TODO: augmentation
+
+        # the user can additionally specify a transform in the config
+        self.transform = self.config.transform
+        self.target_transform = self.config.target_transform
+
+    def add(self, image, label):
+        coords = image.C
+        feats = image.F
+        if self.config.preprocess is not None:
+            coords, feats = self.config.preprocess(coords, feats)
+        self.coords.append(coords)
+        self.feats.append(feats)
+        self.labels = torch.cat([self.labels, label])
+        self.n_images += 1
+
+    def update(self, n_images, images, labels=None):
+        """update online the dataset"""
+        if labels is None:
+            labels = torch.Tensor([-1] * n_images)
+        assert n_images == images.shape[0] == labels.shape[0], print(
+            'ERROR: the given dataset size ({0}) mismatch with observations size ({1}) and labels size ({2})'.format(
+                n_images, images.shape[0], labels.shape[0]))
+
+        self.n_images = int(n_images)
+        self.images = images
+        self.labels = labels
+
+    def get_image(self, image_idx, augment=False, transform=True):
+        image = self.images[image_idx]
+        if augment and self.data_augmentation:
+            image = self.augment(image)
+        if transform and self.transform is not None:
+            image = self.transform(image)
+        return image
+
+    def get_augmented_batch(self, image_ids, augment=True, transform=True):
+        images_aug = []
+        for img_idx in image_ids:
+            image_aug = self.get_image(img_idx, augment=augment, transform=transform)
+            images_aug.append(image_aug)
+        images_aug = torch.stack(images_aug, dim=0)
+        return images_aug
+
+    def __len__(self):
+        return self.n_images
+
+    def __getitem__(self, idx):
+        # image
+        coords_tensor = self.coords[idx]
+        feats_tensor = self.feats[idx]
+
+        if self.data_augmentation:
+            coords_tensor, feats_tensor = self.augment(coords_tensor, feats_tensor)
+
+        if self.transform is not None:
+            coords_tensor, feats_tensor = self.transform(coords_tensor, feats_tensor)
+
+        # label
+        if self.labels[idx] is not None and not np.isnan(self.labels[idx]):
+            label = int(self.labels[idx])
+        else:
+            label = -1
+
+        if self.target_transform is not None:
+            label = self.target_transform(label)
+
+
+        return {'coords': coords_tensor, 'feats': feats_tensor, 'label': label, 'index': idx}
+
