@@ -55,7 +55,13 @@ class MEEncoder(Encoder):
             )
             encoder_outputs.update({"z": z, "mu": mu, "logvar": logvar})
         elif self.config.encoder_conditional_type == "deterministic":
-            z = self.global_pool(self.ef(gf))
+            ef = self.global_pool(self.ef(gf))
+            z = ME.SparseTensor(
+                features=ef.F,
+                coordinates=ef.C,
+                tensor_stride=torch.tensor([2 ** self.config.n_conv_layers] * self.spatial_dims, device=ef.device),
+                coordinate_manager=ef.coordinate_manager,
+            )
             encoder_outputs.update({"z": z})
 
         # attention features
@@ -124,8 +130,9 @@ class MEDumoulinEncoder(MEEncoder):
         assert self.config.n_conv_layers == power, "The number of convolutional layers in DumoulinEncoder must be log2(input_size) "
 
         # network architecture
-        if self.config.hidden_channels is None:
-            self.config.hidden_channels = int(512 // math.pow(2, self.config.n_conv_layers))
+        if self.config.hidden_channel is None:
+            self.config.hidden_channel = 8
+
         hidden_channels = self.config.hidden_channels
         kernels_size = [4, 4] * self.config.n_conv_layers
         strides = [1, 2] * self.config.n_conv_layers
@@ -144,6 +151,7 @@ class MEDumoulinEncoder(MEEncoder):
             feature_map_sizes[2 * self.config.feature_layer + 1][0],
             feature_map_sizes[2 * self.config.feature_layer + 1][1])
         self.lf = nn.Sequential()
+
         for conv_layer_id in range(self.config.feature_layer + 1):
             if conv_layer_id == 0:
                 self.lf.add_module("conv_{}".format(conv_layer_id), nn.Sequential(
@@ -231,6 +239,16 @@ class MEDumoulinEncoder(MEEncoder):
                                                      kernel_size=1, stride=1, dilation=1,
                                                      dimension=self.spatial_dims, bias=True
                                                      ))
+
+    def forward(self, x):
+        # batch norm cannot deal with batch_size 1 in train mode
+        if self.training and len(x._batchwise_row_indices) == 1:
+            self.eval()
+            encoder_outputs = MEEncoder.forward(self, x)
+            self.train()
+        else:
+            encoder_outputs = MEEncoder.forward(self, x)
+        return encoder_outputs
 
 
 class MEFDumoulinEncoder(MEDumoulinEncoder):

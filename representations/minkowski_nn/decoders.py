@@ -60,9 +60,12 @@ class MEDumoulinDecoder(Decoder):
         strides = [1, 2] * self.config.n_conv_layers
         dils = [1, 1] * self.config.n_conv_layers
 
+        if self.config.hidden_channel is None:
+            self.config.hidden_channel = 8
+
 
         # encoder feature inverse
-        hidden_channels = int(8 * math.pow(2, self.config.n_conv_layers))
+        hidden_channels = int(self.config.hidden_channels * math.pow(2, self.config.n_conv_layers))
         self.efi = nn.Sequential(
             ME.MinkowskiConvolution(self.config.n_latents, hidden_channels,
                                                        kernel_size=1, stride=1, #dilation=1,
@@ -199,7 +202,7 @@ class MEDumoulinDecoder(Decoder):
         out_cls.append(gfi_cls)
         gfi_target = self.get_target(gfi, target_key)
         out_targets.append(gfi_target)
-        gfi_keep = (gfi_cls.F > 0).squeeze()
+        gfi_keep = (gfi_cls.F > 0).squeeze(-1)
         if self.training:
             gfi_keep += gfi_target
         if gfi_keep.sum() == 0:
@@ -222,7 +225,7 @@ class MEDumoulinDecoder(Decoder):
             out_cls.append(gfi_out_cls)
             gfi_out_target = self.get_target(gfi_out, target_key)
             out_targets.append(gfi_out_target)
-            gfi_out_keep = (gfi_out_cls.F > 0).squeeze()
+            gfi_out_keep = (gfi_out_cls.F > 0).squeeze(-1)
             if self.training:
                 gfi_out_keep += gfi_out_target
             if gfi_out_keep.sum() == 0:
@@ -245,7 +248,7 @@ class MEDumoulinDecoder(Decoder):
             out_cls.append(lfi_out_cls)
             lfi_out_target = self.get_target(lfi_out, target_key)
             out_targets.append(lfi_out_target)
-            lfi_out_keep = (lfi_out_cls.F > 0).squeeze()
+            lfi_out_keep = (lfi_out_cls.F > 0).squeeze(-1)
             if self.training:
                 lfi_out_keep += lfi_out_target
             if lfi_out_keep.sum() == 0:
@@ -264,7 +267,7 @@ class MEDumoulinDecoder(Decoder):
         out_cls.append(recon_x_cls)
         recon_x_target = self.get_target(recon_x, target_key)
         out_targets.append(recon_x_target)
-        recon_x_keep = (recon_x_cls.F > 0).squeeze()
+        recon_x_keep = (recon_x_cls.F > 0).squeeze(-1)
         recon_x = self.pruning(recon_x, recon_x_keep)
 
         # decoder output
