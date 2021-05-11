@@ -12,9 +12,10 @@ def get_loss(loss_name):
 
 
 class MEVAELoss(BaseLoss):
-    def __init__(self,  reconstruction_dist="bernoulli", reconstruct_features=True, **kwargs):
+    def __init__(self,  reconstruct_coordinates=True, reconstruct_features=True, reconstruction_dist="bernoulli", **kwargs):
 
         self.reconstruction_dist = reconstruction_dist
+        self.reconstruct_coordinates = reconstruct_coordinates
         self.reconstruct_features = reconstruct_features
 
         self.input_keys_list = ['x', 'recon_x',
@@ -36,9 +37,10 @@ class MEVAELoss(BaseLoss):
 
         # coordinates reconstruction loss
         recon_c_loss = torch.tensor([0.0], device=mu.device)
-        for out_cl, target in zip(out_cls, out_targets):
-            curr_loss = _reconstruction_loss(out_cl.F.squeeze(), target.type(out_cl.F.dtype), "bernoulli", reduction=reduction)
-            recon_c_loss += curr_loss / len(out_cls)
+        if self.reconstruct_coordinates:
+            for out_cl, target in zip(out_cls, out_targets):
+                curr_loss = _reconstruction_loss(out_cl.F.squeeze(-1), target.type(out_cl.F.dtype), "bernoulli", reduction=reduction)
+                recon_c_loss += curr_loss / len(out_cls)
 
         # feature loss on closest coordinates from target
         recon_f_loss = torch.tensor([0.0], device=mu.device)
@@ -64,7 +66,7 @@ class MEVAELoss(BaseLoss):
                         closest_x_coodinates = (coords_x - cur_coords_recon).pow(2).sum(-1).min(-1).indices
                         recon_f_loss += _reconstruction_loss(feats_recon[cur_inds],
                                                              feats_x[closest_x_coodinates],
-                                                             self.reconstruction_dist, reduction=reduction)
+                                                             reconstruction_dist=self.reconstruction_dist, reduction=reduction)
 
         # KLD loss
         KLD_loss, KLD_per_latent_dim, KLD_var = _kld_loss(mu, logvar, reduction=reduction)
