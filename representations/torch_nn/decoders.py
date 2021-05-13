@@ -48,7 +48,7 @@ class Decoder(nn.Module, metaclass=ABCMeta):
             self.convtranspose_module = nn.ConvTranspose3d
             self.batchnorm_module = nn.BatchNorm3d
 
-        self.output_keys_list = ["z", "gfi", "lfi", "recon_x"]
+        self.output_keys_list = ["gfi", "lfi", "recon_x"] # removed z already in encoder outputs
 
     def forward(self, z):
         if z.dim() == 2 and type(self).__name__ == "DumoulinDecoder":  # B*n_latents -> B*n_latents*1*1
@@ -64,7 +64,7 @@ class Decoder(nn.Module, metaclass=ABCMeta):
         # recon_x
         recon_x = self.lfi(lfi)
         # decoder output
-        decoder_outputs = {"z": z, "gfi": gfi, "lfi": lfi, "recon_x": recon_x}
+        decoder_outputs = {"gfi": gfi, "lfi": lfi, "recon_x": recon_x}
 
         return decoder_outputs
 

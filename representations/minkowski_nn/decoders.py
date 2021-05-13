@@ -17,7 +17,7 @@ class Decoder(Decoder):
         assert 2 <= len(self.config.input_size) <= 3, "Image must be 2D or 3D"
         self.spatial_dims = len(self.config.input_size)
 
-        self.output_keys_list = ["z", "gfi", "lfi", "recon_x"]
+        self.output_keys_list = ["gfi", "lfi", "recon_x"]
 
     def forward(self, z, *args):
 
@@ -28,7 +28,7 @@ class Decoder(Decoder):
         # recon_x
         recon_x = self.lfi(lfi)
         # decoder output
-        decoder_outputs = {"z": z, "gfi": gfi, "lfi": lfi, "recon_x": recon_x}
+        decoder_outputs = {"gfi": gfi, "lfi": lfi, "recon_x": recon_x}
 
         return decoder_outputs
 
@@ -207,7 +207,7 @@ class MEDumoulinDecoder(Decoder):
             gfi_keep += gfi_target
         if gfi_keep.sum() == 0:
             empty_outputs = self.empty_return()
-            empty_outputs.update({"z": z, "out_cls": out_cls, "out_targets": out_targets})
+            empty_outputs.update({"out_cls": out_cls, "out_targets": out_targets})
             try:
                 print(empty_outputs)
             except:
@@ -230,7 +230,7 @@ class MEDumoulinDecoder(Decoder):
                 gfi_out_keep += gfi_out_target
             if gfi_out_keep.sum() == 0:
                 empty_outputs = self.empty_return()
-                empty_outputs.update({"z": z, "gfi": gfi, "out_cls": out_cls, "out_targets": out_targets})
+                empty_outputs.update({"gfi": gfi, "out_cls": out_cls, "out_targets": out_targets})
                 try:
                     print(empty_outputs)
                 except:
@@ -253,7 +253,7 @@ class MEDumoulinDecoder(Decoder):
                 lfi_out_keep += lfi_out_target
             if lfi_out_keep.sum() == 0:
                 empty_outputs = self.empty_return()
-                empty_outputs.update({"z": z, "gfi": gfi, "lfi": lfi, "out_cls": out_cls, "out_targets": out_targets})
+                empty_outputs.update({"gfi": gfi, "lfi": lfi, "out_cls": out_cls, "out_targets": out_targets})
                 try:
                     print(empty_outputs)
                 except:
@@ -271,7 +271,7 @@ class MEDumoulinDecoder(Decoder):
         recon_x = self.pruning(recon_x, recon_x_keep)
 
         # decoder output
-        decoder_outputs = {"z": z, "gfi": gfi, "lfi": lfi, "recon_x": recon_x, "out_cls": out_cls, "out_targets": out_targets}
+        decoder_outputs = {"gfi": gfi, "lfi": lfi, "recon_x": recon_x, "out_cls": out_cls, "out_targets": out_targets}
 
         return decoder_outputs
 
