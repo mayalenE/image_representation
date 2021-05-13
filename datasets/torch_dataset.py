@@ -1032,10 +1032,9 @@ class SimCellsDataset(Dataset):
 
         if self.config.data_root is None:
             self.n_images = 0
-            if self.config.img_size is not None:
-                self.images = torch.zeros((0, 4, self.config.img_size[0], self.config.img_size[1]))
-                self.img_size = self.config.img_size
-                self.n_channels = self.config.n_channels
+            self.img_size = self.config.img_size
+            self.n_channels = self.config.n_channels
+            self.images = torch.zeros((0, self.n_channels, self.img_size[0], self.img_size[1]))
             self.labels = torch.zeros((0, 1), dtype=torch.long)
 
         else:
