@@ -200,12 +200,12 @@ class VAE(TorchNNRepresentation):
                         losses[k] = torch.vstack([losses[k], v.detach().cpu().unsqueeze(-1)])
 
                 if record_valid_images:
-                    recon_x = model_outputs["recon_x"]
-                    images.append(x)
+                    recon_x = model_outputs["recon_x"].cpu().detach()
+                    images.append(x.cpu().detach())
                     recon_images.append(recon_x)
 
                 if record_embeddings:
-                    embeddings.append(model_outputs["z"])
+                    embeddings.append(model_outputs["z"].cpu().detach().view(x.shape[0], self.config.network.parameters.n_latents))
                     labels.append(data["label"])
                     if not record_valid_images:
                         images.append(x)

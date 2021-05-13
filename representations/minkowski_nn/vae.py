@@ -207,14 +207,14 @@ class MEVAE(MinkowskiNNRepresentation):
                     recon_x = model_outputs["recon_x"]
                     shape = torch.Size([batch_size, self.config.network.parameters.n_channels] + list(self.config.network.parameters.input_size))
                     min_coordinate = torch.zeros(len(self.config.network.parameters.input_size), device=self.config.device, dtype=torch.int32)
-                    x = ME_sparse_to_dense(x, shape=shape, min_coordinate=min_coordinate)[0]
-                    recon_x = ME_sparse_to_dense(recon_x, shape=shape, min_coordinate=min_coordinate)[0]
+                    x = ME_sparse_to_dense(x, shape=shape, min_coordinate=min_coordinate)[0].cpu().detach()
+                    recon_x = ME_sparse_to_dense(recon_x, shape=shape, min_coordinate=min_coordinate)[0].cpu().detach()
                     images.append(x)
                     recon_images.append(recon_x)
                 if record_embeddings:
                     shape = torch.Size([batch_size, self.config.network.parameters.n_latents] + [1]*len(self.config.network.parameters.input_size))
                     min_coordinate = torch.zeros(len(self.config.network.parameters.input_size), device=self.config.device, dtype=torch.int32)
-                    z = ME_sparse_to_dense(model_outputs["z"], shape=shape, min_coordinate=min_coordinate)[0].squeeze()
+                    z = ME_sparse_to_dense(model_outputs["z"], shape=shape, min_coordinate=min_coordinate)[0].cpu().detach().view(batch_size, self.config.network.parameters.n_latents)
                     embeddings.append(z)
                     labels.append(data["label"])
                     if not record_valid_images:
