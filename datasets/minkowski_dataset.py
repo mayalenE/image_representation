@@ -7,6 +7,193 @@ import os
 import glob
 import open3d as o3d
 import h5py
+from collections import OrderedDict
+import warnings
+
+class HDF5Dataset(Dataset):
+    """ Represents an abstract HDF5 dataset.
+
+    Input params:
+        filepath: Path to the dataset (if None: creates an empty dataset).
+        preprocess: PyTorch transform to apply when creating a new data tensor instance (default=None).
+        transform: PyTorch transform to apply on-the-fly to every data tensor instance (default=None).
+        label_transform: PyTorch transform to apply on-the-fly to every data label instance (default=None).
+        Configuration:
+            obs_size: size of a data tensor (D,H,W) for 3D or (H,W) for 2D
+            n_channels: number of channels of a data tensor
+            load_data: If True, loads all the data immediately into RAM. Use this if
+                the dataset is fits into memory. Otherwise, leave this at false and
+                the data will load lazily.
+            data_cache_size: Number of HDF5 files that can be cached in the cache (default=3).
+    """
+
+    @staticmethod
+    def default_config():
+        default_config = Dict()
+
+        # data info
+        default_config.coords_size = 0 # 4 for (B,D,H,W) tensors or 3 for (B,H,W) tensors
+        default_config.coords_dtype = "int"
+        default_config.feats_size = 0  #n_channels
+        default_config.feats_dtype = "float32"
+        default_config.label_size = (1, )
+        default_config.label_dtype = "long"
+
+        # load data
+        default_config.load_data = False
+        default_config.data_cache_size = 100
+
+        return default_config
+
+    def __init__(self, filepath=None, coords_preprocess=None, feats_preprocess=None, coords_transform=None, feats_transform=None, label_transform=None, config={}, **kwargs):
+        self.config = self.__class__.default_config()
+        self.config.update(config)
+        self.config.update(kwargs)
+
+        self.filepath = filepath
+        self.coords_preprocess = coords_preprocess
+        self.feats_preprocess = feats_preprocess
+        self.coords_transform = coords_transform
+        self.feats_transform = feats_transform
+        self.label_transform = label_transform
+
+        if not os.path.exists(self.filepath):
+            warnings.warn(f"Filepath {filepath} does not exists, creating an empty Dataset")
+
+            self.data_ids = set()
+            self.data_cache = OrderedDict()
+            self.data_ids_in_cache = []
+
+            # create empty dataset to be filled incrementally by the add_data function
+            # different tensor sizes can be handled by h5py special dtype (each tensor must be flatten to 1D though)
+            coords_dtype = h5py.special_dtype(vlen=np.dtype(self.config.coords_dtype))
+            feats_dtype = h5py.special_dtype(vlen=np.dtype(self.config.feats_dtype))
+            with h5py.File(self.filepath, "w") as file:
+                file.attrs["n_obs"] = 0
+                # unlimited number of data can be appended with maxshape=None
+                file.create_dataset("coordinates", (0,) , coords_dtype, maxshape=(None,))
+                file.create_dataset("features", (0,), feats_dtype, maxshape=(None,))
+                file.create_dataset("labels", (0,) + self.config.label_size, self.config.label_dtype, maxshape=(None,) + self.config.label_size)
+
+        else:
+            # load HDF5  dataset
+            with h5py.File(self.filepath, "r") as file:
+                if "n_obs" in file:
+                    n_obs = int(file["n_obs"])
+                else:
+                    n_obs = int(file["coordinates"].shape[0])
+
+                self.data_ids = set(range(n_obs))
+                self.data_cache = OrderedDict()
+                self.data_ids_in_cache = []
+
+                if self.config.load_data:
+                    for data_idx in self.data_ids:
+                        self.data_cache[data_idx] = {
+                            "coords": torch.Tensor(file["coordinates"][data_idx]).type(eval(f"torch.{self.config.coords_dtype}")).view(-1, self.config.coords_size),
+                            "feats": torch.Tensor(file["features"][data_idx]).type(eval(f"torch.{self.config.feats_dtype}")).view(-1, self.config.feats_size),
+                            "label": torch.Tensor(file["labels"][data_idx]).type(eval(f"torch.{self.config.label_dtype}"))}
+                        self.data_ids_in_cache.append(data_idx)
+                else:
+                    max_idx = min(len(self.data_ids), self.config.data_cache_size)
+                    for data_idx in range(max_idx):
+                        self.data_cache[data_idx] = {
+                            "coords": torch.Tensor(file["coordinates"][data_idx]).type(eval(f"torch.{self.config.coords_dtype}")).view(-1, self.config.coords_size),
+                            "feats": torch.Tensor(file["features"][data_idx]).type(eval(f"torch.{self.config.feats_dtype}")).view(-1, self.config.feats_size),
+                            "label": torch.Tensor(file["labels"][data_idx]).type(eval(f"torch.{self.config.label_dtype}"))}
+                        self.data_ids_in_cache.append(data_idx)
+
+    def __len__(self):
+        return len(self.data_ids)
+
+    def __getitem__(self, idx):
+        data = self.get_data(idx)
+        coords = data["coords"]
+        feats = data["feats"]
+        label = data["label"]
+
+        if self.coords_transform is not None:
+            coords = self.coords_transform(coords)
+
+        if self.feats_transform is not None:
+            feats = self.feats_transform(feats)
+
+        if self.label_transform is not None:
+            label = self.label_transform(label)
+
+        return {"coords": coords, "feats": feats, "label": label, "index": idx}
+
+    def get_data(self, data_idx):
+        if not data_idx in self.data_ids:
+            raise ValueError(f"data with key ID {data_idx} is not in the database")
+
+        elif data_idx in self.data_ids_in_cache:
+            return self.data_cache[data_idx]
+
+        else:
+            with h5py.File(self.filepath, "r") as file:
+                return {"coords": torch.Tensor(file["coordinates"][data_idx]).type(eval(f"torch.{self.config.coords_dtype}")).view(-1, self.config.coords_size),
+                        "feats": torch.Tensor(file["features"][data_idx]).type(eval(f"torch.{self.config.feats_dtype}")).view(-1, self.config.feats_size),
+                        "label": torch.Tensor(file["labels"][data_idx]).type(eval(f"torch.{self.config.label_dtype}"))}
+
+    def add_data(self, coords, feats, label, add_to_cache=True):
+
+        new_data_idx = len(self.data_ids)
+        assert new_data_idx not in self.data_ids
+
+        assert isinstance(coords, torch.Tensor)
+        assert isinstance(feats, torch.Tensor)
+        assert isinstance(label, torch.Tensor)
+
+        if coords.dtype != self.config.coords_dtype:
+            coords = coords.type(eval(f"torch.{self.config.coords_dtype}"))
+        if self.coords_preprocess is not None:
+            coords = self.coords_preprocess(coords)
+
+        if feats.dtype != self.config.feats_dtype:
+            feats = feats.type(eval(f"torch.{self.config.feats_dtype}"))
+        if self.feats_preprocess is not None:
+            feats = self.feats_preprocess(feats)
+
+        if label.dtype != self.config.label_dtype:
+            label = label.type(eval(f"torch.{self.config.label_dtype}"))
+
+        assert (coords.shape[-1] == self.config.coords_size)
+        assert (feats.shape[-1] == self.config.feats_size)
+        assert (label.shape == self.config.label_size)
+
+        with h5py.File(self.filepath, "a") as file:
+            cur_size = file.attrs["n_obs"]
+            file["coordinates"].resize(cur_size + 1, axis=0)
+            file["coordinates"][new_data_idx] = coords.detach().cpu().numpy().flatten()
+            file["features"].resize(cur_size + 1, axis=0)
+            file["features"][new_data_idx] = feats.detach().cpu().numpy().flatten()
+            file["labels"].resize(cur_size + 1, axis=0)
+            file["labels"][new_data_idx, :] = label.detach().cpu().numpy()
+            file.attrs["n_obs"] = cur_size + 1
+
+        if self.config.load_data:
+            self.data_cache[new_data_idx] = {"coords": coords, "feats": feats, "label": label}
+            self.data_ids_in_cache.append(new_data_idx)
+
+        elif add_to_cache:
+            # remove last item from cache when not enough size
+            if len(self.data_ids_in_cache) > self.config.data_cache_size:
+                del (self.data_cache[self.data_ids_in_cache[0]])
+                del (self.data_ids_in_cache[0])
+            self.data_cache[new_data_idx] = {"coords": coords, "feats": feats, "label": label}
+            self.data_ids_in_cache.append(new_data_idx)
+
+        self.data_ids.add(new_data_idx)
+        return
+
+    def empty_cache(self):
+        self.data_cache = OrderedDict()
+        self.data_ids_in_cache = []
+        return
+
+
+# ===========================================================================================================================================================================================
 
 def sparse_collation(data_list):
     
