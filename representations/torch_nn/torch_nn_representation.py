@@ -36,7 +36,7 @@ class TorchNNRepresentation(Representation, nn.Module):
 
         # device parameters
         default_config.device = 'cuda'
-        default_config.dtype = torch.double
+        default_config.dtype = torch.float32
 
         # loss parameters
         default_config.loss = Dict()
@@ -55,7 +55,9 @@ class TorchNNRepresentation(Representation, nn.Module):
         default_config.logging.folder = None
         default_config.logging.record_loss_every = 1
         default_config.logging.record_valid_images_every = 1
+        default_config.logging.record_valid_images_max = 40
         default_config.logging.record_embeddings_every = 1
+        default_config.logging.record_embeddings_max = 400
 
         ## checkpoints (will save model every X epochs)
         default_config.checkpoint = Dict()

@@ -306,15 +306,19 @@ class Triplet(TorchNNRepresentation):
                     recon_x_a = model_outputs["x_a_outputs"]["recon_x"]
                     recon_x_b = model_outputs["x_b_outputs"]["recon_x"]
                     recon_x_c = model_outputs["x_c_outputs"]["recon_x"]
-                    images += [x_ref, x_a, x_b, x_c]
-                    recon_images += [recon_x_ref, recon_x_a, recon_x_b, recon_x_c]
+                    if len(images) < self.config.logging.record_embeddings_max:
+                        images += [x_ref, x_a, x_b, x_c]
+                    if len(recon_images) < self.config.logging.record_valid_images_max:
+                        recon_images += [recon_x_ref, recon_x_a, recon_x_b, recon_x_c]
 
                 if record_embeddings:
-                    embeddings += [model_outputs["x_ref_outputs"]["z"], model_outputs["x_a_outputs"]["z"],
+                    if len(embeddings) < self.config.logging.record_embeddings_max:
+                        embeddings += [model_outputs["x_ref_outputs"]["z"], model_outputs["x_a_outputs"]["z"],
                                    model_outputs["x_b_outputs"]["z"], model_outputs["x_c_outputs"]["z"]]
-                    labels += [data_ref["label"], data_a["label"], data_b["label"], data_c["label"]]
+                        labels += [data_ref["label"], data_a["label"], data_b["label"], data_c["label"]]
                     if not record_valid_images:
-                        images += [x_ref, x_a, x_b, x_c]
+                        if len(images) < self.config.logging.record_embeddings_max:
+                            images += [x_ref, x_a, x_b, x_c]
 
         if record_valid_images:
             recon_images = torch.cat(recon_images)

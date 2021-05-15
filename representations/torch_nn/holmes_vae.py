@@ -1392,16 +1392,20 @@ class HOLMES_VAE(TorchNNRepresentation):
                 # record embeddings
                 if record_valid_images:
                     for i in range(len(x)):
-                        images.append(x[i].unsqueeze(0))
+                        if len(images) < self.config.logging.record_embeddings_max:
+                            images.append(x[i].unsqueeze(0))
                     for i in range(len(x)):
-                        recon_images.append(model_outputs["recon_x"][i].unsqueeze(0))
+                        if len(recon_images) < self.config.logging.record_valid_images_max:
+                            recon_images.append(model_outputs["recon_x"][i].unsqueeze(0))
                 if record_embeddings:
                     for i in range(len(x)):
-                        embeddings.append(model_outputs["z"][i].unsqueeze(0))
-                        labels.append(data['label'][i].unsqueeze(0))
+                        if len(embeddings) < self.config.logging.record_embeddings_max:
+                            embeddings.append(model_outputs["z"][i].unsqueeze(0))
+                            labels.append(data['label'][i].unsqueeze(0))
                     if not record_valid_images:
                         for i in range(len(x)):
-                            images.append(x[i].unsqueeze(0))
+                            if len(images) < self.config.logging.record_embeddings_max:
+                                images.append(x[i].unsqueeze(0))
 
                 taken_pathes += model_outputs["path_taken"]
 

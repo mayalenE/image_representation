@@ -169,15 +169,19 @@ class QuadrupletNet(nn.Module):
                     recon_x_pos_b = self.forward(x_pos_b)["recon_x"]
                     recon_x_neg_a = self.forward(x_neg_a)["recon_x"]
                     recon_x_neg_b = self.forward(x_neg_b)["recon_x"]
-                    images += [x_pos_a, x_pos_b, x_neg_a, x_neg_b]
-                    recon_images += [recon_x_pos_a, recon_x_pos_b, recon_x_neg_a, recon_x_neg_b]
+                    if len(images) < self.config.logging.record_embeddings_max:
+                        images += [x_pos_a, x_pos_b, x_neg_a, x_neg_b]
+                    if len(recon_images) < self.config.logging.record_valid_images_max:
+                        recon_images += [recon_x_pos_a, recon_x_pos_b, recon_x_neg_a, recon_x_neg_b]
 
                 if record_embeddings:
-                    embeddings += [model_outputs["z_pos_a"], model_outputs["z_pos_b"], model_outputs["z_neg_a"],
+                    if len(embeddings) < self.config.logging.record_embeddings_max:
+                        embeddings += [model_outputs["z_pos_a"], model_outputs["z_pos_b"], model_outputs["z_neg_a"],
                                    model_outputs["z_neg_b"]]
-                    labels += [data_pos_a["label"], data_pos_b["label"], data_neg_a["label"], data_neg_b["label"]]
+                        labels += [data_pos_a["label"], data_pos_b["label"], data_neg_a["label"], data_neg_b["label"]]
                     if not record_valid_images:
-                        images += [x_pos_a, x_pos_b, x_neg_a, x_neg_b]
+                        if len(images) < self.config.logging.record_embeddings_max:
+                            images += [x_pos_a, x_pos_b, x_neg_a, x_neg_b]
 
         if record_valid_images:
             recon_images = torch.cat(recon_images)

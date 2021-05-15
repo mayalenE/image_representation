@@ -201,14 +201,18 @@ class VAE(TorchNNRepresentation):
 
                 if record_valid_images:
                     recon_x = model_outputs["recon_x"].cpu().detach()
-                    images.append(x.cpu().detach())
-                    recon_images.append(recon_x)
+                    if len(images) < self.config.logging.record_embeddings_max:
+                        images.append(x.cpu().detach())
+                    if len(recon_images) < self.config.logging.record_valid_images_max:
+                        recon_images.append(recon_x)
 
                 if record_embeddings:
-                    embeddings.append(model_outputs["z"].cpu().detach().view(x.shape[0], self.config.network.parameters.n_latents))
-                    labels.append(data["label"])
+                    if len(embeddings) < self.config.logging.record_embeddings_max:
+                        embeddings.append(model_outputs["z"].cpu().detach().view(x.shape[0], self.config.network.parameters.n_latents))
+                        labels.append(data["label"])
                     if not record_valid_images:
-                        images.append(x)
+                        if len(images) < self.config.logging.record_embeddings_max:
+                            images.append(x.cpu().detach())
 
         if record_valid_images:
             recon_images = torch.cat(recon_images)
