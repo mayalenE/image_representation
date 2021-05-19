@@ -4,9 +4,7 @@ import image_representation
 from image_representation import TorchNNRepresentation, VAE, BetaVAE, AnnealedVAE, BetaTCVAE
 from image_representation.representations.torch_nn import encoders, decoders
 from image_representation.utils.tensorboard_utils import resize_embeddings, logger_add_image_list
-from image_representation.datasets.torch_dataset import MIXEDDataset
 from image_representation.utils.torch_nn_init import get_weights_init
-from image_representation.utils.misc import do_filter_boolean
 import numpy as np
 import os
 from sklearn import cluster, svm, mixture
@@ -14,9 +12,71 @@ import sys
 import time
 import torch
 from torch import nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 import warnings
 # from torchviz import make_dot
+
+class TmpDataset(Dataset):
+    @staticmethod
+    def default_config():
+        default_config = Dict()
+
+        # data info
+        default_config.obs_size = ()  # (N,D,H,W) or (N,H,W)
+        default_config.obs_dtype = "float32"
+        default_config.label_size = (1,)
+        default_config.label_dtype = "long"
+
+        return default_config
+
+    def __init__(self, preprocess=None, transform=None, label_transform=None, config={}, **kwargs):
+        self.config = self.__class__.default_config()
+        self.config.update(config)
+        self.config.update(kwargs)
+
+        self.preprocess = preprocess
+        self.transform = transform
+        self.label_transform = label_transform
+
+        self.images = torch.FloatTensor([])  # list or torch tensor of size N*C*H*W
+        self.labels = torch.LongTensor([])  # list or torch tensor
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        obs = self.images[idx]
+        label = self.labels[idx]
+
+        if self.transform is not None:
+            obs = self.transform(obs)
+
+        if self.label_transform is not None:
+            label = self.label_transform(label)
+
+        return {"obs": obs, "label": label, "index": idx}
+
+    def update(self, images, labels=None):
+        """ Update the current dataset lists """
+        n_images = len(images)
+        if labels is None:
+            labels = torch.Tensor([-1] * n_images).type(self.config.label_dtype)
+
+        if images.dtype != self.config.obs_dtype:
+            obs = images.type(eval(f"torch.{self.config.obs_dtype}"))
+
+        if self.preprocess is not None:
+            images = self.preprocess(images)
+
+        if labels.dtype != self.config.label_dtype:
+            labels = labels.type(eval(f"torch.{self.config.label_dtype}"))
+
+        assert (images.shape[1:] == self.config.obs_size)
+        assert (labels.shape[1:] == self.config.label_size)
+
+        self.images = images
+        self.labels = labels
+
 
 
 class Node(nn.Module):
@@ -360,7 +420,7 @@ class Node(nn.Module):
                     trials += 1
                 z_gen = torch.cat(z_gen)
 
-            z_gen = z_gen.to(self.config.device)
+            z_gen = z_gen.to(self.config.device).type(self.config.dtype)
             node_outputs = self.node_forward_from_encoder({'z': z_gen}, parent_gfi, parent_lfi, parent_recon_x)
             gfi = node_outputs["gfi"].detach()
             lfi = node_outputs["lfi"].detach()
@@ -395,6 +455,7 @@ def get_node_class(base_class):
                                                         connect_recon=config.create_connections["recon"])
 
             self.set_device(self.config.device)
+            self.set_dtype(self.config.dtype)
 
         def node_forward_from_encoder(self, encoder_outputs, parent_gfi=None, parent_lfi=None,
                                       parent_recon_x=None):
@@ -567,7 +628,7 @@ class HOLMES_VAE(TorchNNRepresentation):
         :param node_path: if "niche" must specify niche's node_path
         :return:
         """
-        x = x.to(self.config.device)
+        x = x.to(self.config.device).type(self.config.dtype)
 
         if mode == "niche":
             z = torch.Tensor().new_full((len(x), self.n_latents), float("nan")).to(self.config.device)
@@ -848,12 +909,12 @@ class HOLMES_VAE(TorchNNRepresentation):
 
             # update epoch counters
             self.n_epochs += 1
-            for leaf_path in self.network.get_leaf_pathes():
-                leaf_node = self.network.get_child_node(leaf_path)
-                if hasattr(leaf_node, "epochs_since_split"):
-                    leaf_node.epochs_since_split += 1
-                else:
-                    leaf_node.epochs_since_split = 1
+            # for leaf_path in self.network.get_leaf_pathes():
+            #     leaf_node = self.network.get_child_node(leaf_path)
+            #     if hasattr(leaf_node, "epochs_since_split"):
+            #         leaf_node.epochs_since_split += 1
+            #     else:
+            #         leaf_node.epochs_since_split = 1
 
             # log
             if self.logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
@@ -885,327 +946,10 @@ class HOLMES_VAE(TorchNNRepresentation):
                         best_valid_loss = valid_loss
                         self.save(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
 
-                # 4) Perform evaluation/test epoch
-                if (self.config.evaluation.folder is not None) and (self.n_epochs % self.config.evaluation.save_results_every == 0):
-                    save_results_per_node = (self.n_epochs == training_config.n_epochs)
-                    self.evaluation_epoch(valid_loader, save_results_per_node=save_results_per_node)
-
             # 5) Stop splitting when close to the end
             # if split_trigger["active"] and (self.n_epochs >= (training_config.n_epochs - split_trigger.conditions.n_epochs_min_between_splits)):
             #     split_trigger["active"] = False
 
-
-
-    def run_sequential_training(self, train_loader, training_config, valid_loader=None):
-
-        # Save the graph in the logger
-        if self.logger is not None:
-            dummy_size = (1, self.config.node.network.parameters.n_channels,) + self.config.node.network.parameters.input_size
-            dummy_input = torch.FloatTensor(size=dummy_size).uniform_(0, 1)
-            dummy_input = dummy_input.to(self.config.device)
-            self.eval()
-            # with torch.no_grad():
-            #    self.logger.add_graph(self, dummy_input, verbose = False)
-
-        do_validation = False
-        if valid_loader is not None:
-            best_valid_loss = sys.float_info.max
-            do_validation = True
-
-        # Prepare settings for the training of HOLMES
-        ## episodes setting
-        n_episodes = training_config.n_episodes
-        episodes_data_filter = training_config.episodes_data_filter
-        n_epochs_per_episodes = training_config.n_epochs_per_episode
-        blend_between_episodes = training_config.blend_between_episodes
-        n_epochs_total = np.asarray(n_epochs_per_episodes).sum()
-
-        ## split trigger settings
-        split_trigger = Dict()
-        split_trigger.active = False
-        split_trigger.update(training_config.split_trigger)
-        if split_trigger["active"]:
-            default_split_trigger = Dict()
-            ## conditions
-            default_split_trigger.conditions = Dict()
-            default_split_trigger.conditions.min_init_n_epochs = 1
-            default_split_trigger.conditions.n_epochs_min_between_splits = 1
-            default_split_trigger.conditions.n_min_points = 0
-            default_split_trigger.conditions.n_max_splits = 1e8
-            ## fitness
-            default_split_trigger.fitness_key = "total"
-            ## type
-            default_split_trigger.type = "plateau"
-            if default_split_trigger.type == "plateau":
-                default_split_trigger.parameters.epsilon = 1
-                default_split_trigger.parameters.n_steps_average = 5
-            elif default_split_trigger.type == "threshold":
-                default_split_trigger.parameters.threshold = 200
-                default_split_trigger.parameters.n_max_bad_points = 100
-            ## train before split
-            default_split_trigger.n_epochs_before_split = 0
-            ## boundary config
-            default_split_trigger.boundary_config = Dict()
-            default_split_trigger.boundary_config.z_fitness = None
-            default_split_trigger.boundary_config.algo = "cluster.KMeans"
-            ## save
-            default_split_trigger.save_model_before_after = False
-
-            default_split_trigger.update(split_trigger)
-            split_trigger = default_split_trigger
-
-        ## alternated training
-        alternated_backward = Dict()
-        alternated_backward.active = False
-        alternated_backward.update(training_config.alternated_backward)
-        if alternated_backward["active"]:
-            default_ratio_epochs = Dict({"connections": 1, "core": 9})
-            default_ratio_epochs.update(alternated_backward.ratio_epochs)
-            alternated_backward.ratio_epochs = default_ratio_epochs
-
-        ## experience replay
-        experience_replay = Dict()
-        experience_replay.active = False
-        experience_replay.update(training_config.experience_replay)
-
-        # prepare datasets per episodes
-        train_images = [None] * n_episodes
-        train_labels = [None] * n_episodes
-        n_train_images = [None] * n_episodes
-        train_weights = [None] * n_episodes
-        train_datasets_ids =  [None] * n_episodes
-
-        for episode_idx in range(n_episodes):
-            cur_episode_data_filter = episodes_data_filter[episode_idx]
-            cum_ratio = 0
-
-            cur_episode_n_train_images = 0
-            cur_episode_train_images = None
-            cur_episode_train_labels = None
-            cur_episode_train_datasets_ids = []
-
-            for data_filter_idx, data_filter in enumerate(cur_episode_data_filter):
-
-                cur_dataset_name = data_filter["dataset"]
-                cur_filter = data_filter["filter"]
-                cur_ratio = data_filter["ratio"]
-                if data_filter_idx == len(cur_episode_data_filter) - 1:
-                    if cur_ratio != 1.0 - cum_ratio:
-                        raise ValueError("the sum of ratios per dataset in the episode must sum to one")
-                cum_ratio += cur_ratio
-
-                cur_train_dataset = train_loader.dataset.datasets[cur_dataset_name]
-                cur_train_filtered_inds = do_filter_boolean(cur_train_dataset, cur_filter)
-                cur_n_train_images = cur_train_filtered_inds.sum()
-                if cur_episode_train_images is None:
-                    cur_episode_train_images = cur_train_dataset.images[cur_train_filtered_inds]
-                    cur_episode_train_labels = cur_train_dataset.labels[cur_train_filtered_inds]
-                    cur_episode_train_weights = torch.tensor([cur_ratio / cur_n_train_images] * cur_n_train_images, dtype=torch.double)
-                else:
-                    cur_episode_train_images = torch.cat([cur_episode_train_images, cur_train_dataset.images[cur_train_filtered_inds]], dim=0)
-                    cur_episode_train_labels = torch.cat([cur_episode_train_labels, cur_train_dataset.labels[cur_train_filtered_inds]], dim=0)
-                    cur_episode_train_weights = torch.cat([cur_episode_train_weights, torch.tensor([cur_ratio / cur_n_train_images] * cur_n_train_images, dtype=torch.double)])
-                cur_episode_n_train_images += cur_n_train_images
-                cur_episode_train_datasets_ids += [cur_dataset_name] * cur_n_train_images
-
-            train_images[episode_idx] = cur_episode_train_images
-            train_labels[episode_idx] = cur_episode_train_labels
-            n_train_images[episode_idx] = cur_episode_n_train_images
-            train_weights[episode_idx] = cur_episode_train_weights
-            train_datasets_ids[episode_idx] = cur_episode_train_datasets_ids
-
-        # /!\ test images will be accumulated in the dataloader at each episode to test forgetting on previously seen images
-        if do_validation:
-            valid_images = [None] * n_episodes
-            valid_labels = [None] * n_episodes
-            n_valid_images = [None] * n_episodes
-            valid_datasets_ids = [None] * n_episodes
-
-            for episode_idx in range(n_episodes):
-                cur_episode_data_filter = episodes_data_filter[episode_idx]
-                cum_ratio = 0
-
-                cur_episode_n_valid_images = 0
-                cur_episode_valid_images = None
-                cur_episode_valid_labels = None
-                cur_episode_valid_datasets_ids = []
-
-                for data_filter_idx, data_filter in enumerate(cur_episode_data_filter):
-                    cur_dataset_name = data_filter["dataset"]
-                    cur_filter = data_filter["filter"]
-                    cur_ratio = data_filter["ratio"]
-                    if data_filter_idx == len(cur_episode_data_filter) - 1:
-                        if cur_ratio != 1.0 - cum_ratio:
-                            raise ValueError("the sum of ratios per dataset in the episode must sum to one")
-                    cum_ratio += cur_ratio
-
-                    cur_valid_dataset = valid_loader.dataset.datasets[cur_dataset_name]
-                    cur_valid_filtered_inds = do_filter_boolean(cur_valid_dataset, cur_filter)
-                    cur_n_valid_images = cur_valid_filtered_inds.sum()
-                    if cur_episode_valid_images is None:
-                        cur_episode_valid_images = cur_valid_dataset.images[cur_valid_filtered_inds]
-                        cur_episode_valid_labels = cur_valid_dataset.labels[cur_valid_filtered_inds]
-                    else:
-                        cur_episode_valid_images = torch.cat([cur_episode_valid_images, cur_valid_dataset.images[cur_valid_filtered_inds]], dim=0)
-                        cur_episode_valid_labels = torch.cat([cur_episode_valid_labels, cur_valid_dataset.labels[cur_valid_filtered_inds]], dim=0)
-                    cur_episode_n_valid_images += cur_n_valid_images
-                    cur_episode_valid_datasets_ids += [cur_dataset_name] * cur_n_valid_images
-
-                valid_images[episode_idx] = cur_episode_valid_images
-                valid_labels[episode_idx] = cur_episode_valid_labels
-                n_valid_images[episode_idx] = cur_episode_n_valid_images
-                valid_datasets_ids[episode_idx] = cur_episode_valid_datasets_ids
-
-        for episode_idx in range(n_episodes):
-            # accumulate over test set
-            if do_validation:
-                cum_n_valid_images = valid_loader.dataset.n_images + n_valid_images[episode_idx]
-                cum_valid_images = torch.cat([valid_loader.dataset.images, valid_images[episode_idx]], dim=0)
-                cum_valid_labels = torch.cat([valid_loader.dataset.labels, valid_labels[episode_idx]], dim=0)
-                cum_valid_datasets_ids = valid_loader.dataset.datasets_ids + valid_datasets_ids[episode_idx]
-                valid_loader.dataset.update(cum_n_valid_images, cum_valid_images, cum_valid_labels, cum_valid_datasets_ids)
-
-            for epoch in range(n_epochs_per_episodes[episode_idx]):
-                train_loader.dataset.update(n_train_images[episode_idx], train_images[episode_idx],
-                                            train_labels[episode_idx], train_datasets_ids[episode_idx])
-                train_loader.sampler.num_samples = len(train_weights[episode_idx])
-                train_loader.sampler.weights = train_weights[episode_idx]
-
-                #1) Prepare DataLoader by blending with prev/next episode
-                if blend_between_episodes["active"]:
-                    cur_epoch_images = deepcopy(train_images[episode_idx])
-                    cur_epoch_labels = deepcopy(train_labels[episode_idx])
-                    cur_epoch_datasets_ids = deepcopy(train_datasets_ids[episode_idx])
-                    # blend images from previous experiment
-                    blend_with_prev_episode = blend_between_episodes["blend_with_prev"]
-                    if episode_idx > 0 and blend_with_prev_episode["active"]:
-                        cur_episode_fraction = float(epoch / n_epochs_per_episodes[episode_idx])
-                        if cur_episode_fraction < blend_with_prev_episode["time_fraction"]:
-                            if blend_with_prev_episode["blend_type"] == "linear":
-                                blend_prev_proportion = - 0.5 / blend_with_prev_episode[
-                                    "time_fraction"] * cur_episode_fraction + 0.5
-                                n_data_from_prev = int(blend_prev_proportion * n_train_images[episode_idx])
-                                ids_to_take_from_prev_episode = torch.multinomial(train_weights[episode_idx - 1],
-                                                                                  n_data_from_prev, True)
-                                ids_to_replace_in_cur_episode = torch.multinomial(train_weights[episode_idx],
-                                                                                  n_data_from_prev, False)
-                                for data_idx in range(n_data_from_prev):
-                                    cur_epoch_images[ids_to_replace_in_cur_episode[data_idx]] = train_images[episode_idx - 1][
-                                        ids_to_take_from_prev_episode[data_idx]]
-                                    cur_epoch_labels[ids_to_replace_in_cur_episode[data_idx]] = train_labels[episode_idx - 1][
-                                        ids_to_take_from_prev_episode[data_idx]]
-                                    cur_epoch_datasets_ids[ids_to_replace_in_cur_episode[data_idx]] = train_datasets_ids[episode_idx - 1][
-                                        ids_to_take_from_prev_episode[data_idx]]
-                            else:
-                                raise NotImplementedError("only linear blending is implemented")
-                    # blend images from next experiment
-                    blend_with_next_episode = blend_between_episodes["blend_with_next"]
-                    if episode_idx < n_episodes - 1 and blend_with_next_episode["active"]:
-                        cur_episode_fraction = float(epoch / n_epochs_per_episodes[episode_idx])
-                        if cur_episode_fraction > (1.0 - blend_with_next_episode["time_fraction"]):
-                            if blend_with_next_episode["blend_type"] == "linear":
-                                blend_next_proportion = 0.5 / blend_with_prev_episode[
-                                    "time_fraction"] * cur_episode_fraction \
-                                                        + 0.5 - (0.5 / blend_with_prev_episode["time_fraction"])
-                                n_data_from_next = int(blend_next_proportion * n_train_images[episode_idx])
-                                ids_to_take_from_next_episode = torch.multinomial(train_weights[episode_idx + 1],
-                                                                                  n_data_from_next, True)
-                                ids_to_replace_in_cur_episode = torch.multinomial(train_weights[episode_idx],
-                                                                                  n_data_from_next, False)
-                                for data_idx in range(n_data_from_next):
-                                    cur_epoch_images[ids_to_replace_in_cur_episode[data_idx]] = train_images[episode_idx + 1][
-                                        ids_to_take_from_next_episode[data_idx]]
-                                    cur_epoch_labels[ids_to_replace_in_cur_episode[data_idx]] = train_labels[episode_idx + 1][
-                                        ids_to_take_from_next_episode[data_idx]]
-                                    cur_epoch_datasets_ids[ids_to_replace_in_cur_episode[data_idx]] = \
-                                    train_datasets_ids[episode_idx - 1][
-                                        ids_to_take_from_next_episode[data_idx]]
-                            else:
-                                raise NotImplementedError("only linear blending is implemented")
-
-                    train_loader.dataset.update(n_train_images[episode_idx], cur_epoch_images, cur_epoch_labels, cur_epoch_datasets_ids)
-
-                # 2) Prepare DataLoader by adding replay images
-                if experience_replay['active']:
-                    if (self.n_epochs > experience_replay.min_init_n_epochs) and (self.n_epochs % experience_replay.generate_every == 0):
-                        # replay
-                        n_replay = int(experience_replay.percent / (1-experience_replay.percent) * n_train_images[episode_idx])
-                        n_replay_per_leaf_node = int(n_replay / len(self.network.get_leaf_pathes()))
-                        cur_epoch_n_images = train_loader.dataset.n_images
-                        cur_epoch_images = train_loader.dataset.images
-                        cur_epoch_labels = train_loader.dataset.labels
-                        cur_epoch_datasets_ids = train_loader.dataset.datasets_ids
-                        for leaf_path in self.network.get_leaf_pathes():
-                            cur_gen_images = self.network.generate_images(n_replay_per_leaf_node, from_node_path=leaf_path[1:-1], from_side=leaf_path[-1]).cpu()
-                            cur_epoch_n_images += n_replay_per_leaf_node
-                            cur_epoch_images = torch.cat([cur_epoch_images, cur_gen_images])
-                            cur_epoch_labels = torch.cat([cur_epoch_labels, torch.LongTensor([-1] * len(cur_gen_images))])
-                            cur_epoch_datasets_ids = cur_epoch_datasets_ids + [None] *  len(cur_gen_images)
-
-                        n_gen_images = cur_epoch_n_images - train_loader.dataset.n_images
-                        cur_epoch_train_weights = torch.cat([train_loader.sampler.weights*train_loader.dataset.n_images/cur_epoch_n_images,  torch.tensor([experience_replay.percent / n_gen_images] * n_gen_images, dtype=torch.double)])
-                        train_loader.sampler.num_samples = cur_epoch_n_images
-                        train_loader.sampler.weights = cur_epoch_train_weights
-                        train_loader.dataset.update(cur_epoch_n_images, cur_epoch_images, cur_epoch_labels, cur_epoch_datasets_ids)
-
-
-                # 2) check if elligible for split
-                if split_trigger["active"]:
-                    self.trigger_split(train_loader, split_trigger)
-
-                # 3) Perform train epoch
-                t0 = time.time()
-                train_losses = self.train_epoch(train_loader)
-                t1 = time.time()
-
-                # update epoch counters
-                self.n_epochs += 1
-                for leaf_path in self.network.get_leaf_pathes():
-                    leaf_node = self.network.get_child_node(leaf_path)
-                    if hasattr(leaf_node, "epochs_since_split"):
-                        leaf_node.epochs_since_split += 1
-                    else:
-                        leaf_node.epochs_since_split = 1
-
-                # logging
-                if self.logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
-                    for k, v in train_losses.items():
-                        self.logger.add_scalars('loss/{}'.format(k), {'train': v}, self.n_epochs)
-                    self.logger.add_text('time/train', 'Train Epoch {}: {:.3f} secs'.format(self.n_epochs, t1 - t0),
-                                    self.n_epochs)
-
-                # save model
-                if self.n_epochs % self.config.checkpoint.save_model_every == 0:
-                    self.save(os.path.join(self.config.checkpoint.folder, 'curent_weight_model.pth'))
-                if self.n_epochs in self.config.checkpoint.save_model_at_epochs:
-                    self.save(
-                        os.path.join(self.config.checkpoint.folder, "epoch_{}_weight_model.pth".format(self.n_epochs)))
-
-                if do_validation:
-                    # 4) Perform validation epoch
-                    t2 = time.time()
-                    valid_losses = self.valid_epoch(valid_loader)
-                    t3 = time.time()
-                    if self.logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
-                        for k, v in valid_losses.items():
-                            self.logger.add_scalars('loss/{}'.format(k), {'valid': v}, self.n_epochs)
-                        self.logger.add_text('time/valid', 'Valid Epoch {}: {:.3f} secs'.format(self.n_epochs, t3 - t2),
-                                        self.n_epochs)
-
-                    if valid_losses:
-                        valid_loss = valid_losses['total']
-                        if valid_loss < best_valid_loss and self.config.checkpoint.save_best_model:
-                            best_valid_loss = valid_loss
-                            self.save(os.path.join(self.config.checkpoint.folder, 'best_weight_model.pth'))
-
-                    # 5) Perform evaluation/test epoch
-                    if (self.config.evaluation.folder is not None) and (self.n_epochs % self.config.evaluation.save_results_every == 0):
-                        save_results_per_node = (self.n_epochs == n_epochs_total)
-                        self.evaluation_epoch(valid_loader, save_results_per_node=save_results_per_node)
-
-                # 6) Stop splitting when close to the end
-                if self.n_epochs >= (n_epochs_total - split_trigger.conditions.n_epochs_min_between_splits):
-                    split_trigger["active"] = False
 
     def trigger_split(self, train_loader, split_trigger):
 
@@ -1221,8 +965,8 @@ class HOLMES_VAE(TorchNNRepresentation):
         x_ids = []
         labels = []
 
-        old_augment_state = train_loader.dataset.data_augmentation
-        train_loader.dataset.data_augmentation = False
+        old_transform_state = train_loader.dataset.transform
+        train_loader.dataset.transform = None
 
         with torch.no_grad():
             for data in train_loader:
@@ -1255,7 +999,12 @@ class HOLMES_VAE(TorchNNRepresentation):
             split_x_fitness[generated_ids_in_leaf_x_ids] = 0
             leaf_node.fitness_last_epochs.append(split_x_fitness[~generated_ids_in_leaf_x_ids].mean())
 
-            if (leaf_node.epochs_since_split < split_trigger.conditions.n_epochs_min_between_splits) or (leaf_n_real_points < split_trigger.conditions.n_min_points):
+            if leaf_path == "0":
+                n_epochs_since_split = self.n_epochs
+            else:
+                n_epochs_since_split = (self.n_epochs - self.split_history[leaf_path[:-1]]["epoch"])
+            if (n_epochs_since_split < split_trigger.conditions.n_epochs_min_between_splits) or \
+                    (leaf_n_real_points < split_trigger.conditions.n_min_points):
                 continue
 
             trigger_split_in_leaf = False
@@ -1275,32 +1024,33 @@ class HOLMES_VAE(TorchNNRepresentation):
 
             if trigger_split_in_leaf:
                 # Split Node
-                split_dataset_config = train_loader.dataset.config
-                split_dataset_config.datasets = {}
-                split_dataset_config.data_augmentation = False
-                split_dataset = MIXEDDataset(config=split_dataset_config)
+                split_dataset = TmpDataset(preprocess=train_loader.dataset.preprocess, transform=None, target_transform=None, config=train_loader.dataset.config)
 
                 split_x_ids = x_ids[leaf_x_ids]
                 n_seen_images = len(split_x_ids)
-                split_seen_images = train_loader.dataset.images[split_x_ids]
-                split_seen_labels = train_loader.dataset.labels[split_x_ids]
+                split_seen_images = torch.empty((0, ) + train_loader.dataset.config.obs_size, dtype=eval(f"torch.{train_loader.dataset.config.obs_dtype}"))
+                split_seen_labels = torch.empty((0, ) + train_loader.dataset.config.label_size, dtype=eval(f"torch.{train_loader.dataset.config.label_dtype}"))
+                for x_idx in split_x_ids:
+                    data = train_loader.dataset.get_data(int(x_idx.item()))
+                    split_seen_images = torch.cat([split_seen_images, data["obs"].unsqueeze(0)])
+                    split_seen_labels = torch.cat([split_seen_labels, data["label"].unsqueeze(0)])
 
-                split_dataset.update(n_seen_images, split_seen_images, split_seen_labels)
+                split_dataset.update(split_seen_images, split_seen_labels)
                 split_loader = DataLoader(split_dataset, batch_size=train_loader.batch_size, shuffle=True, num_workers=0)
 
                 self.split_node(leaf_path,  split_trigger, x_loader=split_loader, x_fitness=split_x_fitness)
 
                 del split_seen_images, split_seen_labels, split_dataset, split_loader
                 # update counters
-                leaf_node.epochs_since_split = None
-                leaf_node.fitness_speed_last_epoches = []
+                #leaf_node.epochs_since_split = None
+                #leaf_node.fitness_speed_last_epoches = []
 
                 splitted_leafs.append(leaf_path)
 
                 # uncomment following line for allowing only one split at the time
                 # break
 
-        train_loader.dataset.data_augmentation = old_augment_state
+        train_loader.dataset.transform = old_transform_state
         return splitted_leafs
 
 
@@ -1392,20 +1142,20 @@ class HOLMES_VAE(TorchNNRepresentation):
                 # record embeddings
                 if record_valid_images:
                     for i in range(len(x)):
-                        if len(images) < self.config.logging.record_embeddings_max:
-                            images.append(x[i].unsqueeze(0))
+                        #if len(images) < self.config.logging.record_embeddings_max:
+                        images.append(x[i].unsqueeze(0))
                     for i in range(len(x)):
-                        if len(recon_images) < self.config.logging.record_valid_images_max:
-                            recon_images.append(model_outputs["recon_x"][i].unsqueeze(0))
+                        #if len(recon_images) < self.config.logging.record_valid_images_max:
+                        recon_images.append(model_outputs["recon_x"][i].unsqueeze(0))
                 if record_embeddings:
                     for i in range(len(x)):
-                        if len(embeddings) < self.config.logging.record_embeddings_max:
-                            embeddings.append(model_outputs["z"][i].unsqueeze(0))
-                            labels.append(data['label'][i].unsqueeze(0))
+                        #if len(embeddings) < self.config.logging.record_embeddings_max:
+                        embeddings.append(model_outputs["z"][i].unsqueeze(0))
+                        labels.append(data['label'][i].unsqueeze(0))
                     if not record_valid_images:
                         for i in range(len(x)):
-                            if len(images) < self.config.logging.record_embeddings_max:
-                                images.append(x[i].unsqueeze(0))
+                            #if len(images) < self.config.logging.record_embeddings_max:
+                            images.append(x[i].unsqueeze(0))
 
                 taken_pathes += model_outputs["path_taken"]
 
@@ -1419,8 +1169,7 @@ class HOLMES_VAE(TorchNNRepresentation):
                 leaf_labels = torch.cat([labels[i] for i in leaf_x_ids])
                 leaf_images = torch.cat([images[i] for i in leaf_x_ids])
                 if len(leaf_images.shape) == 5:
-                    leaf_images = leaf_images[:, :, self.config.network.parameters.input_size[0] // 2, :,
-                                  :]  # we take slice at middle depth only
+                    leaf_images = leaf_images[:, :, self.config.node.network.parameters.input_size[0] // 2, :, :]  # we take slice at middle depth only
                 if (leaf_images.shape[1] != 1) or (leaf_images.shape[1] != 3):
                     leaf_images = leaf_images[:, :3, ...]
                 leaf_images = resize_embeddings(leaf_images)
@@ -1454,149 +1203,6 @@ class HOLMES_VAE(TorchNNRepresentation):
 
         return losses
 
-    def evaluation_epoch(self, test_loader, save_results_per_node=False):
-        self.eval()
-        losses = {}
-
-        n_images = len(test_loader.dataset)
-        if "RandomSampler" in test_loader.sampler.__class__.__name__:
-            warnings.warn("WARNING: evaluation is performed on shuffled test dataloader")
-        tree_depth = 1
-        for split_k, split in self.split_history.items():
-            if (split["depth"]+2) > tree_depth:
-                tree_depth = (split["depth"]+2)
-
-        test_results = {}
-        test_results["taken_pathes"] = [None] * n_images
-        test_results["labels"] = np.empty(n_images, dtype=np.int)
-        test_results["nll"] = np.empty(n_images, dtype=np.float)
-        test_results["recon_loss"] = np.empty(n_images, dtype=np.float)
-        test_results["cluster_classification_pred"] = np.empty(n_images, dtype=np.int)
-        test_results["cluster_classification_acc"] = np.empty(n_images, dtype=np.bool)
-        test_results["5NN_classification_pred"] = np.empty(n_images, dtype=np.int)
-        test_results["5NN_classification_err"] = np.empty(n_images, dtype=np.bool)
-        test_results["10NN_classification_pred"] = np.empty(n_images, dtype=np.int)
-        test_results["10NN_classification_err"] = np.empty(n_images, dtype=np.bool)
-        test_results["20NN_classification_pred"] = np.empty(n_images, dtype=np.int)
-        test_results["20NN_classification_err"] = np.empty(n_images, dtype=np.bool)
-        #TODO: "spread" kNN
-
-        test_results_per_node = {}
-        for node_path in self.network.get_node_pathes():
-            test_results_per_node[node_path] = dict()
-            test_results_per_node[node_path]["x_ids"] = []
-            test_results_per_node[node_path]["z"] = []
-            test_results_per_node[node_path]["recon_x"] = []
-            test_results_per_node[node_path]["nll"] = []
-            test_results_per_node[node_path]["recon_loss"] = []
-            test_results_per_node[node_path]["cluster_classification_pred"] = []
-            test_results_per_node[node_path]["cluster_classification_acc"] = []
-            test_results_per_node[node_path]["5NN_classification_pred"] = []
-            test_results_per_node[node_path]["5NN_classification_err"] = []
-            test_results_per_node[node_path]["10NN_classification_pred"] = []
-            test_results_per_node[node_path]["10NN_classification_err"] = []
-            test_results_per_node[node_path]["20NN_classification_pred"] = []
-            test_results_per_node[node_path]["20NN_classification_err"] = []
-
-        with torch.no_grad():
-            # Compute results per image
-            idx_offset = 0
-            for data in test_loader:
-                x = data['obs'].to(self.config.device)
-                cur_x_ids = np.asarray(data["index"], dtype=np.int)
-                y = data['label'].squeeze()
-                test_results["labels"][cur_x_ids] = y.detach().cpu().numpy()
-
-                # forward
-                all_nodes_outputs = self.network.depth_first_forward_whole_branch_preorder(x)
-                for node_idx in range(len(all_nodes_outputs)):
-                    cur_node_path = all_nodes_outputs[node_idx][0][0]
-                    cur_node_x_ids = np.asarray(all_nodes_outputs[node_idx][1], dtype=np.int)
-                    cur_node_outputs = all_nodes_outputs[node_idx][2]
-                    loss_inputs = {key: cur_node_outputs[key] for key in self.loss_f.input_keys_list}
-                    cur_losses = self.loss_f(loss_inputs, reduction="none")
-                    test_results_per_node[cur_node_path]["x_ids"] += list(cur_x_ids[cur_node_x_ids])
-                    test_results_per_node[cur_node_path]["z"] += list(cur_node_outputs["z"].detach().cpu().numpy())
-                    test_results_per_node[cur_node_path]["recon_x"] += list(cur_node_outputs["recon_x"].detach().cpu().numpy())
-                    test_results_per_node[cur_node_path]["nll"] += list(cur_losses["total"].detach().cpu().numpy())
-                    test_results_per_node[cur_node_path]["recon_loss"] += list(cur_losses["recon"].detach().cpu().numpy())
-
-                    cur_node = self.network.get_child_node(cur_node_path)
-                    if cur_node.leaf:
-                        for x_idx in cur_node_x_ids:
-                            test_results["taken_pathes"][cur_x_ids[x_idx]] = cur_node_path
-                        test_results["nll"][cur_x_ids[cur_node_x_ids]] = cur_losses["total"].detach().cpu().numpy()
-                        test_results["recon_loss"][cur_x_ids[cur_node_x_ids]] = cur_losses["recon"].detach().cpu().numpy()
-
-        # compute results for classification
-        for node_path in self.network.get_node_pathes():
-            # update lists to numpy
-            test_results_per_node[node_path]["x_ids"] = np.asarray(test_results_per_node[node_path]["x_ids"], dtype = np.int)
-            test_results_per_node[node_path]["z"] = np.asarray(test_results_per_node[node_path]["z"], dtype = np.float)
-            test_results_per_node[node_path]["recon_x"] = np.asarray(test_results_per_node[node_path]["recon_x"], dtype=np.float)
-            test_results_per_node[node_path]["nll"] = np.asarray(test_results_per_node[node_path]["nll"],
-                                                                     dtype=np.float)
-            test_results_per_node[node_path]["recon_loss"] = np.asarray(test_results_per_node[node_path]["recon_loss"],
-                                                                     dtype=np.float)
-
-            # cluster classification accuracy
-            labels_in_node = test_results["labels"][test_results_per_node[node_path]["x_ids"]]
-            majority_voted_class = -1
-            max_n_votes = 0
-            for label in list(set(labels_in_node)):
-                label_count = (labels_in_node == label).sum()
-                if label_count > max_n_votes:
-                    max_n_votes = label_count
-                    majority_voted_class = label
-            cur_node_x_ids = test_results_per_node[node_path]["x_ids"]
-            test_results_per_node[node_path]["cluster_classification_pred"] = np.asarray([majority_voted_class] * len(cur_node_x_ids), dtype=np.int)
-            test_results_per_node[node_path]["cluster_classification_acc"] = (test_results["labels"][cur_node_x_ids] == majority_voted_class)
-
-            # k-NN classification accuracy
-            for x_idx in range(len(cur_node_x_ids)):
-                distances_to_point_in_node = np.linalg.norm(test_results_per_node[node_path]["z"][x_idx] - test_results_per_node[node_path]["z"], axis=1)
-                closest_point_ids = np.argpartition(distances_to_point_in_node, min(20, len(distances_to_point_in_node)-1))
-                # remove curr_idx from closest point
-                closest_point_ids = np.delete(closest_point_ids, np.where(closest_point_ids == x_idx)[0])
-                for k_idx, k in enumerate([5,10,20]):
-                    voting_labels = test_results["labels"][closest_point_ids[:k]]
-                    majority_voted_class = -1
-                    max_n_votes = 0
-                    for label in list(set(voting_labels)):
-                        label_count = (voting_labels == label).sum()
-                        if label_count > max_n_votes:
-                            max_n_votes = label_count
-                            majority_voted_class = label
-                    test_results_per_node[node_path]["{}NN_classification_pred".format(k)].append(majority_voted_class)
-                    test_results_per_node[node_path]["{}NN_classification_err".format(k)].append(test_results["labels"][x_idx] != majority_voted_class)
-
-            for k_idx, k in enumerate([5, 10, 20]):
-                test_results_per_node[node_path]["{}NN_classification_pred".format(k)] = np.asarray(test_results_per_node[node_path]["{}NN_classification_pred".format(k)], dtype=np.int)
-                test_results_per_node[node_path]["{}NN_classification_err".format(k)] = np.asarray(test_results_per_node[node_path]["{}NN_classification_err".format(k)], dtype=np.bool)
-
-            node = self.network.get_child_node(node_path)
-            if node.leaf:
-                test_results["cluster_classification_pred"][cur_node_x_ids] = test_results_per_node[node_path]["cluster_classification_pred"]
-                test_results["cluster_classification_acc"][cur_node_x_ids] = test_results_per_node[node_path]["cluster_classification_acc"]
-                test_results["5NN_classification_pred"][cur_node_x_ids] = test_results_per_node[node_path]["5NN_classification_pred"]
-                test_results["5NN_classification_err"][cur_node_x_ids] = test_results_per_node[node_path]["5NN_classification_err"]
-                test_results["10NN_classification_pred"][cur_node_x_ids] = test_results_per_node[node_path]["10NN_classification_pred"]
-                test_results["10NN_classification_err"][cur_node_x_ids] = test_results_per_node[node_path]["10NN_classification_err"]
-                test_results["20NN_classification_pred"][cur_node_x_ids] = test_results_per_node[node_path]["20NN_classification_pred"]
-                test_results["20NN_classification_err"][cur_node_x_ids] = test_results_per_node[node_path]["20NN_classification_err"]
-
-
-
-        # Save results
-        if not os.path.exists(os.path.join(self.config.evaluation.folder, "test_results")):
-            os.makedirs(os.path.join(self.config.evaluation.folder, "test_results"))
-        np.savez(os.path.join(self.config.evaluation.folder, "test_results",
-                              "test_results_epoch_{}.npz".format((self.n_epochs))), **test_results)
-        if save_results_per_node:
-            np.savez(os.path.join(self.config.evaluation.folder, "test_results",
-                                  "test_results_per_node_epoch_{}.npz".format((self.n_epochs))), **test_results_per_node)
-        return
-
     def save(self, filepath='representation.pickle'):
         # save current epoch weight file with optimizer if we want to relaunch training from that point
         network = {
@@ -1609,6 +1215,17 @@ class HOLMES_VAE(TorchNNRepresentation):
         }
 
         torch.save(network, filepath)
+
+    def get_checkpoint(self):
+        checkpoint = {
+            "epoch": self.n_epochs,
+            "type": self.__class__.__name__,
+            "config": self.config,
+            "network_state_dict": self.network.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "split_history": self.split_history
+        }
+        return checkpoint
 
     @staticmethod
     def load(filepath='representation.pickle', map_location='cpu'):
@@ -1654,9 +1271,10 @@ class ConnectedEncoder(encoders.Encoder):
         self.ef = encoder_instance.ef
 
         # add lateral connections
-        if encoder_instance.spatial_dims == 2:
+        self.spatial_dims = encoder_instance.spatial_dims
+        if self.spatial_dims == 2:
             self.conv_module = nn.Conv2d
-        elif encoder_instance.spatial_dims == 3:
+        elif self.spatial_dims == 3:
             self.conv_module = nn.Conv3d
         ## lf
         if self.connect_lf:
@@ -1701,32 +1319,44 @@ class ConnectedEncoder(encoders.Encoder):
         if torch._C._get_tracing_state():
             return self.forward_for_graph_tracing(x)
 
+        # batch norm cannot deal with batch_size 1 in train mode
+        was_training = None
+        if self.training and x.size()[0] == 1:
+            self.eval()
+            was_training = True
+
+
         # local feature map
         lf = self.lf(x)
         # add the connections
         if self.connect_lf:
-            lf += self.lf_c(parent_lf)
+            lf = lf + self.lf_c(parent_lf)
 
         # global feature map
         gf = self.gf(lf)
         # add the connections
         if self.connect_gf:
-            gf += self.gf_c(parent_gf)
+            gf = gf + self.gf_c(parent_gf)
 
         # encoding
         if self.config.encoder_conditional_type == "gaussian":
             mu, logvar = torch.chunk(self.ef(gf), 2, dim=1)
             z = self.reparameterize(mu, logvar)
             if z.ndim > 2:
-                mu = mu.squeeze(dim=-1).squeeze(dim=-1)
-                logvar = logvar.squeeze(dim=-1).squeeze(dim=-1)
-                z = z.squeeze(dim=-1).squeeze(dim=-1)
+                for _ in range(self.spatial_dims):
+                    mu = mu.squeeze(-1)
+                    logvar = logvar.squeeze(-1)
+                    z = z.squeeze(-1)
             encoder_outputs = {"x": x, "lf": lf, "gf": gf, "z": z, "mu": mu, "logvar": logvar}
         elif self.config.encoder_conditional_type == "deterministic":
             z = self.ef(gf)
             if z.ndim > 2:
-                z = z.squeeze(dim=-1).squeeze(dim=-1)
+                for _ in range(self.spatial_dims):
+                    z = z.squeeze(-1)
             encoder_outputs = {"x": x, "lf": lf, "gf": gf, "z": z}
+
+        if was_training and x.size()[0] == 1:
+            self.train()
 
         return encoder_outputs
 
@@ -1735,13 +1365,13 @@ class ConnectedEncoder(encoders.Encoder):
         lf = self.lf(x)
         # add the connections
         if self.connect_lf:
-            lf += self.lf_c(parent_lf)
+            lf = lf + self.lf_c(parent_lf)
 
         # global feature map
         gf = self.gf(lf)
         # add the connections
         if self.connect_gf:
-            gf += self.gf_c(parent_gf)
+            gf = gf + self.gf_c(parent_gf)
 
         if self.config.encoder_conditional_type == "gaussian":
             mu, logvar = torch.chunk(self.ef(gf), 2, dim=1)
@@ -1766,13 +1396,15 @@ class ConnectedDecoder(decoders.Decoder):
         self.gfi = decoder_instance.gfi
         self.lfi = decoder_instance.lfi
 
+        self.spatial_dims = decoder_instance.spatial_dims
+        if self.spatial_dims == 2:
+            self.conv_module = nn.Conv2d
+        elif self.spatial_dims == 3:
+            self.conv_module = nn.Conv3d
+
         # add lateral connections
 
         ## gfi
-        if decoder_instance.spatial_dims == 2:
-            self.conv_module = nn.Conv2d
-        elif decoder_instance.spatial_dims == 3:
-            self.conv_module = nn.Conv3d
         if self.connect_gfi:
             if self.efi.out_connection_type[0] == "conv":
                 connection_channels = self.efi.out_connection_type[1]
@@ -1830,29 +1462,39 @@ class ConnectedDecoder(decoders.Decoder):
         if torch._C._get_tracing_state():
             return self.forward_for_graph_tracing(z)
 
-        if z.dim() == 2 and type(self).__name__ == "DumoulinDecoder":  # B*n_latents -> B*n_latents*1*1
-            z = z.unsqueeze(dim=-1).unsqueeze(dim=-1)
+        if z.dim() == 2 and self.efi.out_connection_type[0] == "conv":  # B*n_latents -> B*n_latents*1*1(*1)
+            for _ in range(self.spatial_dims):
+                z = z.unsqueeze(-1)
+
+        # batch norm cannot deal with batch_size 1 in train mode
+        was_training = None
+        if self.training and z.size()[0] == 1:
+            self.eval()
+            was_training = True
 
         # global feature map
         gfi = self.efi(z)
         # add the connections
         if self.connect_gfi:
-            gfi += self.gfi_c(parent_gfi)
+            gfi = gfi + self.gfi_c(parent_gfi)
 
         # local feature map
         lfi = self.gfi(gfi)
         # add the connections
         if self.connect_lfi:
-            lfi += self.lfi_c(parent_lfi)
+            lfi = lfi + self.lfi_c(parent_lfi)
 
         # recon_x
         recon_x = self.lfi(lfi)
         # add the connections
         if self.connect_recon:
-            recon_x += self.recon_c(parent_recon_x)
+            recon_x = recon_x + self.recon_c(parent_recon_x)
 
         # decoder output
-        decoder_outputs = {"z": z, "gfi": gfi, "lfi": lfi, "recon_x": recon_x}
+        decoder_outputs = {"gfi": gfi, "lfi": lfi, "recon_x": recon_x}
+
+        if was_training and z.size()[0] == 1:
+            self.train()
 
         return decoder_outputs
 
@@ -1864,18 +1506,18 @@ class ConnectedDecoder(decoders.Decoder):
         gfi = self.efi(z)
         # add the connections
         if self.connect_gfi:
-            gfi += self.gfi_c(parent_gfi)
+            gfi = gfi + self.gfi_c(parent_gfi)
 
         # local feature map
         lfi = self.gfi(gfi)
         # add the connections
         if self.connect_lfi:
-            lfi += self.lfi_c(parent_lfi)
+            lfi = lfi + self.lfi_c(parent_lfi)
 
         # recon_x
         recon_x = self.lfi(lfi)
         # add the connections
         if self.connect_recon:
-            recon_x += self.recon_c(parent_recon_x)
+            recon_x = recon_x + self.recon_c(parent_recon_x)
 
         return recon_x

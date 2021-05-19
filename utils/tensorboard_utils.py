@@ -22,6 +22,9 @@ def logger_add_image_list(logger, image_list, tag, global_step=0, nrow=None, pad
     if padding is None:
         padding = 0
 
+    if nrow == 0:
+        return
+
     if n_channels == 1 or n_channels == 3:  # grey scale or RGB
         if spatial_dims == 2:
             img = make_grid(image_tensor, nrow=nrow, padding=padding)
