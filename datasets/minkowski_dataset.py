@@ -173,7 +173,7 @@ class HDF5Dataset(Dataset):
             file.attrs["n_obs"] = cur_size + 1
 
         if self.config.load_data:
-            self.data_cache[new_data_idx] = {"coords": coords, "feats": feats, "label": label}
+            self.data_cache[new_data_idx] = {"coords": coords.detach().cpu(), "feats": feats.detach().cpu(), "label": label.detach().cpu()}
             self.data_ids_in_cache.append(new_data_idx)
 
         elif add_to_cache:
@@ -181,7 +181,7 @@ class HDF5Dataset(Dataset):
             if len(self.data_ids_in_cache) > self.config.data_cache_size:
                 del (self.data_cache[self.data_ids_in_cache[0]])
                 del (self.data_ids_in_cache[0])
-            self.data_cache[new_data_idx] = {"coords": coords, "feats": feats, "label": label}
+            self.data_cache[new_data_idx] = {"coords": coords.detach().cpu(), "feats": feats.detach().cpu(), "label": label.detach().cpu()}
             self.data_ids_in_cache.append(new_data_idx)
 
         self.data_ids.add(new_data_idx)
