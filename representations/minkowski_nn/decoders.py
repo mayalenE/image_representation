@@ -194,8 +194,10 @@ class MEDumoulinDecoder(Decoder):
 
     def forward(self, z, target_key):
         # batch norm cannot deal with batch_size 1 in train mode
+        was_training = None
         if self.training and len(z._batchwise_row_indices) == 1:
             self.eval()
+            was_training = True
 
 
         out_cls, out_targets = [], []
@@ -216,7 +218,7 @@ class MEDumoulinDecoder(Decoder):
                 print(empty_outputs)
             except:
                 pass
-            if self.training and len(z._batchwise_row_indices) == 1:
+            if was_training and len(z._batchwise_row_indices) == 1:
                 self.train()
             return empty_outputs
         elif gfi_keep.sum() > 0:
@@ -241,7 +243,7 @@ class MEDumoulinDecoder(Decoder):
                     print(empty_outputs)
                 except:
                     pass
-                if self.training and len(z._batchwise_row_indices) == 1:
+                if was_training and len(z._batchwise_row_indices) == 1:
                     self.train()
                 return empty_outputs
             elif gfi_out_keep.sum() > 0:
@@ -266,7 +268,7 @@ class MEDumoulinDecoder(Decoder):
                     print(empty_outputs)
                 except:
                     pass
-                if self.training and len(z._batchwise_row_indices) == 1:
+                if was_training and len(z._batchwise_row_indices) == 1:
                     self.train()
                 return empty_outputs
             elif lfi_out_keep.sum() > 0:
@@ -283,7 +285,7 @@ class MEDumoulinDecoder(Decoder):
         # decoder output
         decoder_outputs = {"gfi": gfi, "lfi": lfi, "recon_x": recon_x, "out_cls": out_cls, "out_targets": out_targets}
 
-        if self.training and len(z._batchwise_row_indices) == 1:
+        if was_training and len(z._batchwise_row_indices) == 1:
             self.train()
 
         return decoder_outputs
