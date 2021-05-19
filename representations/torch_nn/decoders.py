@@ -52,9 +52,10 @@ class Decoder(nn.Module, metaclass=ABCMeta):
 
     def forward(self, z):
         if z.dim() == 2 and type(self).__name__ == "DumoulinDecoder":  # B*n_latents -> B*n_latents*1*1
-            z = z.unsqueeze(dim=-1).unsqueeze(dim=-1)
+            for _ in range(self.spatial_dims):
+                z = z.unsqueeze(-1)
 
-        if torch._C._get_tracing_state():
+        if bool(torch._C._get_tracing_state()):
             return self.forward_for_graph_tracing(z)
 
             # global feature map
