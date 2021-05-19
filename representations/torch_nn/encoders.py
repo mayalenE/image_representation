@@ -74,14 +74,16 @@ class Encoder(nn.Module, metaclass=ABCMeta):
             mu, logvar = torch.chunk(self.ef(gf), 2, dim=1)
             z = self.reparameterize(mu, logvar)
             if z.ndim > 2:
-                mu = mu.squeeze(dim=-1).squeeze(dim=-1)
-                logvar = logvar.squeeze(dim=-1).squeeze(dim=-1)
-                z = z.squeeze(dim=-1).squeeze(dim=-1)
+                for _ in range(self.spatial_dims):
+                    mu = mu.squeeze(dim=-1)
+                    logvar = logvar.squeeze(dim=-1)
+                    z = z.squeeze(dim=-1)
             encoder_outputs.update({"z": z, "mu": mu, "logvar": logvar})
         elif self.config.encoder_conditional_type == "deterministic":
             z = self.ef(gf)
             if z.ndim > 2:
-                z = z.squeeze(dim=-1).squeeze(dim=-1)
+                for _ in range(self.spatial_dims):
+                    z = z.squeeze(dim=-1)
             encoder_outputs.update({"z": z})
 
         # attention features
