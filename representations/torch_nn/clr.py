@@ -21,7 +21,7 @@ class ProjectionHead(nn.Module):
         default_config = Dict()
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         nn.Module.__init__(self)
         self.config = self.__class__.default_config()
         self.config.update(config)
@@ -77,7 +77,7 @@ class SimCLR(TorchNNRepresentation):
         default_config.optimizer.parameters.weight_decay = 1e-5
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         TorchNNRepresentation.__init__(self, config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
 
         self.output_keys_list = self.network.encoder.output_keys_list + ["recon_x"]
@@ -266,7 +266,7 @@ class TripletCLR(SimCLR):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         SimCLR.__init__(self, config, **kwargs)
 
     def set_network(self, network_name, network_parameters):

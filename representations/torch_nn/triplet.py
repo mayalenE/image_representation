@@ -20,7 +20,7 @@ def get_combined_triplet_class(base_class):
             default_config.update(base_class.default_config())
             return default_config
 
-        def __init__(self, config=None, **kwargs):
+        def __init__(self, config={}, **kwargs):
             base_class.__init__(self, config=config, **kwargs)
 
             if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
@@ -135,7 +135,7 @@ class Triplet(TorchNNRepresentation):
         default_config.optimizer.parameters.weight_decay = 1e-5
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         TorchNNRepresentation.__init__(self, config=config, **kwargs)
 
 
@@ -306,18 +306,18 @@ class Triplet(TorchNNRepresentation):
                     recon_x_a = model_outputs["x_a_outputs"]["recon_x"]
                     recon_x_b = model_outputs["x_b_outputs"]["recon_x"]
                     recon_x_c = model_outputs["x_c_outputs"]["recon_x"]
-                    if len(images) < self.config.logging.record_embeddings_max:
+                    if len(images) < self.config.logging.record_memory_max:
                         images += [x_ref, x_a, x_b, x_c]
-                    if len(recon_images) < self.config.logging.record_valid_images_max:
+                    if len(recon_images) < self.config.logging.record_memory_max:
                         recon_images += [recon_x_ref, recon_x_a, recon_x_b, recon_x_c]
 
                 if record_embeddings:
-                    if len(embeddings) < self.config.logging.record_embeddings_max:
+                    if len(embeddings) < self.config.logging.record_memory_max:
                         embeddings += [model_outputs["x_ref_outputs"]["z"], model_outputs["x_a_outputs"]["z"],
                                    model_outputs["x_b_outputs"]["z"], model_outputs["x_c_outputs"]["z"]]
                         labels += [data_ref["label"], data_a["label"], data_b["label"], data_c["label"]]
                     if not record_valid_images:
-                        if len(images) < self.config.logging.record_embeddings_max:
+                        if len(images) < self.config.logging.record_memory_max:
                             images += [x_ref, x_a, x_b, x_c]
 
         if record_valid_images:

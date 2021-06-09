@@ -12,7 +12,7 @@ class Representation(metaclass=ABCMeta):
         default_config = Dict()
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         self.config = self.__class__.default_config()
         self.config.update(config)
         self.config.update(kwargs)

@@ -1,14 +1,13 @@
 from image_representation.representations.torch_nn.decoders import Decoder
-from copy import deepcopy
 import torch
 from torch import nn
 import MinkowskiEngine as ME
 import math
 
 
-class Decoder(Decoder):
+class MEDecoder(Decoder):
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         nn.Module.__init__(self)
         self.config = self.__class__.default_config()
         self.config.update(config)
@@ -20,6 +19,11 @@ class Decoder(Decoder):
         self.output_keys_list = ["gfi", "lfi", "recon_x"]
 
     def forward(self, z, *args):
+        # batch norm cannot deal with batch_size 1 in train mode
+        was_training = None
+        if self.training and len(z._batchwise_row_indices) == 1:
+            self.eval()
+            was_training = True
 
         # global feature map
         gfi = self.efi(z)
@@ -29,6 +33,9 @@ class Decoder(Decoder):
         recon_x = self.lfi(lfi)
         # decoder output
         decoder_outputs = {"gfi": gfi, "lfi": lfi, "recon_x": recon_x}
+
+        if was_training:
+            self.train()
 
         return decoder_outputs
 
@@ -42,10 +49,10 @@ def get_decoder(model_architecture):
 ME Decoder Modules 
 ========================================================================================================================="""
 
-class MEDumoulinDecoder(Decoder):
+class MEDumoulinDecoder(MEDecoder):
 
-    def __init__(self, config=None, **kwargs):
-        Decoder.__init__(self, config=config, **kwargs)
+    def __init__(self, config={}, **kwargs):
+        MEDecoder.__init__(self, config=config, **kwargs)
 
         # need square and power of 2 image size input
         power = math.log(self.config.input_size[0], 2)
@@ -60,8 +67,8 @@ class MEDumoulinDecoder(Decoder):
         strides = [1, 2] * self.config.n_conv_layers
         dils = [1, 1] * self.config.n_conv_layers
 
-        if self.config.hidden_channel is None:
-            self.config.hidden_channel = 8
+        if self.config.hidden_channels is None:
+            self.config.hidden_channels = 8
 
 
         # encoder feature inverse
@@ -218,7 +225,7 @@ class MEDumoulinDecoder(Decoder):
                 print(empty_outputs)
             except:
                 pass
-            if was_training and len(z._batchwise_row_indices) == 1:
+            if was_training:
                 self.train()
             return empty_outputs
         elif gfi_keep.sum() > 0:
@@ -243,7 +250,7 @@ class MEDumoulinDecoder(Decoder):
                     print(empty_outputs)
                 except:
                     pass
-                if was_training and len(z._batchwise_row_indices) == 1:
+                if was_training:
                     self.train()
                 return empty_outputs
             elif gfi_out_keep.sum() > 0:
@@ -268,7 +275,7 @@ class MEDumoulinDecoder(Decoder):
                     print(empty_outputs)
                 except:
                     pass
-                if was_training and len(z._batchwise_row_indices) == 1:
+                if was_training:
                     self.train()
                 return empty_outputs
             elif lfi_out_keep.sum() > 0:
@@ -285,15 +292,15 @@ class MEDumoulinDecoder(Decoder):
         # decoder output
         decoder_outputs = {"gfi": gfi, "lfi": lfi, "recon_x": recon_x, "out_cls": out_cls, "out_targets": out_targets}
 
-        if was_training and len(z._batchwise_row_indices) == 1:
+        if was_training:
             self.train()
 
         return decoder_outputs
 
-class MEFDumoulinDecoder(Decoder):
+class MEFDumoulinDecoder(MEDecoder):
 
-    def __init__(self, config=None, **kwargs):
-        Decoder.__init__(self, config=config, **kwargs)
+    def __init__(self, config={}, **kwargs):
+        MEDecoder.__init__(self, config=config, **kwargs)
 
         # need square and power of 2 image size input
         power = math.log(self.config.input_size[0], 2)
@@ -304,15 +311,12 @@ class MEFDumoulinDecoder(Decoder):
         assert self.config.n_conv_layers == power, "The number of convolutional layers in DumoulinEncoder must be log2(input_size) "
 
         # network architecture
-        if self.config.hidden_channels is None:
-            self.config.hidden_channels = int(512 // math.pow(2, self.config.n_conv_layers))
-        hidden_channels = self.config.hidden_channels
+        hidden_channels = int(self.config.hidden_channels * math.pow(2, self.config.n_conv_layers))
         kernels_size = [4, 4] * self.config.n_conv_layers
         strides = [1, 2] * self.config.n_conv_layers
         pads = [0, 1] * self.config.n_conv_layers
 
         # encoder feature inverse
-        hidden_channels = int(hidden_channels * math.pow(2, self.config.n_conv_layers))
         self.efi = nn.Sequential(
             ME.MinkowskiConvolution(self.config.n_latents, hidden_channels,
                                     kernel_size=1, stride=1,

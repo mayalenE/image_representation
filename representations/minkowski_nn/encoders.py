@@ -21,7 +21,7 @@ class MEEncoder(Encoder):
     n_latents: dimensionality of the infered latent output.
     """
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         nn.Module.__init__(self)
         self.config = self.__class__.default_config()
         self.config.update(config)
@@ -116,7 +116,7 @@ class MEDumoulinEncoder(MEEncoder):
         - 1 convolutional layer (n_latents channels), (1 x 1 kernel), (stride of 1), (padding of 1)
     """
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         MEEncoder.__init__(self, config=config, **kwargs)
 
         # need square and power of 2 image size input
@@ -130,8 +130,8 @@ class MEDumoulinEncoder(MEEncoder):
         assert self.config.n_conv_layers == power, "The number of convolutional layers in DumoulinEncoder must be log2(input_size) "
 
         # network architecture
-        if self.config.hidden_channel is None:
-            self.config.hidden_channel = 8
+        if self.config.hidden_channels is None:
+            self.config.hidden_channels = 8
 
         hidden_channels = self.config.hidden_channels
         kernels_size = [4, 4] * self.config.n_conv_layers

@@ -83,7 +83,7 @@ class Node(nn.Module):
 
         return leaf_accumulator
 
-    def create_boundary(self, z_library, z_fitness=None, boundary_config=None):
+    def create_boundary(self, z_library, z_fitness=None, boundary_config={}):
         # normalize z points
         self.feature_range = (z_library.min(axis=0), z_library.max(axis=0))
         X = z_library - self.feature_range[0]
@@ -360,7 +360,7 @@ class Node(nn.Module):
 def get_node_class(base_class):
 
     class NodeClass(Node, base_class):
-        def __init__(self, depth, parent_network=None, config=None, **kwargs):
+        def __init__(self, depth, parent_network=None, config={}, **kwargs):
             base_class.__init__(self, config=config, **kwargs)
             Node.__init__(self, depth, **kwargs)
 
@@ -423,7 +423,7 @@ class HOLMES_CLR(TorchNNRepresentation):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         self.config = self.__class__.default_config()
         self.config.update(config)
         self.config.update(kwargs)

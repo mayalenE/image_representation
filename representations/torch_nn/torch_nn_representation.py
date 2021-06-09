@@ -55,9 +55,8 @@ class TorchNNRepresentation(Representation, nn.Module):
         default_config.logging.folder = None
         default_config.logging.record_loss_every = 1
         default_config.logging.record_valid_images_every = 1
-        default_config.logging.record_valid_images_max = 40
         default_config.logging.record_embeddings_every = 1
-        default_config.logging.record_embeddings_max = 400
+        default_config.logging.record_memory_max = 100
 
         ## checkpoints (will save model every X epochs)
         default_config.checkpoint = Dict()
@@ -73,7 +72,7 @@ class TorchNNRepresentation(Representation, nn.Module):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         Representation.__init__(self, config=config, **kwargs)
         nn.Module.__init__(self)
 

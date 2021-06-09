@@ -33,7 +33,7 @@ class Decoder(nn.Module, metaclass=ABCMeta):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         nn.Module.__init__(self)
         self.config = self.__class__.default_config()
         self.config.update(config)
@@ -93,7 +93,7 @@ Decoder Modules
 
 class BurgessDecoder(Decoder):
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         Decoder.__init__(self, config=config, **kwargs)
 
         # network architecture
@@ -157,7 +157,7 @@ class BurgessDecoder(Decoder):
 
 class HjelmDecoder(Decoder):
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         Decoder.__init__(self, config=config, **kwargs)
 
         # network architecture
@@ -225,7 +225,7 @@ class HjelmDecoder(Decoder):
 
 class DumoulinDecoder(Decoder):
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         Decoder.__init__(self, config=config, **kwargs)
 
         # need square and power of 2 image size input
@@ -237,9 +237,8 @@ class DumoulinDecoder(Decoder):
         assert self.config.n_conv_layers == power - 2, "The number of convolutional layers in DumoulinEncoder must be log(input_size, 2) - 2 "
 
         # network architecture
-        if self.config.hidden_channel is None:
-            self.config.hidden_channel = 8
-        hidden_channels = self.config.hidden_channels
+        # encoder feature inverse
+        hidden_channels = int(self.config.hidden_channels * math.pow(2, self.config.n_conv_layers))
         kernels_size = [4, 4] * self.config.n_conv_layers
         strides = [1, 2] * self.config.n_conv_layers
         pads = [0, 1] * self.config.n_conv_layers
@@ -266,7 +265,6 @@ class DumoulinDecoder(Decoder):
                 kernels_size[2 * conv_layer_id + 1], strides[2 * conv_layer_id + 1], pads[2 * conv_layer_id + 1])
 
         # encoder feature inverse
-        hidden_channels = int(hidden_channels * math.pow(2, self.config.n_conv_layers))
         self.efi = nn.Sequential(
             self.convtranspose_module(self.config.n_latents, hidden_channels, kernel_size=1, stride=1),
             self.batchnorm_module(hidden_channels),
@@ -335,7 +333,7 @@ class DumoulinDecoder(Decoder):
 
 class MNISTDecoder(Decoder):
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         Decoder.__init__(self, config=config, **kwargs)
 
         # network architecture
@@ -373,7 +371,7 @@ class MNISTDecoder(Decoder):
 
 class CedricDecoder(Decoder):
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         Decoder.__init__(self, config=config, **kwargs)
 
         # network architecture

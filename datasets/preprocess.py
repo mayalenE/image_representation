@@ -89,14 +89,9 @@ class TensorRandomSphericalRotation(object):
         self.padding_size = int(np.sqrt(2 * np.power(radius, 2)) - radius)
         # max rotation needs padding of [sqrt(2*128^2)-128 = 53.01]
         self.spheric_pad = SphericPad(padding_size=self.padding_size)
-        if n_channels == 1:
-            fill = (0,)
-        else:
-            fill = 0
         if self.spatial_dims == 2:
-            self.random_rotation = transforms.RandomRotation(max_degrees, resample=Image.BILINEAR, fill=fill)
-            self.center_crop = transforms.CenterCrop(img_size)
-        if self.spatial_dims == 3:
+            self.max_degrees = float(max_degrees)
+        elif self.spatial_dims == 3:
             if isinstance(max_degrees, numbers.Number):
                 self.max_degrees = (max_degrees, max_degrees, max_degrees)
             elif isinstance(max_degrees, tuple) or isinstance(max_degrees, list):
@@ -106,14 +101,16 @@ class TensorRandomSphericalRotation(object):
     def __call__(self, x):
         if np.random.random() < self.p:
             x = x.unsqueeze(0)
+            x = self.spheric_pad(x)
             if self.spatial_dims == 2:
-                x = self.spheric_pad(x).squeeze(0)
-                img_PIL = to_PIL(x)
-                img_PIL = self.random_rotation(img_PIL)
-                img_PIL = self.center_crop(img_PIL)
-                x = to_Tensor(img_PIL)
+                theta = float(torch.empty(1).uniform_(-self.max_degrees,  self.max_degrees).item()) * math.pi / 180.0
+                R = torch.tensor([[math.cos(theta), -math.sin(theta)],
+                                    [math.sin(theta), math.cos(theta)]])
+                grid = F.affine_grid(torch.cat([R, torch.zeros(2, 1)], dim=-1).unsqueeze(0), size=x.size()).type(x.dtype)
+                x = F.grid_sample(x, grid)
+                x = x[:, :, self.padding_size:-self.padding_size, self.padding_size:-self.padding_size].squeeze(0)
+
             elif self.spatial_dims == 3:
-                x = self.spheric_pad(x)
                 theta_x = float(torch.empty(1).uniform_(-float(self.max_degrees[0]), float(self.max_degrees[0])).item()) * math.pi / 180.0
                 theta_y = float(torch.empty(1).uniform_(-float(self.max_degrees[1]), float(self.max_degrees[1])).item()) * math.pi / 180.0
                 theta_z = float(torch.empty(1).uniform_(-float(self.max_degrees[2]), float(self.max_degrees[2])).item()) * math.pi / 180.0
@@ -127,9 +124,10 @@ class TensorRandomSphericalRotation(object):
                                     [math.sin(theta_z), math.cos(theta_z), 0.0],
                                     [0., 0., 1.]])
                 R = R_z.matmul(R_y.matmul(R_x)) # batch_size = 1
-                grid = F.affine_grid(torch.cat([R, torch.zeros(3,1)], dim=-1).unsqueeze(0), size=x.size())
+                grid = F.affine_grid(torch.cat([R, torch.zeros(3,1)], dim=-1).unsqueeze(0), size=x.size()).type(x.dtype)
                 x = F.grid_sample(x, grid)
                 x = x[:, :, self.padding_size:-self.padding_size, self.padding_size:-self.padding_size , self.padding_size:-self.padding_size].squeeze(0)
+
         return x
 
 

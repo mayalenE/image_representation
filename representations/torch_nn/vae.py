@@ -50,7 +50,7 @@ class VAE(TorchNNRepresentation):
         default_config.optimizer.parameters.weight_decay = 1e-5
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         TorchNNRepresentation.__init__(self, config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
 
         self.output_keys_list = self.network.encoder.output_keys_list + ["recon_x"]
@@ -201,17 +201,17 @@ class VAE(TorchNNRepresentation):
 
                 if record_valid_images:
                     recon_x = model_outputs["recon_x"].cpu().detach()
-                    if len(images) < self.config.logging.record_embeddings_max:
+                    if len(images) < self.config.logging.record_memory_max:
                         images.append(x.cpu().detach())
-                    if len(recon_images) < self.config.logging.record_valid_images_max:
+                    if len(recon_images) < self.config.logging.record_memory_max:
                         recon_images.append(recon_x)
 
                 if record_embeddings:
-                    if len(embeddings) < self.config.logging.record_embeddings_max:
+                    if len(embeddings) < self.config.logging.record_memory_max:
                         embeddings.append(model_outputs["z"].cpu().detach().view(x.shape[0], self.config.network.parameters.n_latents))
                         labels.append(data["label"])
                     if not record_valid_images:
-                        if len(images) < self.config.logging.record_embeddings_max:
+                        if len(images) < self.config.logging.record_memory_max:
                             images.append(x.cpu().detach())
 
         if record_valid_images:
@@ -226,7 +226,7 @@ class VAE(TorchNNRepresentation):
         # log results
         if record_valid_images:
             n_images = min(len(images), 40)
-            sampled_ids =  torch.randperm(len(images))[:n_images]
+            sampled_ids = torch.randperm(len(images))[:n_images]
             input_images = images[sampled_ids].detach().cpu()
             output_images = recon_images[sampled_ids].detach().cpu()
             if self.config.loss.parameters.reconstruction_dist == "bernoulli":
@@ -279,7 +279,7 @@ class BetaVAE(VAE):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         VAE.__init__(self, config, **kwargs)
 
 
@@ -302,7 +302,7 @@ class AnnealedVAE(VAE):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         VAE.__init__(self, config, **kwargs)
 
 class BetaTCVAE(VAE):
@@ -325,7 +325,7 @@ class BetaTCVAE(VAE):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         VAE.__init__(self, config, **kwargs)
 
     def train_epoch(self, train_loader):

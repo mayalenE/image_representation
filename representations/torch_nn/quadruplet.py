@@ -169,18 +169,18 @@ class QuadrupletNet(nn.Module):
                     recon_x_pos_b = self.forward(x_pos_b)["recon_x"]
                     recon_x_neg_a = self.forward(x_neg_a)["recon_x"]
                     recon_x_neg_b = self.forward(x_neg_b)["recon_x"]
-                    if len(images) < self.config.logging.record_embeddings_max:
+                    if len(images) < self.config.logging.record_memory_max:
                         images += [x_pos_a, x_pos_b, x_neg_a, x_neg_b]
-                    if len(recon_images) < self.config.logging.record_valid_images_max:
+                    if len(recon_images) < self.config.logging.record_memory_max:
                         recon_images += [recon_x_pos_a, recon_x_pos_b, recon_x_neg_a, recon_x_neg_b]
 
                 if record_embeddings:
-                    if len(embeddings) < self.config.logging.record_embeddings_max:
+                    if len(embeddings) < self.config.logging.record_memory_max:
                         embeddings += [model_outputs["z_pos_a"], model_outputs["z_pos_b"], model_outputs["z_neg_a"],
                                    model_outputs["z_neg_b"]]
                         labels += [data_pos_a["label"], data_pos_b["label"], data_neg_a["label"], data_neg_b["label"]]
                     if not record_valid_images:
-                        if len(images) < self.config.logging.record_embeddings_max:
+                        if len(images) < self.config.logging.record_memory_max:
                             images += [x_pos_a, x_pos_b, x_neg_a, x_neg_b]
 
         if record_valid_images:
@@ -317,7 +317,7 @@ class VAEQuadruplet(VAE, QuadrupletNet):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         VAE.__init__(self, config=config, **kwargs)
 
         if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
@@ -382,7 +382,7 @@ class BetaVAEQuadruplet(BetaVAE, QuadrupletNet):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         BetaVAE.__init__(self, config=config, **kwargs)
 
         if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
@@ -447,7 +447,7 @@ class AnnealedVAEQuadruplet(AnnealedVAE, QuadrupletNet):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         AnnealedVAE.__init__(self, config=config, **kwargs)
 
         if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):
@@ -512,7 +512,7 @@ class BetaTCVAEQuadruplet(BetaTCVAE, QuadrupletNet):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         BetaTCVAE.__init__(self, config=config, **kwargs)
 
         if (config.load_pretrained_model) and os.path.exists(config.pretrained_model_filepath):

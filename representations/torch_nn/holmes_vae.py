@@ -141,7 +141,7 @@ class Node(nn.Module):
 
         return leaf_accumulator
 
-    def create_boundary(self, z_library, z_fitness=None, boundary_config=None):
+    def create_boundary(self, z_library, z_fitness=None, boundary_config={}):
         # normalize z points
         self.feature_range = (z_library.min(axis=0), z_library.max(axis=0))
         X = z_library - self.feature_range[0]
@@ -442,7 +442,7 @@ class Node(nn.Module):
 def get_node_class(base_class):
 
     class NodeClass(Node, base_class):
-        def __init__(self, depth, parent_network=None, config=None, **kwargs):
+        def __init__(self, depth, parent_network=None, config={}, **kwargs):
             base_class.__init__(self, config=config, **kwargs)
             Node.__init__(self, depth, **kwargs)
 
@@ -511,7 +511,7 @@ class HOLMES_VAE(TorchNNRepresentation):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         self.config = self.__class__.default_config()
         self.config.update(config)
         self.config.update(kwargs)
@@ -630,30 +630,39 @@ class HOLMES_VAE(TorchNNRepresentation):
         """
         x = x.to(self.config.device).type(self.config.dtype)
 
-        if mode == "niche":
-            z = torch.Tensor().new_full((len(x), self.n_latents), float("nan")).to(self.config.device)
-            all_nodes_outputs = self.network.depth_first_forward_whole_branch_preorder(x)
-            if node_path is None:
-                node_path = "0"
-                warnings.warn("Node path not specified... setting it to root node 0.")
-
-        elif mode == "exhaustif":
+        if node_path is None:
             z = Dict.fromkeys(self.network.get_node_pathes())
+            for cur_node_path in self.network.get_node_pathes():
+                z[cur_node_path] = torch.Tensor().new_full((len(x), self.n_latents), float("nan")).to(self.config.device).type(self.config.dtype)
+        else:
+            z = torch.Tensor().new_full((len(x), self.n_latents), float("nan")).to(self.config.device)
+
+        if mode == "niche":
+            all_nodes_outputs = self.network.depth_first_forward_whole_branch_preorder(x)
+        elif mode == "exhaustif":
             all_nodes_outputs = self.network.depth_first_forward_whole_tree_preorder(x)
 
         for node_idx in range(len(all_nodes_outputs)):
             cur_node_path = all_nodes_outputs[node_idx][0][0]
-            if mode == "niche" and cur_node_path != node_path:
-                continue
-            elif mode == "niche" and cur_node_path == node_path:
-                cur_node_x_ids = all_nodes_outputs[node_idx][1]
-                cur_node_outputs = all_nodes_outputs[node_idx][2]
-                for idx in range(len(cur_node_x_ids)):
-                    z[cur_node_x_ids[idx]] = cur_node_outputs["z"][idx]
-                break
+
+            if node_path is not None:
+                if cur_node_path != node_path:
+                    continue
+                else:
+                    cur_node_x_ids = all_nodes_outputs[node_idx][1]
+                    cur_node_outputs = all_nodes_outputs[node_idx][2]
+                    for idx in range(len(cur_node_x_ids)):
+                        z[cur_node_x_ids[idx]] = cur_node_outputs["z"][idx]
+                    break
             else:
-                cur_node_outputs = all_nodes_outputs[node_idx][1]
-                z[cur_node_path] = cur_node_outputs["z"]
+                if mode == "niche":
+                    cur_node_x_ids = all_nodes_outputs[node_idx][1]
+                    cur_node_outputs = all_nodes_outputs[node_idx][2]
+                    for idx in range(len(cur_node_x_ids)):
+                        z[cur_node_path][cur_node_x_ids[idx]] = cur_node_outputs["z"][idx]
+                elif mode == "exhaustif":
+                    cur_node_outputs = all_nodes_outputs[node_idx][1]
+                    z[cur_node_path] = cur_node_outputs["z"]
         return z
 
 
@@ -682,7 +691,11 @@ class HOLMES_VAE(TorchNNRepresentation):
         # Create boundary
         if x_loader is not None:
             with torch.no_grad():
-                z_library = self.calc_embedding(x_loader.dataset.images, node_path=node_path).detach()
+                z_library = torch.empty((0, self.n_latents), device=self.config.device, dtype=self.config.dtype)
+                for data in x_loader:
+                    cur_images = data["obs"].to(self.config.device).type(self.config.dtype)
+                    cur_z = self.calc_embedding(cur_images, node_path=node_path).detach()
+                    z_library = torch.cat([z_library, cur_z])
                 if split_trigger.boundary_config.z_fitness is None:
                     z_fitness = None
                 else:
@@ -690,9 +703,8 @@ class HOLMES_VAE(TorchNNRepresentation):
                 if torch.isnan(z_library).any():
                     keep_ids = ~(torch.isnan(z_library.sum(1)))
                     z_library = z_library[keep_ids]
-                    if z_fitness is not None:
-                        x_fitness = x_fitness[keep_ids]
-                        z_fitness = x_fitness
+                    if (z_fitness is not None) and (keep_ids.sum()) > 0:
+                        z_fitness = z_fitness[keep_ids]
                 if z_library.shape[0] == 0:
                     z_library = torch.zeros((2, self.n_latents))
                     if z_fitness is not None:
@@ -909,12 +921,6 @@ class HOLMES_VAE(TorchNNRepresentation):
 
             # update epoch counters
             self.n_epochs += 1
-            # for leaf_path in self.network.get_leaf_pathes():
-            #     leaf_node = self.network.get_child_node(leaf_path)
-            #     if hasattr(leaf_node, "epochs_since_split"):
-            #         leaf_node.epochs_since_split += 1
-            #     else:
-            #         leaf_node.epochs_since_split = 1
 
             # log
             if self.logger is not None and (self.n_epochs % self.config.logging.record_loss_every == 0):
@@ -1142,19 +1148,19 @@ class HOLMES_VAE(TorchNNRepresentation):
                 # record embeddings
                 if record_valid_images:
                     for i in range(len(x)):
-                        #if len(images) < self.config.logging.record_embeddings_max:
+                        #if len(images) < self.config.logging.record_memory_max:
                         images.append(x[i].unsqueeze(0))
                     for i in range(len(x)):
-                        #if len(recon_images) < self.config.logging.record_valid_images_max:
+                        #if len(recon_images) < self.config.logging.record_memory_max:
                         recon_images.append(model_outputs["recon_x"][i].unsqueeze(0))
                 if record_embeddings:
                     for i in range(len(x)):
-                        #if len(embeddings) < self.config.logging.record_embeddings_max:
+                        #if len(embeddings) < self.config.logging.record_memory_max:
                         embeddings.append(model_outputs["z"][i].unsqueeze(0))
                         labels.append(data['label'][i].unsqueeze(0))
                     if not record_valid_images:
                         for i in range(len(x)):
-                            #if len(images) < self.config.logging.record_embeddings_max:
+                            #if len(images) < self.config.logging.record_memory_max:
                             images.append(x[i].unsqueeze(0))
 
                 taken_pathes += model_outputs["path_taken"]
@@ -1280,40 +1286,47 @@ class ConnectedEncoder(encoders.Encoder):
         if self.connect_lf:
             if self.lf.out_connection_type[0] == "conv":
                 connection_channels = self.lf.out_connection_type[1]
-                self.lf_c = nn.Sequential(self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
+                #self.lf_c = nn.Sequential(self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
+                self.lf_c_beta = self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False)
+                self.lf_c_gamma = self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias=False)
             elif self.lf.out_connection_type[0] == "lin":
                 connection_dim = self.lf.out_connection_type[1]
-                self.lf_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
+                #self.lf_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
+                self.lf_c_beta = nn.Linear(connection_dim, connection_dim)
+                self.lf_c_gamma = nn.Linear(connection_dim, connection_dim)
 
         ## gf
         if self.connect_gf:
             if self.gf.out_connection_type[0] == "conv":
                 connection_channels = self.gf.out_connection_type[1]
-                self.gf_c = nn.Sequential(self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
+                #self.gf_c = nn.Sequential(self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
+                self.gf_c_beta = self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False)
+                self.gf_c_gamma = self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False)
             elif self.gf.out_connection_type[0] == "lin":
                 connection_dim = self.gf.out_connection_type[1]
-                self.gf_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
+                #self.gf_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
+                self.gf_c_beta = nn.Linear(connection_dim, connection_dim)
+                self.gf_c_gamma = nn.Linear(connection_dim, connection_dim)
 
         initialization_net = get_weights_init("kaiming_uniform")
         self.gf.apply(initialization_net)
         self.ef.apply(initialization_net)
-        initialization_c = get_weights_init("uniform")
-        if self.connect_lf:
-            self.lf_c.apply(initialization_c)
-        if self.connect_gf:
-            self.gf_c.apply(initialization_c)
-
-    """
-        #initialization_net = initialization.get_initialization("null")
-        #self.gf.apply(initialization_net)
-        #self.ef.apply(initialization_net)
-        #initialization_c = initialization.get_initialization("connections_identity")
-        initialization_c = initialization.get_initialization("null")
+        """
+        initialization_c = get_weights_init("uniform") # "null"
         if self.connect_lf:
             self.lf_c.apply(initialization_c)
         if self.connect_gf:
             self.gf_c.apply(initialization_c)
         """
+        initialization_beta = get_weights_init("uniform")
+        initialization_gamma = get_weights_init("kaiming_uniform")
+        if self.connect_lf:
+            self.lf_c_beta.apply(initialization_beta)
+            self.lf_c_gamma.apply(initialization_gamma)
+        if self.connect_gf:
+            self.gf_c_beta.apply(initialization_beta)
+            self.gf_c_gamma.apply(initialization_gamma)
+
 
     def forward(self, x, parent_lf=None, parent_gf=None):
         if torch._C._get_tracing_state():
@@ -1330,13 +1343,15 @@ class ConnectedEncoder(encoders.Encoder):
         lf = self.lf(x)
         # add the connections
         if self.connect_lf:
-            lf = lf + self.lf_c(parent_lf)
+            #lf = lf + self.lf_c(parent_lf)
+            lf = lf * self.lf_c_gamma(parent_lf) + self.lf_c_beta(parent_lf)
 
         # global feature map
         gf = self.gf(lf)
         # add the connections
         if self.connect_gf:
-            gf = gf + self.gf_c(parent_gf)
+            #gf = gf + self.gf_c(parent_gf)
+            gf = gf * self.gf_c_gamma(parent_gf) + self.gf_c_beta(parent_gf)
 
         # encoding
         if self.config.encoder_conditional_type == "gaussian":
@@ -1365,13 +1380,15 @@ class ConnectedEncoder(encoders.Encoder):
         lf = self.lf(x)
         # add the connections
         if self.connect_lf:
-            lf = lf + self.lf_c(parent_lf)
+            #lf = lf + self.lf_c(parent_lf)
+            lf = lf * self.lf_c_gamma(parent_lf) + self.lf_c_beta(parent_lf)
 
         # global feature map
         gf = self.gf(lf)
         # add the connections
         if self.connect_gf:
-            gf = gf + self.gf_c(parent_gf)
+            #gf = gf + self.gf_c(parent_gf)
+            gf = gf * self.gf_c_gamma(parent_gf) + self.gf_c_beta(parent_gf)
 
         if self.config.encoder_conditional_type == "gaussian":
             mu, logvar = torch.chunk(self.ef(gf), 2, dim=1)
@@ -1408,48 +1425,47 @@ class ConnectedDecoder(decoders.Decoder):
         if self.connect_gfi:
             if self.efi.out_connection_type[0] == "conv":
                 connection_channels = self.efi.out_connection_type[1]
-                self.gfi_c = nn.Sequential(self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
+                #self.gfi_c = nn.Sequential(self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
+                self.gfi_c_beta = self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False)
+                self.gfi_c_gamma = self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias=False)
             elif self.efi.out_connection_type[0] == "lin":
                 connection_dim = self.efi.out_connection_type[1]
-                self.gfi_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
+                #self.gfi_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
+                self.gfi_c_beta = nn.Linear(connection_dim, connection_dim)
+                self.gfi_c_gamma = nn.Linear(connection_dim, connection_dim)
         ## lfi
         if self.connect_lfi:
             if self.gfi.out_connection_type[0] == "conv":
                 connection_channels = self.gfi.out_connection_type[1]
-                self.lfi_c = nn.Sequential(self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
+                #self.lfi_c = nn.Sequential(self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False), nn.ReLU())
+                self.lfi_c_beta = self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias=False)
+                self.lfi_c_gamma = self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias=False)
             elif self.gfi.out_connection_type[0] == "lin":
                 connection_dim = self.gfi.out_connection_type[1]
-                self.lfi_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
+                #self.lfi_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
+                self.lfi_c_beta = nn.Linear(connection_dim, connection_dim)
+                self.lfi_c_gamma = nn.Linear(connection_dim, connection_dim)
 
-        ## lfi
+        ## recon
         if self.connect_recon:
             if self.lfi.out_connection_type[0] == "conv":
                 connection_channels = self.lfi.out_connection_type[1]
-                self.recon_c = nn.Sequential(self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False))
+                #self.recon_c = nn.Sequential(self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias = False))
+                self.recon_c_beta = self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias=False)
+                self.recon_c_gamma = self.conv_module(connection_channels, connection_channels, kernel_size=1, stride=1, bias=False)
             elif self.lfi.out_connection_type[0] == "lin":
                 connection_dim = self.lfi.out_connection_type[1]
-                self.recon_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
+                #self.recon_c = nn.Sequential(nn.Linear(connection_dim, connection_dim), nn.ReLU())
+                self.recon_c_beta = nn.Linear(connection_dim, connection_dim)
+                self.recon_c_gamma = nn.Linear(connection_dim, connection_dim)
 
 
         initialization_net = get_weights_init("kaiming_uniform")
         self.efi.apply(initialization_net)
         self.gfi.apply(initialization_net)
         self.lfi.apply(initialization_net)
-        initialization_c = get_weights_init("uniform")
-        if self.connect_gfi:
-            self.gfi_c.apply(initialization_c)
-        if self.connect_lfi:
-            self.lfi_c.apply(initialization_c)
-        if self.connect_recon:
-            self.recon_c.apply(initialization_c)
-
         """
-        #initialization_net = initialization.get_initialization("null")
-        #self.efi.apply(initialization_net)
-        #self.gfi.apply(initialization_net)
-        #self.lfi.apply(initialization_net)
-        #initialization_c = initialization.get_initialization("connections_identity")
-        initialization_c = initialization.get_initialization("null")
+        initialization_c = get_weights_init("uniform") #"null"
         if self.connect_gfi:
             self.gfi_c.apply(initialization_c)
         if self.connect_lfi:
@@ -1457,6 +1473,17 @@ class ConnectedDecoder(decoders.Decoder):
         if self.connect_recon:
             self.recon_c.apply(initialization_c)
         """
+        initialization_beta = get_weights_init("uniform")
+        initialization_gamma = get_weights_init("kaiming_uniform")
+        if self.connect_gfi:
+            self.gfi_c_beta.apply(initialization_beta)
+            self.gfi_c_gamma.apply(initialization_gamma)
+        if self.connect_lfi:
+            self.lfi_c_beta.apply(initialization_beta)
+            self.lfi_c_gamma.apply(initialization_gamma)
+        if self.connect_recon:
+            self.recon_c_beta.apply(initialization_beta)
+            self.recon_c_gamma.apply(initialization_gamma)
 
     def forward(self, z, parent_gfi=None, parent_lfi=None, parent_recon_x=None):
         if torch._C._get_tracing_state():
@@ -1476,19 +1503,22 @@ class ConnectedDecoder(decoders.Decoder):
         gfi = self.efi(z)
         # add the connections
         if self.connect_gfi:
-            gfi = gfi + self.gfi_c(parent_gfi)
+            #gfi = gfi + self.gfi_c(parent_gfi)
+            gfi = gfi * self.gfi_c_gamma(parent_gfi) + self.gfi_c_beta(parent_gfi)
 
         # local feature map
         lfi = self.gfi(gfi)
         # add the connections
         if self.connect_lfi:
-            lfi = lfi + self.lfi_c(parent_lfi)
+            #lfi = lfi + self.lfi_c(parent_lfi)
+            lfi = lfi * self.lfi_c_gamma(parent_lfi) + self.lfi_c_beta(parent_lfi)
 
         # recon_x
         recon_x = self.lfi(lfi)
         # add the connections
         if self.connect_recon:
-            recon_x = recon_x + self.recon_c(parent_recon_x)
+            #recon_x = recon_x + self.recon_c(parent_recon_x)
+            recon_x = recon_x * self.recon_c_gamma(parent_recon_x) + self.recon_c_beta(parent_recon_x)
 
         # decoder output
         decoder_outputs = {"gfi": gfi, "lfi": lfi, "recon_x": recon_x}
@@ -1506,18 +1536,21 @@ class ConnectedDecoder(decoders.Decoder):
         gfi = self.efi(z)
         # add the connections
         if self.connect_gfi:
-            gfi = gfi + self.gfi_c(parent_gfi)
+            # gfi = gfi + self.gfi_c(parent_gfi)
+            gfi = gfi * self.gfi_c_gamma(parent_gfi) + self.gfi_c_beta(parent_gfi)
 
         # local feature map
         lfi = self.gfi(gfi)
         # add the connections
         if self.connect_lfi:
-            lfi = lfi + self.lfi_c(parent_lfi)
+            # lfi = lfi + self.lfi_c(parent_lfi)
+            lfi = lfi * self.lfi_c_gamma(parent_lfi) + self.lfi_c_beta(parent_lfi)
 
         # recon_x
         recon_x = self.lfi(lfi)
         # add the connections
         if self.connect_recon:
-            recon_x = recon_x + self.recon_c(parent_recon_x)
+            # recon_x = recon_x + self.recon_c(parent_recon_x)
+            recon_x = recon_x * self.recon_c_gamma(parent_recon_x) + self.recon_c_beta(parent_recon_x)
 
         return recon_x

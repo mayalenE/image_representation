@@ -52,7 +52,7 @@ class MEVAE(MinkowskiNNRepresentation):
         default_config.optimizer.parameters.weight_decay = 1e-5
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         MinkowskiNNRepresentation.__init__(self, config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
 
         self.output_keys_list = self.network.encoder.output_keys_list + ["recon_x"]
@@ -209,19 +209,19 @@ class MEVAE(MinkowskiNNRepresentation):
                     min_coordinate = torch.zeros(len(self.config.network.parameters.input_size), device=self.config.device, dtype=torch.int32)
                     x = ME_sparse_to_dense(x, shape=shape, min_coordinate=min_coordinate)[0].cpu().detach()
                     recon_x = ME_sparse_to_dense(recon_x, shape=shape, min_coordinate=min_coordinate)[0].cpu().detach()
-                    if len(images) < self.config.logging.record_embeddings_max:
+                    if len(images) < self.config.logging.record_memory_max:
                         images.append(x)
-                    if len(recon_images) < self.config.logging.record_valid_images_max:
+                    if len(recon_images) < self.config.logging.record_memory_max:
                         recon_images.append(recon_x)
                 if record_embeddings:
                     shape = torch.Size([batch_size, self.config.network.parameters.n_latents] + [1]*len(self.config.network.parameters.input_size))
                     min_coordinate = torch.zeros(len(self.config.network.parameters.input_size), device=self.config.device, dtype=torch.int32)
                     z = ME_sparse_to_dense(model_outputs["z"], shape=shape, min_coordinate=min_coordinate)[0].cpu().detach().view(batch_size, self.config.network.parameters.n_latents)
-                    if len(embeddings) < self.config.logging.record_embeddings_max:
+                    if len(embeddings) < self.config.logging.record_memory_max:
                         embeddings.append(z)
                         labels.append(data["label"])
                     if not record_valid_images:
-                        if len(images) < self.config.logging.record_embeddings_max:
+                        if len(images) < self.config.logging.record_memory_max:
                             images.append(x)
 
         if record_valid_images:
@@ -289,7 +289,7 @@ class MEBetaVAE(MEVAE):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         MEVAE.__init__(self, config, **kwargs)
 
 
@@ -312,7 +312,7 @@ class MEAnnealedVAE(MEVAE):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         MEVAE.__init__(self, config, **kwargs)
 
 class MEBetaTCVAE(MEVAE):
@@ -335,7 +335,7 @@ class MEBetaTCVAE(MEVAE):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         MEVAE.__init__(self, config, **kwargs)
 
 

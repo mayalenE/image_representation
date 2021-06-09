@@ -51,7 +51,7 @@ class BiGAN(TorchNNRepresentation):
         default_config.optimizer.parameters.weight_decay = 1e-5
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         TorchNNRepresentation.__init__(self, config=config, **kwargs)  # calls all constructors up to BaseDNN (MRO)
 
         self.output_keys_list = self.network.encoder.output_keys_list + ["prob_pos", "prob_neg"]
@@ -251,18 +251,18 @@ class BiGAN(TorchNNRepresentation):
 
                 if record_valid_images:
                     recon_x = model_outputs["recon_x"]
-                    if len(images) < self.config.logging.record_embeddings_max:
+                    if len(images) < self.config.logging.record_memory_max:
                         images.append(x.cpu().detach())
-                    if len(recon_images) < self.config.logging.record_valid_images_max:
+                    if len(recon_images) < self.config.logging.record_memory_max:
                         recon_images.append(recon_x)
 
                 if record_embeddings:
-                    if len(embeddings) < self.config.logging.record_embeddings_max:
+                    if len(embeddings) < self.config.logging.record_memory_max:
                         embeddings.append(model_outputs["z"].cpu().detach().view(x.shape[0],
                                                                                  self.config.network.parameters.n_latents))
                         labels.append(data["label"])
                     if not record_valid_images:
-                        if len(images) < self.config.logging.record_embeddings_max:
+                        if len(images) < self.config.logging.record_memory_max:
                             images.append(x.cpu().detach())
 
         if record_valid_images:
@@ -357,7 +357,7 @@ class VAEGAN(BiGAN):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         BiGAN.__init__(self, config, **kwargs)
 
     def forward_from_encoder(self, encoder_outputs):

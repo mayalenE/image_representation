@@ -17,7 +17,7 @@ class TSNERepresentation(Representation):
 
         return default_config
 
-    def __init__(self, n_features=28 * 28, n_latents=10, config=None, **kwargs):
+    def __init__(self, n_features=28 * 28, n_latents=10, config={}, **kwargs):
         Representation.__init__(self, config=config, **kwargs)
 
         # input size (flatten)
@@ -65,7 +65,7 @@ class UMAPRepresentation(Representation):
 
         return default_config
 
-    def __init__(self, n_features=28 * 28, n_latents=10, config=None, **kwargs):
+    def __init__(self, n_features=28 * 28, n_latents=10, config={}, **kwargs):
         Representation.__init__(self, config=config, **kwargs)
 
         # input size (flatten)

@@ -37,7 +37,7 @@ class Encoder(nn.Module, metaclass=ABCMeta):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         nn.Module.__init__(self)
         self.config = self.__class__.default_config()
         self.config.update(config)
@@ -141,15 +141,15 @@ class BurgessEncoder(Encoder):
         - 1 fully connected layer of 2*n_latents units (log variance and mean for Gaussians distributions)
     """
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         Encoder.__init__(self, config=config, **kwargs)
 
         # need square image input
         assert torch.all(torch.tensor([self.config.input_size[i] == self.config.input_size[0] for i in range(1, len(self.config.input_size))])), "BurgessEncoder needs a square image input size"
 
         # network architecture
-        if self.config.hidden_channel is None:
-            self.config.hidden_channel = 8
+        if self.config.hidden_channels is None:
+            self.config.hidden_channels = 32
         hidden_channels = self.config.hidden_channels
         if self.config.hidden_dim is None:
             self.config.hidden_dim = 256
@@ -219,7 +219,7 @@ class HjelmEncoder(Encoder):
         - 1 fully connected layer of n_latents units
     """
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         Encoder.__init__(self, config=config, **kwargs)
 
         # need square image input
@@ -320,7 +320,7 @@ class DumoulinEncoder(Encoder):
         - 1 convolutional layer (n_latents channels), (1 x 1 kernel), (stride of 1), (padding of 1)
     """
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         Encoder.__init__(self, config=config, **kwargs)
 
         # need square and power of 2 image size input
@@ -334,7 +334,8 @@ class DumoulinEncoder(Encoder):
 
         # network architecture
         if self.config.hidden_channels is None:
-            self.config.hidden_channels = int(512 // math.pow(2, self.config.n_conv_layers))
+            self.config.hidden_channels = 8
+
         hidden_channels = self.config.hidden_channels
         kernels_size = [4, 4] * self.config.n_conv_layers
         strides = [1, 2] * self.config.n_conv_layers
@@ -414,7 +415,7 @@ class DumoulinEncoder(Encoder):
 
         # attention feature
         if self.config.use_attention:
-            self.add_module("af", nn.Linear(self.config.hidden_dim, 4 * self.config.n_latents))
+            self.add_module("af", nn.Linear(hidden_channels, 4 * self.config.n_latents))
 
     def forward(self, x):
         # batch norm cannot deal with batch_size 1 in train mode
@@ -429,7 +430,7 @@ class DumoulinEncoder(Encoder):
 
 class MNISTEncoder(Encoder):
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         Encoder.__init__(self, config=config, **kwargs)
 
         # need square image input
@@ -480,7 +481,7 @@ class MNISTEncoder(Encoder):
 
 class CedricEncoder(Encoder):
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         Encoder.__init__(self, config=config, **kwargs)
 
         # need square image input

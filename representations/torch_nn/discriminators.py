@@ -20,7 +20,7 @@ class Discriminator(nn.Module, metaclass=ABCMeta):
 
         return default_config
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         nn.Module.__init__(self)
         self.config = self.__class__.default_config()
         self.config.update(config)
@@ -51,7 +51,7 @@ Discriminator Modules
 
 class BurgessDiscriminator(Discriminator):
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         encoder = encoders.BurgessEncoder(config=config, **kwargs)
         Discriminator.__init__(self, config=config, **kwargs)
 
@@ -78,7 +78,7 @@ class BurgessDiscriminator(Discriminator):
 
 class HjelmDiscriminator(Discriminator):
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config={}, **kwargs):
         encoder = encoders.HjelmEncoder(config=config, **kwargs)
         Discriminator.__init__(self, config=config, **kwargs)
 
@@ -111,7 +111,7 @@ class HjelmDiscriminator(Discriminator):
 
 class DumoulinDiscriminator(Discriminator):
 
-    def __init__(self, config=None, with_dropout=True, **kwargs):
+    def __init__(self, config={}, with_dropout=True, **kwargs):
         encoder = encoders.DumoulinEncoder(config=config, **kwargs)
         Discriminator.__init__(self, config=config, **kwargs)
 
